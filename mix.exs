@@ -24,7 +24,7 @@ defmodule Boids.MixProject do
       deps: deps(),
       test_coverage: [
         summary: [threshold: 100],
-        ignore_modules: [Boids.FlockSpec, ~r/TestRules/, ~r/TestBoids/]
+        ignore_modules: [Boids.FlockSpec, ~r/TestRules/]
       ],
       description: "Boids: flocks of Erlang processes with steering rules",
       package: package(),

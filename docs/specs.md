@@ -121,7 +121,7 @@ number: a boid that reads the positions `s` goes to `See(s)`.
 | Action | When it can occur | In the code |
 |---|---|---|
 | `Begin` | No step runs: the caller asks each boid for its plan. | `boids:step/2` |
-| `Plan(b)` | `b` runs and did not answer: it calculates its new position, and does not move. | `{plan, Dt}`: `handle_step/3` of the module, then the forces |
+| `Plan(b)` | `b` runs and did not answer: it calculates its new position, and does not move. | `{plan, Dt}`: the forces of the rules, with `handle_step/4` of each module |
 | `Turn` | Each boid that runs answered: the caller asks each boid to move. | |
 | `Commit(b)` | `b` runs and did not answer: it moves to the position of its plan. | `commit` |
 | `End` | Each boid that runs moved. | |

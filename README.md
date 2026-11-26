@@ -7,14 +7,14 @@ near it. Many boids together move as a flock of birds, a school of fish
 or a crowd of people. Craig Reynolds described the model in 1987, and
 the steering rules in 1999.
 
-In this library, each boid is an Erlang process with the behavior
-`gen_boid`:
+In this library, each boid is an Erlang process (`gen_boid`):
 
 - A boid moves on its own clock. It reads its neighbors, calculates its
   force, moves, and writes its position. It sends no message to do this.
-- A module of yours tells what a boid is, as a module tells what a
-  `gen_server` is: a person, a vehicle or an animal of your program
-  decides at each step, answers messages, and has its own state.
+- The rules of a boid are callback modules, as the handlers of an event
+  manager of `gen_event`. A boid gets rules and loses them while it
+  runs. A rule of yours is a module with the behavior `gen_boid`: it has
+  its own state, gives a force at each step, and answers requests.
 - A boid that stops with an error goes from its flock. The other boids
   continue.
 - The library is Erlang code with no dependency. It uses only `kernel`
@@ -38,7 +38,7 @@ In this library, each boid is an Erlang process with the behavior
 | `leader` | stays behind a leader, and moves out of its way |
 | `dodge` | moves away from a neighbor that will come too near |
 | `flow` | moves in the direction of a field |
-| a module or a function of yours | gets the force that it gives |
+| a module of yours (`gen_boid`), or a function | gets the force that it gives |
 
 Each rule has a weight. A boid has two or three dimensions, a maximum
 speed, a maximum force, a distance and an angle that it sees, and a
@@ -91,80 +91,103 @@ the terminal:
 mix run examples/terminal.exs
 ```
 
-## A boid with a behavior
+## The rules of a boid that runs
 
-`gen_boid` is the behavior of a process that is a boid. Your module
-gives the options of the boid when it starts, decides at each step, and
-answers messages. The library does the other work.
+A boid is a `gen_boid` process. You add rules to it and remove them
+while it runs, as handlers of `gen_event`:
 
 ```erlang
--module(hawk).
--behavior(gen_boid).
--export([init/1, handle_step/3, handle_call/4]).
-
-%% The boid starts: its options, and the state of this module.
-init(Pos) ->
-    {ok, #{pos => Pos, group => hawks, perception => 25, rules => [{wander, 1.0}]}, #{meals => 0}}.
-
-%% At each step, before the forces: the hawk hunts a bird that it sees.
-handle_step(_Boid, Neighbors, State = #{meals := Meals}) ->
-    case [N || N = #{group := birds} <- Neighbors] of
-        [] -> {ok, #{rules => [{wander, 1.0}]}, State};
-        [#{dist := Dist} | _] when Dist < 1 -> {ok, State#{meals := Meals + 1}};
-        [_ | _] -> {ok, #{rules => [{pursue, 1.0, #{target => {group, birds}}}]}, State}
-    end.
-
-handle_call(meals, _From, _Boid, State = #{meals := Meals}) ->
-    {reply, Meals, State}.
+{ok, Hawk} = gen_boid:start(Flock, #{pos => {50, 50}, group => hawks, rules => [{wander, 1.0}]}),
+ok = gen_boid:add_rule(Hawk, {avoid, 4.0}),
+ok = gen_boid:add_rule(Hawk, {hunger, 1.0, #{prey => birds}}),
+[wander, avoid, hunger] = gen_boid:which_rules(Hawk),
+0 = gen_boid:call(Hawk, hunger, meals),
+ok = gen_boid:delete_rule(Hawk, wander, []).
 ```
 
+`avoid` and `wander` are rules of the library. `hunger` is a module of
+yours.
+
+## A rule of your own
+
+A rule is a module with the behavior `gen_boid`. It starts with its
+arguments, has its own state, and gives a force at each step of the
+boid:
+
 ```erlang
-{ok, Hawk} = gen_boid:start(hawk, {50, 50}, #{flock => Flock}),
-0 = gen_boid:call(Hawk, meals).
+-module(hunger).
+-behavior(gen_boid).
+-export([init/1, handle_step/4, handle_call/3]).
+
+%% The rule starts: its state.
+init(#{prey := Prey}) ->
+    {ok, #{prey => Prey, meals => 0}}.
+
+%% At each step: the force of the rule. The boid goes to the nearest
+%% prey that it sees, and eats a prey that it touches.
+handle_step(Boid, Neighbors, _Env, State = #{prey := Prey, meals := Meals}) ->
+    case [N || N = #{group := Group} <- Neighbors, Group =:= Prey] of
+        [] -> {ok, State};
+        [#{dist := Dist} | _] when Dist < 1 -> {ok, State#{meals := Meals + 1}};
+        [#{pos := Pos} | _] -> {force, boids_steer:seek(Boid, Pos), State}
+    end.
+
+handle_call(meals, _Boid, State = #{meals := Meals}) ->
+    {ok, Meals, State}.
 ```
 
 The same in Elixir:
 
 ```elixir
-defmodule Hawk do
+defmodule Hunger do
   @behaviour :gen_boid
 
-  def init(pos) do
-    {:ok, %{pos: pos, group: :hawks, perception: 25, rules: [wander: 1.0]}, %{meals: 0}}
-  end
+  def init(%{prey: prey}), do: {:ok, %{prey: prey, meals: 0}}
 
-  def handle_step(_boid, neighbors, %{meals: meals} = state) do
-    case Enum.filter(neighbors, &(&1.group == :birds)) do
-      [] -> {:ok, %{rules: [wander: 1.0]}, state}
+  def handle_step(boid, neighbors, _env, %{prey: prey, meals: meals} = state) do
+    case Enum.filter(neighbors, &(&1.group == prey)) do
+      [] -> {:ok, state}
       [%{dist: dist} | _] when dist < 1 -> {:ok, %{state | meals: meals + 1}}
-      [_ | _] -> {:ok, %{rules: [{:pursue, 1.0, %{target: {:group, :birds}}}]}, state}
+      [%{pos: pos} | _] -> {:force, :boids_steer.seek(boid, pos), state}
     end
   end
 
-  def handle_call(:meals, _from, _boid, %{meals: meals} = state), do: {:reply, meals, state}
+  def handle_call(:meals, _boid, %{meals: meals} = state), do: {:ok, meals, state}
 end
 
-{:ok, hawk} = :gen_boid.start(Hawk, {50, 50}, flock: flock)
-0 = :gen_boid.call(hawk, :meals)
+{:ok, hawk} = :gen_boid.start(flock, pos: {50, 50}, group: :hawks, rules: [{Hunger, 1.0, %{prey: :birds}}])
+0 = :gen_boid.call(hawk, Hunger, :meals)
 ```
 
 | Callback | When it runs |
 |---|---|
-| `init(Args)` | The boid starts. It gives the options of the boid and the state of the module. Only this callback is necessary. |
-| `handle_step(Boid, Neighbors, State)` | At each step, before the forces of the rules. It can change the options of the boid. |
-| `handle_call(Request, From, Boid, State)` | `gen_boid:call/2` sent a request. |
-| `handle_cast(Request, Boid, State)` | `gen_boid:cast/2` sent a request. |
-| `handle_info(Info, Boid, State)` | Another message came. |
-| `terminate(Reason, Boid, State)` | The process stops. |
+| `init(Args)` | The boid gets the rule. It gives the state of the rule. |
+| `handle_step(Boid, Neighbors, Env, State)` | At each step of the boid. It gives the force of the rule, or no force. |
+| `handle_call(Request, Boid, State)` | `gen_boid:call/3` sent a request to the rule. |
+| `handle_info(Info, Boid, State)` | Another message came to the process. |
+| `terminate(Arg, State)` | The boid loses the rule, or its process stops. |
 
-- `gen_boid:start/3` starts a boid below the supervisor of its flock.
-  `gen_boid:start_link/3` and `gen_boid:child_spec/1` are for a
-  supervisor of yours (see "A boid that stops").
-- A boid of `boids:add/2` and `boids:populate/3` is a `gen_boid` with no
-  module of yours: it has only its rules.
-- `handle_step/3` is for a decision: which rules the boid has now. A
-  force of your own is a rule (see "A rule of your own").
+`init/1` and `handle_step/4` are necessary.
 
+- **A rule can be the mind of a boid.** A result can have actions:
+  `{ok, State, [{add_rule, Rule}, {delete_rule, Name}, {set, Options},
+  stop]}`. Such a rule gives no force. It adds and removes the other
+  rules when what the boid sees changes, changes options of the boid,
+  or stops the boid.
+- **A rule that fails does not stop its boid.** As a handler of
+  `gen_event`, the boid loses that rule, the log gets an error, and the
+  boid continues with its other rules.
+- **A boid can have a rule two times**, with a name for each:
+  `{{seek, home}, 1.0, #{target => {0, 0}}}`.
+- **A function is a rule too**, for a force with no state:
+  `{fun(Boid, Neighbors, Env) -> Force end, Weight}`.
+- The functions of `boids_steer` and `boids_vec` are the parts of a new
+  rule: for example `boids_steer:seek/2` to a point that the rule
+  calculates.
+
+See `gen_boid` for all the results of the callbacks.
+
+## The rules of a boid
 ## The rules of a boid
 
 The option `rules` is a list. Each rule is `{Name, Weight}` or `{Name,
@@ -194,43 +217,8 @@ ok = boids:set_obstacle(Flock, rock, {30, 30}, 5).
   of the list use the force first.
 - `separation` sees all the groups. `alignment` and `cohesion` see only
   the group of the boid. The option `groups` of a rule changes this.
-- A rule of your own is a module with the behavior `boids_rule`, or a
+- A rule of your own is a module with the behavior `gen_boid`, or a
   function. See "A rule of your own".
-
-## A rule of your own
-
-A rule is a module with the behavior `boids_rule`. The module checks its
-options, and gives the force of the rule for one boid at one step:
-
-```erlang
--module(my_gravity).
--behavior(boids_rule).
--export([options/1, force/4]).
-
-options(Options) ->
-    #{g := G} = maps:merge(#{g => 9.81}, Options),
-    true = is_number(G),
-    #{g => G}.
-
-force(_Boid, _Neighbors, _Env, #{g := G}) ->
-    {0, -G}.
-```
-
-```erlang
-boids:add(Flock, #{pos => {0, 50}, rules => [{my_gravity, 1.0, #{g => 3.7}}, {wander, 0.5}]}).
-```
-
-In Elixir, the module has `@behaviour :boids_rule`.
-
-- A bad option gives an error when the boid gets its rules, and not at
-  each step of the boid.
-- A rule can keep a memory between the steps of a boid: `force/4` gives
-  `{Force, Memory}`, and gets the memory in `Env` at the next step.
-- For a rule with no option, a function is sufficient:
-  `{fun(Boid, Neighbors, Env) -> Force end, Weight}`.
-- The functions of `boids_steer` and `boids_vec` are the parts of a new
-  rule: for example `boids_steer:seek/2` to a point that the rule
-  calculates.
 
 ## The space of a flock
 
@@ -258,8 +246,8 @@ In Elixir, the module has `@behaviour :boids_rule`.
 
 ## A process with another behavior as a boid
 
-Use `gen_boid` for a new boid. A process that has another behavior, for
-example a `gen_statem`, can be a boid of a flock too. It calls `join/2`
+A process that has another behavior, for example a `gen_statem`, can be
+a boid of a flock too. It calls `join/2`
 one time, and `advance/3` at each step:
 
 ```erlang
@@ -290,8 +278,9 @@ end
 ```
 
 The boid is a map: `maps:get(pos, Boid)` is its position.
-`boids_boid:update/2` changes its rules, and `boids:commit/2` writes the
-change to the flock. The other boids see it as they see each boid. The
+`boids_boid:add_rule/2` and `boids_boid:delete_rule/3` change its rules,
+`boids_boid:update/2` changes its options, and `boids:commit/2` writes
+the change to the flock. The other boids see it as they see each boid. The
 flock removes it when the process stops.
 
 The functions of the rules have no state and no process: `boids_boid`
@@ -360,20 +349,19 @@ about 15 neighbors.
 
 ## A boid that stops
 
-- The flock is the supervisor of the boids of `boids:add/2`: they stop
-  with it. It does not start a boid again after an error: the flock
-  removes the row of the boid, and its id is free. A boid with an error
-  at each step would start again without end. `boids:whereis/2` gives
-  the process of a boid, for a monitor.
+- The flock is the supervisor of the boids of `boids:add/2` and
+  `gen_boid:start/2`: they stop with it. It does not start a boid again
+  after an error: the flock removes the row of the boid, and its id is
+  free. `boids:whereis/2` gives the process of a boid, for a monitor.
+- A rule that fails does not stop its boid: the boid loses that rule.
 - For a boid that starts again, put it below a supervisor of yours. Give
-  an `id` in the options of `init/1`, so that the process that starts
-  again is the same boid. The supervisor has the limit of the restarts
-  that you give it:
+  an `id` to the boid, so that the process that starts again is the same
+  boid. The supervisor has the limit of the restarts that you give it:
 
   ```erlang
   {ok, {#{strategy => rest_for_one}, [
       boids:child_spec(#{name => my_flock}),
-      gen_boid:child_spec({hawk, {50, 50}, #{flock => my_flock}})
+      gen_boid:child_spec({my_flock, #{id => hawk, pos => {50, 50}}})
   ]}}
   ```
 

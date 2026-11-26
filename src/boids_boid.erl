@@ -8,9 +8,6 @@ calls `step/4` with the neighbors that it sees and the time that passed.
 `gen_boid` is such a process. `boids:join/2` and `boids:advance/3` do
 the same for a process that has another behavior.
 
-This module is also the module of a `gen_boid` with no module of yours:
-`boids:add/2` starts a boid with it.
-
 ## The options of a boid
 
 | Option | Default | Description |
@@ -63,17 +60,19 @@ is the three rules of a flock:
 Group}` (the nearest neighbor of that group). A target that does not
 exist gives no force.
 
-A rule of your own is a module or a function:
+A rule of your own is a module with the behavior `gen_boid`, as
+`{Module, Weight}` or `{Module, Weight, Args}`: see `gen_boid`. A
+function is a rule too: `{Fun, Weight}`, where `Fun(Boid, Neighbors,
+Env)` gives the force. `Env` has `dt` (the seconds of the step),
+`obstacles`, `bounds` and `wrap`.
 
-- `{Module, Weight}` or `{Module, Weight, Options}`, where `Module` has
-  the behavior `boids_rule`. The module checks its options, and
-  `Module:force(Boid, Neighbors, Env, Options)` gives the force.
-- `{Fun, Weight}`, where `Fun(Boid, Neighbors, Env)` gives the force.
+A boid can have a rule two times, for example two targets of `seek`.
+Give a name to each one: `{{seek, home}, 1.0, #{target => {0, 0}}}`. The
+name of a rule is its first part: `seek`, `{seek, home}`, `my_module` or
+`{my_module, 1}`. `add_rule/2`, `delete_rule/3` and `call_rule/3` use it.
 
-`Env` has `dt` (the seconds of the step), `obstacles`, `bounds`, `wrap`
-and `memory`. A rule that gives `{Force, Memory}` gets that memory in
-`Env` at the next step of the boid: `wander` keeps its point there. A
-change of the rules of a boid removes the memory of its rules.
+In the boid, each rule is `{Name, Weight, Options, State}`. `State` is
+the state of a module of yours, or the memory of a rule of the library.
 
 With `combine => sum`, the force is the sum of the forces, each
 multiplied by its weight, with the length `max_force` at most. With
@@ -81,13 +80,11 @@ multiplied by its weight, with the length `max_force` at most. With
 `max_force`, and the last rules get what stays. Put `avoid` first there.
 """.
 
--behavior(gen_boid).
-
 -export([new/1, update/2, options/1, entry/1, to_map/1]).
--export([init/1]).
+-export([add_rule/2, delete_rule/3, which_rules/1, call_rule/3, info/2, terminate/2]).
 -export([perceive/2, force/3, integrate/4, step/4]).
 
--export_type([boid/0, rule/0, target/0, env/0]).
+-export_type([boid/0, rule/0, name/0, target/0, env/0, action/0]).
 
 -type vec() :: boids_vec:vec().
 -type boid() :: #{
@@ -103,9 +100,10 @@ multiplied by its weight, with the length `max_force` at most. With
     perception := number(),
     fov := number(),
     max_neighbors := pos_integer() | infinity,
-    rules := [{rule_name() | custom(), number(), map()}],
+    rules := [{name(), number(), term(), term()}],
     combine := sum | priority,
-    memory := map()
+    %% A rule asked to stop the boid, with this reason.
+    stop => term()
 }.
 -type rule_name() ::
     separation
@@ -124,9 +122,12 @@ multiplied by its weight, with the length `max_force` at most. With
     | leader
     | dodge
     | flow.
--type custom() :: module() | fun((boid(), [boids_space:neighbor()], env()) -> vec() | {vec(), term()}).
--type rule() ::
-    {rule_name() | custom(), number()} | {rule_name() | custom(), number(), map() | [{atom(), term()}]}.
+-type name() ::
+    rule_name()
+    | module()
+    | {rule_name() | module(), Id :: term()}
+    | fun((boid(), [boids_space:neighbor()], env()) -> vec()).
+-type rule() :: {name(), number()} | {name(), number(), term()}.
 -type target() :: vec() | {boid, term()} | {group, term()}.
 -type env() :: #{
     dt => number(),
@@ -134,20 +135,25 @@ multiplied by its weight, with the length `max_force` at most. With
     wrap => boolean(),
     obstacles => [boids_steer:obstacle()],
     lookup => fun((term()) -> {ok, #{pos := vec(), vel := vec(), _ => _}} | error),
-    memory => term(),
     _ => _
 }.
+-type action() ::
+    {set, map() | [{atom(), term()}]}
+    | {add_rule, rule()}
+    | {delete_rule, name()}
+    | {delete_rule, name(), term()}
+    | stop
+    | {stop, term()}.
 
 -define(FULL_CIRCLE, 6.283185307179586).
-
--doc false.
-init(Opts) ->
-    {ok, Opts, undefined}.
 
 -doc """
 Make a boid from its options. A bad option gives the error
 `{bad_option, {Key, Value}}`. Each number is 1.0e100 at most, and each
 vector of a rule has the size of the position.
+
+Each rule that is a module of yours starts here: `Module:init(Args)`
+runs in the process that calls this function.
 """.
 -spec new(map() | [{atom(), term()}]) -> boid().
 new(Opts0) ->
@@ -166,30 +172,37 @@ new(Opts0) ->
         fov => ?FULL_CIRCLE,
         max_neighbors => infinity,
         rules => [{separation, 1.5}, {alignment, 1.0}, {cohesion, 1.0}],
-        combine => sum,
-        memory => #{}
+        combine => sum
     },
-    validate(maps:merge(Base, Opts)).
+    start(validate(maps:merge(Base, Opts))).
 
 -doc """
 Change options of a boid. The id and the size of the position do not
 change. A bad option gives the error `{bad_option, {Key, Value}}`.
+
+The option `rules` gives all the rules of the boid again. A rule of the
+boid that is not in the new list stops (`terminate(replaced, State)` for
+a module), and a new rule starts. To keep a rule with its state, put it
+in the list as it is in the boid. To change one rule, use `add_rule/2`
+and `delete_rule/3`.
 """.
 -spec update(boid(), map() | [{atom(), term()}]) -> boid().
-update(Boid = #{pos := Old}, Changes0) ->
+update(Boid = #{pos := Old, rules := Rules0}, Changes0) ->
     Changes = to_map(Changes0),
-    [error({bad_option, {Key, maps:get(Key, Changes)}}) || Key <- [id, memory], is_map_key(Key, Changes)],
+    [error({bad_option, {Key, maps:get(Key, Changes)}}) || Key <- [id, stop], is_map_key(Key, Changes)],
     case validate(maps:merge(Boid, Changes)) of
-        #{pos := New} when tuple_size(New) =/= tuple_size(Old) -> error({bad_option, {pos, New}});
-        %% The memory of a rule is at the position of the rule in the list.
-        Changed when is_map_key(rules, Changes) -> Changed#{memory := #{}};
-        Changed -> Changed
+        #{pos := New} when tuple_size(New) =/= tuple_size(Old) ->
+            error({bad_option, {pos, New}});
+        Checked ->
+            Changed = #{rules := Rules} = start(Checked),
+            _ = [stop_rule(Rule, replaced) || Rule <- Rules0 -- Rules],
+            Changed
     end.
 
 -doc """
 Check options with no boid, and give them as a map: each value alone,
-and not the values together. `boids:start_flock/1` checks the `defaults`
-of a flock with this function.
+and not the values together. No rule starts. `boids:start_flock/1`
+checks the `defaults` of a flock with this function.
 """.
 -spec options(map() | [{atom(), term()}]) -> map().
 options(Opts) ->
@@ -210,24 +223,31 @@ to_map(Opts) when is_list(Opts) ->
     end;
 to_map(Opts) -> error({bad_option, Opts}).
 
+%% The check of the options together. The rules do not start here.
 validate(Boid) ->
     Checked = #{pos := Pos, vel := Vel, rules := Rules} = maps:map(fun check/2, Boid),
     Dim = tuple_size(Pos),
-    %% The vectors of a rule have the size of the position.
-    [error({bad_option, {rules, Rule}}) || Rule = {Name, _, Opts} <- Rules, is_builtin(Name), not sized(Opts, Dim)],
+    [error({bad_option, {rules, Rule}}) || Rule <- Rules, not sized(Rule, Dim)],
     case {Dim =:= tuple_size(Vel), Checked} of
         {false, _} -> error({bad_option, {vel, Vel}});
         {true, #{min_speed := Min, max_speed := Max}} when Min > Max -> error({bad_option, {min_speed, Min}});
         {true, _} -> Checked
     end.
 
-sized(Opts, Dim) ->
-    Vectors =
-        [Point || #{target := Point} <- [Opts], is_tuple(Point), not is_atom(element(1, Point))] ++
-            [Vector || #{field := Vector} <- [Opts], is_tuple(Vector)] ++
-            [Corner || #{bounds := {Min, Max}} <- [Opts], Corner <- [Min, Max]] ++
-            maps:get(path, Opts, []),
-    lists:all(fun(Vector) -> tuple_size(Vector) =:= Dim end, Vectors).
+%% The vectors of a rule of the library have the size of the position.
+sized(Rule, Dim) ->
+    Opts = element(3, Rule),
+    case kind(element(1, Rule)) of
+        {builtin, _} ->
+            Vectors =
+                [Point || #{target := Point} <- [Opts], is_tuple(Point), not is_atom(element(1, Point))] ++
+                    [Vector || #{field := Vector} <- [Opts], is_tuple(Vector)] ++
+                    [Corner || #{bounds := {Min, Max}} <- [Opts], Corner <- [Min, Max]] ++
+                    maps:get(path, Opts, []),
+            lists:all(fun(Vector) -> tuple_size(Vector) =:= Dim end, Vectors);
+        _ ->
+            true
+    end.
 
 check(Key, Value) ->
     case ok(Key, Value) of
@@ -239,7 +259,7 @@ check(Key, Value) ->
 ok(id, _) -> true;
 ok(group, _) -> true;
 ok(data, _) -> true;
-ok(memory, Memory) -> is_map(Memory);
+ok(stop, _) -> true;
 ok(pos, Pos) -> boids_vec:is_vec(Pos);
 ok(vel, Vel) -> boids_vec:is_vec(Vel);
 ok(max_speed, N) -> boids_vec:is_size(N);
@@ -250,56 +270,107 @@ ok(perception, N) -> boids_vec:is_size(N);
 ok(fov, N) -> boids_vec:is_size(N);
 ok(max_neighbors, N) -> N =:= infinity orelse (is_integer(N) andalso N > 0);
 ok(combine, Combine) -> Combine =:= sum orelse Combine =:= priority;
-ok(rules, Rules) when is_list(Rules) -> {ok, [rule(Rule) || Rule <- Rules]};
+ok(rules, Rules) when is_list(Rules) -> {ok, [check_rule(Rule) || Rule <- Rules]};
 ok(_, _) -> false.
 
-%% --- The rules: the check ---------------------------------------------
+%% --- The rules: the check, the start and the end ----------------------
 
-rule({Name, Weight}) ->
-    rule({Name, Weight, #{}});
-rule({Name, Weight, Opts}) when is_list(Opts) ->
-    try maps:from_list(Opts) of
-        Map -> rule({Name, Weight, Map})
-    catch
-        error:badarg -> error({bad_option, {rules, {Name, Weight, Opts}}})
+%% A rule of the library, a module of the user, or a function.
+kind(Fun) when is_function(Fun, 3) -> function;
+kind({Base, _Id}) when is_atom(Base) -> kind(Base);
+kind(Base) when is_atom(Base) ->
+    case keys(Base) of
+        custom -> {module, Base};
+        _ -> {builtin, Base}
     end;
-rule(Rule = {Name, Weight, Opts}) when is_number(Weight), is_map(Opts) ->
-    case keys(Name) of
-        {Necessary, Optional} ->
+kind(_) ->
+    bad.
+
+%% Check a rule, with no start: {Name, Weight, Options}. A rule that is
+%% in a boid ({Name, Weight, Options, State}) stays as it is.
+check_rule(Rule = {_Name, Weight, _Opts, _State}) when is_number(Weight) ->
+    Rule;
+check_rule({Name, Weight}) ->
+    check_rule({Name, Weight, #{}});
+check_rule(Rule = {Name, Weight, Opts}) when is_number(Weight) ->
+    case kind(Name) of
+        {builtin, Base} ->
+            Map = rule_options(Opts, Rule),
+            {Necessary, Optional} = keys(Base),
             Good =
-                Necessary -- maps:keys(Opts) =:= [] andalso
-                    maps:keys(Opts) -- (Necessary ++ Optional) =:= [] andalso
-                    lists:all(fun({Key, Value}) -> opt(Name, Key, Value) end, maps:to_list(Opts)),
+                Necessary -- maps:keys(Map) =:= [] andalso
+                    maps:keys(Map) -- (Necessary ++ Optional) =:= [] andalso
+                    lists:all(fun({Key, Value}) -> opt(Base, Key, Value) end, maps:to_list(Map)),
+            Good orelse error({bad_option, {rules, Rule}}),
+            {Name, Weight, Map};
+        function when Opts =:= #{} ->
+            Rule;
+        {module, Module} ->
+            _ = code:ensure_loaded(Module),
+            Good = erlang:function_exported(Module, init, 1) andalso erlang:function_exported(Module, handle_step, 4),
             Good orelse error({bad_option, {rules, Rule}}),
             Rule;
-        custom when is_function(Name, 3), Opts =:= #{} ->
-            Rule;
-        custom when is_atom(Name) ->
-            {Name, Weight, module_options(Name, Opts, Rule)};
-        custom ->
+        _ ->
             error({bad_option, {rules, Rule}})
     end;
-rule(Rule) ->
+check_rule(Rule) ->
     error({bad_option, {rules, Rule}}).
 
-%% The options of a rule that is a module with the behavior boids_rule.
-%% The module checks them, when it has options/1.
-module_options(Module, Opts, Rule) ->
-    _ = code:ensure_loaded(Module),
-    erlang:function_exported(Module, force, 4) orelse error({bad_option, {rules, Rule}}),
-    case erlang:function_exported(Module, options, 1) of
-        true ->
-            try Module:options(Opts) of
-                Checked when is_map(Checked) -> Checked;
-                _ -> error({bad_option, {rules, Rule}})
+%% The options of a rule of the library are a map, or a list of pairs.
+rule_options(Opts, _Rule) when is_map(Opts) ->
+    Opts;
+rule_options(Opts, Rule) when is_list(Opts) ->
+    try
+        maps:from_list(Opts)
+    catch
+        error:badarg -> error({bad_option, {rules, Rule}})
+    end;
+rule_options(_Opts, Rule) ->
+    error({bad_option, {rules, Rule}}).
+
+%% Start each rule of a boid that did not start. When a rule does not
+%% start, the rules that started before it stop.
+start(Boid = #{rules := Rules}) ->
+    Boid#{rules := start_rules(Rules, [])}.
+
+start_rules([Rule = {_, _, _} | Rest], Started) ->
+    case start_rule(Rule) of
+        {ok, Entry} ->
+            start_rules(Rest, [{new, Entry} | Started]);
+        {error, _Reason} ->
+            _ = [stop_rule(Entry, replaced) || {new, Entry} <- Started],
+            error({bad_option, {rules, Rule}})
+    end;
+start_rules([Entry | Rest], Started) ->
+    start_rules(Rest, [{old, Entry} | Started]);
+start_rules([], Started) ->
+    [Entry || {_, Entry} <- lists:reverse(Started)].
+
+start_rule({Name, Weight, Opts}) ->
+    case kind(Name) of
+        {module, Module} ->
+            try Module:init(Opts) of
+                {ok, State} -> {ok, {Name, Weight, Opts, State}};
+                {error, Reason} -> {error, Reason};
+                Other -> {error, {bad_return, Other}}
             catch
-                error:_ -> error({bad_option, {rules, Rule}})
+                Class:Reason when Class =/= exit -> {error, Reason}
             end;
-        false ->
-            Opts
+        _ ->
+            {ok, {Name, Weight, Opts, undefined}}
     end.
 
-is_builtin(Name) -> keys(Name) =/= custom.
+%% The end of a rule: terminate/2 of a module that has it.
+stop_rule({Name, _Weight, _Opts, State}, Arg) ->
+    case kind(Name) of
+        {module, Module} ->
+            case erlang:function_exported(Module, terminate, 2) of
+                true -> Module:terminate(Arg, State);
+                false -> ok
+            end;
+        _ ->
+            ok
+    end.
 
 %% The necessary options and the other options of each rule of the library.
 keys(separation) -> {[], [radius, groups]};
@@ -336,6 +407,181 @@ opt(_, _, _) -> false.
 
 is_distance(N) -> N =:= infinity orelse boids_vec:is_size(N).
 
+%% --- The rules of a boid that runs ------------------------------------
+
+-doc """
+Add a rule at the end of the rules of a boid: `{Name, Weight}` or
+`{Name, Weight, Options}`. A module of yours starts: `Module:init(Args)`.
+The result is `{ok, Boid}`, or `{error, Reason}` for a bad rule and for
+a module that does not start.
+""".
+-spec add_rule(boid(), rule()) -> {ok, boid()} | {error, term()}.
+add_rule(Boid = #{pos := Pos, rules := Rules}, Rule) ->
+    try
+        Checked = check_rule(Rule),
+        sized(Checked, tuple_size(Pos)) orelse error({bad_option, {rules, Rule}}),
+        Checked
+    of
+        Entry = {_, _, _, _} ->
+            {ok, Boid#{rules := Rules ++ [Entry]}};
+        Checked ->
+            case start_rule(Checked) of
+                {ok, Entry} -> {ok, Boid#{rules := Rules ++ [Entry]}};
+                {error, Reason} -> {error, Reason}
+            end
+    catch
+        error:{bad_option, _} = Reason -> {error, Reason}
+    end.
+
+-doc """
+Remove the first rule with the name `Name` from a boid. For a module of
+yours with `terminate/2`, the result has what `Module:terminate(Args,
+State)` gives. For the other rules it has `ok`.
+""".
+-spec delete_rule(boid(), name(), term()) -> {ok, term(), boid()} | {error, not_found}.
+delete_rule(Boid = #{rules := Rules}, Name, Args) ->
+    case lists:keytake(Name, 1, Rules) of
+        {value, Rule, Rest} -> {ok, stop_rule(Rule, Args), Boid#{rules := Rest}};
+        false -> {error, not_found}
+    end.
+
+-doc "The names of the rules of a boid, in their order.".
+-spec which_rules(boid()) -> [name()].
+which_rules(#{rules := Rules}) ->
+    [Name || {Name, _, _, _} <- Rules].
+
+-doc """
+Send a request to a rule of a boid that is a module of yours:
+`Module:handle_call(Request, Boid, State)` gives the answer. The result
+is the answer and the boid. The answer is `{error, bad_rule}` when the
+boid has no such rule, or the rule has no `handle_call/3`, and `{error,
+{failed, Reason}}` when the rule failed (the boid then has no such
+rule).
+""".
+-spec call_rule(boid(), name(), term()) -> {term(), boid()}.
+call_rule(Boid = #{rules := Rules}, Name, Request) ->
+    case {lists:keyfind(Name, 1, Rules), kind(Name)} of
+        {Rule = {_, _, _, State}, {module, Module}} ->
+            case erlang:function_exported(Module, handle_call, 3) of
+                true ->
+                    try Module:handle_call(Request, Boid, State) of
+                        {ok, Reply, State1} ->
+                            {Reply, keep(Boid, Rule, State1)};
+                        {ok, Reply, State1, Actions} ->
+                            {Reply, actions(keep(Boid, Rule, State1), Actions)};
+                        {remove_rule, Reply} ->
+                            _ = stop_rule(Rule, remove_rule),
+                            {Reply, drop(Boid, Rule)};
+                        Other ->
+                            {{error, {failed, {bad_return, Other}}}, failed(Boid, Rule, {bad_return, Other})}
+                    catch
+                        Class:Reason when Class =/= exit ->
+                            {{error, {failed, Reason}}, failed(Boid, Rule, Reason)}
+                    end;
+                false ->
+                    {{error, bad_rule}, Boid}
+            end;
+        _ ->
+            {{error, bad_rule}, Boid}
+    end.
+
+-doc """
+Give a message to each rule of a boid that is a module of yours with
+`handle_info/3`. The result is the boid.
+""".
+-spec info(boid(), term()) -> boid().
+info(Boid0 = #{rules := Rules}, Info) ->
+    {Boid, Actions} =
+        lists:foldl(
+            fun(Rule = {Name, _, _, State}, {Boid1, Actions1}) ->
+                case kind(Name) of
+                    {module, Module} ->
+                        case erlang:function_exported(Module, handle_info, 3) of
+                            true -> told(Rule, Boid1, Actions1, fun() -> Module:handle_info(Info, Boid0, State) end);
+                            false -> {Boid1, Actions1}
+                        end;
+                    _ ->
+                        {Boid1, Actions1}
+                end
+            end,
+            {Boid0, []},
+            Rules
+        ),
+    actions(Boid, Actions).
+
+told(Rule, Boid, Actions, Call) ->
+    try Call() of
+        {ok, State} ->
+            {keep(Boid, Rule, State), Actions};
+        {ok, State, More} when is_list(More) ->
+            {keep(Boid, Rule, State), Actions ++ More};
+        remove_rule ->
+            _ = stop_rule(Rule, remove_rule),
+            {drop(Boid, Rule), Actions};
+        Other ->
+            {failed(Boid, Rule, {bad_return, Other}), Actions}
+    catch
+        Class:Reason when Class =/= exit -> {failed(Boid, Rule, Reason), Actions}
+    end.
+
+-doc """
+The end of a boid: each rule that is a module of yours with
+`terminate/2` gets `Module:terminate(Arg, State)`.
+""".
+-spec terminate(boid(), term()) -> ok.
+terminate(#{rules := Rules}, Arg) ->
+    _ = [stop_rule(Rule, Arg) || Rule <- Rules],
+    ok.
+
+%% Put the new state of a rule into the boid.
+keep(Boid = #{rules := Rules}, Rule = {Name, Weight, Opts, _}, State) ->
+    Boid#{rules := replace(Rules, Rule, {Name, Weight, Opts, State})}.
+
+drop(Boid = #{rules := Rules}, Rule) ->
+    Boid#{rules := lists:delete(Rule, Rules)}.
+
+replace([Rule | Rest], Rule, New) -> [New | Rest];
+replace([Other | Rest], Rule, New) -> [Other | replace(Rest, Rule, New)].
+
+%% A rule that fails is removed, as a handler of gen_event is. The boid
+%% continues with its other rules.
+failed(Boid, Rule, Reason) ->
+    report(Boid, Rule, Reason),
+    drop(Boid, Rule).
+
+report(#{id := Id}, Rule = {Name, _, _, _}, Reason) ->
+    logger:error("boids: the rule ~tp of the boid ~tp failed, and the boid has it no more: ~tp", [Name, Id, Reason]),
+    try
+        stop_rule(Rule, {error, Reason})
+    catch
+        _:_ -> ok
+    end.
+
+%% Do the actions that a rule asked for.
+actions(Boid, Actions) ->
+    lists:foldl(fun action/2, Boid, Actions).
+
+action({set, Options}, Boid) ->
+    update(Boid, Options);
+action({add_rule, Rule}, Boid) ->
+    case add_rule(Boid, Rule) of
+        {ok, Added} -> Added;
+        {error, Reason} -> error({bad_action, {add_rule, Rule}, Reason})
+    end;
+action({delete_rule, Name}, Boid) ->
+    action({delete_rule, Name, remove_rule}, Boid);
+action({delete_rule, Name, Args}, Boid) ->
+    case delete_rule(Boid, Name, Args) of
+        {ok, _Result, Deleted} -> Deleted;
+        {error, not_found} -> Boid
+    end;
+action(stop, Boid) ->
+    Boid#{stop => normal};
+action({stop, Reason}, Boid) ->
+    Boid#{stop => Reason};
+action(Action, _Boid) ->
+    error({bad_action, Action}).
+
 %% --- One step ---------------------------------------------------------
 
 -doc """
@@ -359,27 +605,78 @@ in_view(#{dist := Dist}, _Heading, _Cos) when Dist == 0 -> true;
 in_view(#{offset := Offset, dist := Dist}, Heading, Cos) -> boids_vec:dot(Heading, Offset) / Dist >= Cos.
 
 -doc """
-The force of all the rules of a boid, and the boid with the memory of
-its rules. See the module for `Env`.
+The force of all the rules of a boid, and the boid with the new states
+of its rules. See the module for `Env`.
+
+A rule of yours that fails gives no force, and the boid has it no more:
+the log gets an error.
 """.
 -spec force(boid(), [boids_space:neighbor()], env()) -> {vec(), boid()}.
-force(Boid = #{rules := Rules, memory := Memory0, combine := Combine, max_force := MaxForce, pos := Pos}, Neighbors, Env) ->
-    {Forces, {_, Memory}} =
+force(Boid0 = #{rules := Rules, combine := Combine, max_force := MaxForce, pos := Pos}, Neighbors, Env) ->
+    Zero = boids_vec:zero(tuple_size(Pos)),
+    {Forces, {Kept, Actions}} =
         lists:mapfoldl(
-            fun({Name, Weight, Opts}, {N, Memory1}) ->
-                case apply_rule(Name, Opts, Boid, Neighbors, Env, maps:get(N, Memory1, undefined)) of
-                    %% A force is a tuple of numbers.
-                    {Force, Kept} when is_tuple(Force) ->
-                        {boids_vec:scale(Force, Weight), {N + 1, Memory1#{N => Kept}}};
-                    Force ->
-                        {boids_vec:scale(Force, Weight), {N + 1, Memory1}}
+            fun(Rule, {Kept1, Actions1}) ->
+                case run_rule(Rule, Boid0, Neighbors, Env, Zero) of
+                    {Force, removed, More} -> {Force, {Kept1, Actions1 ++ More}};
+                    {Force, Rule1, More} -> {Force, {[Rule1 | Kept1], Actions1 ++ More}}
                 end
             end,
-            {1, Memory0},
+            {[], []},
             Rules
         ),
-    Zero = boids_vec:zero(boids_vec:dim(Pos)),
-    {combine(Combine, Forces, MaxForce, Zero), Boid#{memory := Memory}}.
+    Boid = actions(Boid0#{rules := lists:reverse(Kept)}, Actions),
+    {combine(Combine, Forces, MaxForce, Zero), Boid}.
+
+%% The force of one rule with its weight, the rule with its new state
+%% (or removed), and the actions that it asked for.
+run_rule(Rule = {Name, Weight, Opts, State}, Boid, Ns, Env, Zero) ->
+    case kind(Name) of
+        {builtin, Base} ->
+            case apply_rule(Base, Opts, Boid, Ns, Env, State) of
+                %% A force is a tuple of numbers.
+                {Force, Memory} when is_tuple(Force) ->
+                    {boids_vec:scale(Force, Weight), {Name, Weight, Opts, Memory}, []};
+                Force ->
+                    {boids_vec:scale(Force, Weight), Rule, []}
+            end;
+        function ->
+            ran(Rule, Boid, Zero, fun() -> {force, Name(Boid, Ns, Env), State} end);
+        {module, Module} ->
+            ran(Rule, Boid, Zero, fun() -> Module:handle_step(Boid, Ns, Env, State) end)
+    end.
+
+ran(Rule = {Name, Weight, Opts, _State}, Boid, Zero, Call) ->
+    try Call() of
+        {force, Force, State} ->
+            forced(Force, Rule, {Name, Weight, Opts, State}, [], Boid, Zero);
+        {force, Force, State, Actions} when is_list(Actions) ->
+            forced(Force, Rule, {Name, Weight, Opts, State}, Actions, Boid, Zero);
+        {ok, State} ->
+            {Zero, {Name, Weight, Opts, State}, []};
+        {ok, State, Actions} when is_list(Actions) ->
+            {Zero, {Name, Weight, Opts, State}, Actions};
+        remove_rule ->
+            _ = stop_rule(Rule, remove_rule),
+            {Zero, removed, []};
+        Other ->
+            report(Boid, Rule, {bad_return, Other}),
+            {Zero, removed, []}
+    catch
+        Class:Reason when Class =/= exit ->
+            report(Boid, Rule, Reason),
+            {Zero, removed, []}
+    end.
+
+%% A force of a rule of the user must be a vector of the size of the boid.
+forced(Force, Rule, {_, Weight, _, _} = Next, Actions, Boid, Zero) ->
+    case boids_vec:is_vec(Force) andalso tuple_size(Force) =:= tuple_size(Zero) of
+        true ->
+            {boids_vec:scale(Force, Weight), Next, Actions};
+        false ->
+            report(Boid, Rule, {bad_force, Force}),
+            {Zero, removed, []}
+    end.
 
 combine(sum, Forces, MaxForce, Zero) ->
     boids_vec:limit(lists:foldl(fun boids_vec:add/2, Zero, Forces), MaxForce);
@@ -414,6 +711,9 @@ place(_Env, Pos) -> Pos.
 -doc """
 One step of a boid: the force of its rules, then the movement for `Dt`
 seconds. `Neighbors` is the result of `perceive/2`.
+
+When a rule asked to stop the boid, the result has the key `stop` with
+the reason: the process of the boid stops then.
 """.
 -spec step(boid(), [boids_space:neighbor()], env(), number()) -> boid().
 step(Boid, _Neighbors, _Env, Dt) when Dt =< 0 ->
@@ -424,8 +724,9 @@ step(Boid, Neighbors, Env, Dt) ->
 
 %% --- The rules: the forces --------------------------------------------
 
-%% The force of one rule, or {Force, Memory} for a rule that keeps a
-%% memory. Memory is the memory that the rule gave at the last step.
+%% The force of one rule of the library, or {Force, Memory} for a rule
+%% that keeps a memory. Memory is the memory that the rule gave at the
+%% last step.
 apply_rule(separation, Opts, B = #{perception := Perception}, Ns, _Env, _Memory) ->
     boids_steer:separation(B, select(Ns, B, Opts, Perception / 2, all));
 apply_rule(alignment, Opts, B, Ns, _Env, _Memory) ->
@@ -489,11 +790,7 @@ apply_rule(flow, Opts = #{field := Field}, B = #{pos := Pos, vel := Vel}, _Ns, _
             true -> Field(boids_vec:add(Pos, boids_vec:scale(Vel, maps:get(predict, Opts, 0.5))));
             false -> Field
         end,
-    boids_steer:flow(B, Direction);
-apply_rule(Fun, _Opts, B, Ns, Env, Memory) when is_function(Fun) ->
-    Fun(B, Ns, Env#{memory => Memory});
-apply_rule(Module, Opts, B, Ns, Env, Memory) ->
-    Module:force(B, Ns, Env#{memory => Memory}, Opts).
+    boids_steer:flow(B, Direction).
 
 %% Move the point of wander a step on its circle. A step that moves the
 %% point to the center changes nothing.

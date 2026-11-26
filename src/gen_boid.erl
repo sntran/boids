@@ -1,67 +1,106 @@
 -module(gen_boid).
 -moduledoc """
-The behavior of a process that is a boid.
+The process of a boid, and the behavior of its rules.
 
-A boid of a flock is a process. This module is that process, and your
-module tells what the boid is: where it starts, what it decides at each
-step, and how it answers messages. The library does the other work: the
-ticks, the neighbors, the forces of the rules, the movement, and the row
-of the boid in its flock.
+A boid is a process, and its rules are callback modules that the process
+runs at each step. You add rules to a boid and remove them while it
+runs, as you add handlers to an event manager of `gen_event` and remove
+them. The process does the other work: the ticks, the neighbors, the
+sum of the forces, the movement, and the row of the boid in its flock.
 
 ```erlang
--module(hawk).
--behavior(gen_boid).
--export([init/1, handle_step/3, handle_call/4]).
-
-%% The boid starts: its options, and the state of this module.
-init(Pos) ->
-    {ok, #{pos => Pos, group => hawks, perception => 25, rules => [{wander, 1.0}]}, #{meals => 0}}.
-
-%% At each step, before the forces: the hawk hunts a bird that it sees.
-handle_step(_Boid, Neighbors, State = #{meals := Meals}) ->
-    case [N || N = #{group := birds} <- Neighbors] of
-        [] -> {ok, #{rules => [{wander, 1.0}]}, State};
-        [#{dist := Dist} | _] when Dist < 1 -> {ok, State#{meals := Meals + 1}};
-        [_ | _] -> {ok, #{rules => [{pursue, 1.0, #{target => {group, birds}}}]}, State}
-    end.
-
-handle_call(meals, _From, _Boid, State = #{meals := Meals}) ->
-    {reply, Meals, State}.
+{ok, Hawk} = gen_boid:start(Flock, #{pos => {50, 50}, group => hawks, rules => [{wander, 1.0}]}),
+ok = gen_boid:add_rule(Hawk, {hunger, 1.0, #{prey => birds}}),
+[wander, hunger] = gen_boid:which_rules(Hawk),
+0 = gen_boid:call(Hawk, hunger, meals),
+ok = gen_boid:delete_rule(Hawk, wander, []).
 ```
 
+## A rule
+
+A rule is one of the rules of the library (`separation`, `seek` and the
+others: see `boids_boid`), or a module of yours with this behavior:
+
 ```erlang
-{ok, Hawk} = gen_boid:start_link(hawk, {50, 50}, #{flock => Flock}),
-0 = gen_boid:call(Hawk, meals).
+-module(hunger).
+-behavior(gen_boid).
+-export([init/1, handle_step/4, handle_call/3]).
+
+%% The rule starts: its state.
+init(#{prey := Prey}) ->
+    {ok, #{prey => Prey, meals => 0}}.
+
+%% At each step: the force of the rule. The boid goes to the nearest
+%% prey that it sees, and eats a prey that it touches.
+handle_step(Boid, Neighbors, _Env, State = #{prey := Prey, meals := Meals}) ->
+    case [N || N = #{group := Group} <- Neighbors, Group =:= Prey] of
+        [] -> {ok, State};
+        [#{dist := Dist} | _] when Dist < 1 -> {ok, State#{meals := Meals + 1}};
+        [#{pos := Pos} | _] -> {force, boids_steer:seek(Boid, Pos), State}
+    end.
+
+handle_call(meals, _Boid, State = #{meals := Meals}) ->
+    {ok, Meals, State}.
 ```
 
 In Elixir, the module has `@behaviour :gen_boid`.
 
+In the list `rules` of a boid and in `add_rule/2`, a rule is `{Name,
+Weight}` or `{Name, Weight, Args}`. The name is the name of a rule of
+the library, your module, or `{Name, Id}` when the boid has that rule
+more than one time. The library multiplies the force of a rule by its
+weight.
+
 ## The callbacks
 
-Only `init/1` is necessary.
+`init/1` and `handle_step/4` are necessary.
 
-- `init(Args)` gives `{ok, Options, State}`. `Options` are the options
-  of the boid (`boids_boid`) and of its process (below), on top of the
-  `defaults` of the flock. It can also give `ignore` or `{stop, Reason}`.
-- `handle_step(Boid, Neighbors, State)` runs at each step, before the
-  forces of the rules. `Neighbors` are the boids that the boid sees, the
-  nearest first. It gives `{ok, State}`, or `{ok, Changes, State}` to
-  change options of the boid for this step and the next steps.
-- `handle_call(Request, From, Boid, State)`, `handle_cast(Request, Boid,
-  State)` and `handle_info(Info, Boid, State)` are those of `gen_server`,
-  with the boid. Each result can have changes of the boid: `{reply,
-  Reply, Changes, State}` and `{noreply, Changes, State}`.
-- `terminate(Reason, Boid, State)` runs when the process stops, as in
-  `gen_server`.
+- `init(Args)` runs when the boid gets the rule. It gives `{ok, State}`,
+  or `{error, Reason}`: the boid then does not get the rule.
+- `handle_step(Boid, Neighbors, Env, State)` runs at each step of the
+  boid. `Neighbors` are the boids that the boid sees, the nearest first.
+  `Env` has `dt` (the seconds of the step), `obstacles`, `bounds` and
+  `wrap`. It gives `{force, Force, State}`, or `{ok, State}` for no
+  force.
+- `handle_call(Request, Boid, State)` runs for `call/3`. It gives `{ok,
+  Reply, State}`.
+- `handle_info(Info, Boid, State)` runs for each other message to the
+  process. It gives `{ok, State}`.
+- `terminate(Arg, State)` runs when the boid loses the rule. `Arg` is
+  the argument of `delete_rule/3`, `remove_rule` (the rule removed
+  itself), `replaced` (the boid got a new list of rules), `{stop,
+  Reason}` (the process stops) or `{error, Reason}` (the rule failed).
 
 `Boid` is the boid as a map (`t:boids_boid:boid/0`): `maps:get(pos,
-Boid)` is its position. `Changes` are options of a boid, as for
-`boids:update/3`. Each callback can give `{stop, Reason, State}`.
+Boid)` is its position.
 
-A boid with no module of yours is a `gen_boid` with the module
-`boids_boid`: `boids:add/2` starts one.
+A rule removes itself when a callback gives `remove_rule` (`{remove_rule,
+Reply}` for `handle_call/3`).
+
+Each result with a state can have a list of actions as its last part,
+for example `{ok, State, Actions}`:
+
+| Action | What it does |
+|---|---|
+| `{set, Options}` | Changes options of the boid, as `boids:update/3`. |
+| `{add_rule, Rule}` | Adds a rule to the boid. |
+| `{delete_rule, Name}`, `{delete_rule, Name, Args}` | Removes a rule from the boid. |
+| `stop`, `{stop, Reason}` | Stops the process of the boid. |
+
+The actions of a step apply after all the rules of that step. Thus a
+rule can be the mind of a boid: it gives no force, and it adds and
+removes rules when what the boid sees changes.
+
+## A rule that fails
+
+A rule that has an error, or that gives a bad result, does not stop the
+boid. As a handler of `gen_event`, the boid loses that rule, the log
+gets an error, and the boid continues with its other rules.
 
 ## The options of the process
+
+`start/2` gets the options of the boid (`boids_boid`) and these, on top
+of the `defaults` of the flock:
 
 | Option | Default | Description |
 |---|---|---|
@@ -70,6 +109,7 @@ A boid with no module of yours is a `gen_boid` with the module
 | `seed` | (none) | An integer: the seed of the random numbers of the process. |
 | `priority` | `low` | The priority of the process: `low` or `normal`. |
 | `hibernate` | `true` | The process hibernates between two steps. |
+| `name` | (none) | A name for the process: an atom, `{global, Term}` or `{via, Module, Term}`. |
 
 The time of a step is the time that passed on the monotonic clock,
 multiplied by the scale of the time of the flock. The process waits
@@ -78,11 +118,11 @@ little more than `tick`.
 
 ## The supervisor of a boid
 
-`start/3` starts the boid below the supervisor of its flock. That
-supervisor does not start a boid again after an error. `start_link/3`
+`start/2` starts the boid below the supervisor of its flock. That
+supervisor does not start a boid again after an error. `start_link/2`
 and `child_spec/1` are for a supervisor of yours, which starts the boid
-again as you tell it. Give an `id` in the options of `init/1`, so that
-the process that starts again is the same boid.
+again as you tell it. Give an `id` to the boid, so that the process that
+starts again is the same boid.
 
 ## A flock with too much work
 
@@ -104,41 +144,37 @@ about 10 % faster.
 """.
 -behavior(gen_server).
 
--export([start/3, start_link/3, child_spec/1, stop/1]).
--export([call/2, call/3, cast/2, reply/2]).
--export([options/1, start_child/4]).
+-export([start/2, start_link/2, child_spec/1, stop/1]).
+-export([add_rule/2, delete_rule/3, which_rules/1, call/3, call/4]).
+-export([options/1, start_child/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
--export_type([boid/0, start_options/0]).
+-export_type([boid/0]).
 
 -type boid() :: pid() | atom() | {global, term()} | {via, module(), term()}.
--type start_options() :: #{flock := boids:flock(), name => atom() | {global, term()} | {via, module(), term()}}.
--type changes() :: boids:options().
+-type actions() :: [boids_boid:action()].
 
--callback init(Args :: term()) ->
-    {ok, Options :: boids:options(), State :: term()} | ignore | {stop, Reason :: term()}.
--callback handle_step(Boid :: boids_boid:boid(), Neighbors :: [boids_space:neighbor()], State :: term()) ->
-    {ok, NewState :: term()}
-    | {ok, changes(), NewState :: term()}
-    | {stop, Reason :: term(), NewState :: term()}.
--callback handle_call(Request :: term(), From :: gen_server:from(), Boid :: boids_boid:boid(), State :: term()) ->
-    {reply, Reply :: term(), NewState :: term()}
-    | {reply, Reply :: term(), changes(), NewState :: term()}
-    | {noreply, NewState :: term()}
-    | {noreply, changes(), NewState :: term()}
-    | {stop, Reason :: term(), Reply :: term(), NewState :: term()}
-    | {stop, Reason :: term(), NewState :: term()}.
--callback handle_cast(Request :: term(), Boid :: boids_boid:boid(), State :: term()) ->
-    {noreply, NewState :: term()}
-    | {noreply, changes(), NewState :: term()}
-    | {stop, Reason :: term(), NewState :: term()}.
+-callback init(Args :: term()) -> {ok, State :: term()} | {error, Reason :: term()}.
+-callback handle_step(
+    Boid :: boids_boid:boid(),
+    Neighbors :: [boids_space:neighbor()],
+    Env :: boids_boid:env(),
+    State :: term()
+) ->
+    {force, boids_vec:vec(), NewState :: term()}
+    | {force, boids_vec:vec(), NewState :: term(), actions()}
+    | {ok, NewState :: term()}
+    | {ok, NewState :: term(), actions()}
+    | remove_rule.
+-callback handle_call(Request :: term(), Boid :: boids_boid:boid(), State :: term()) ->
+    {ok, Reply :: term(), NewState :: term()}
+    | {ok, Reply :: term(), NewState :: term(), actions()}
+    | {remove_rule, Reply :: term()}.
 -callback handle_info(Info :: term(), Boid :: boids_boid:boid(), State :: term()) ->
-    {noreply, NewState :: term()}
-    | {noreply, changes(), NewState :: term()}
-    | {stop, Reason :: term(), NewState :: term()}.
--callback terminate(Reason :: term(), Boid :: boids_boid:boid(), State :: term()) -> term().
+    {ok, NewState :: term()} | {ok, NewState :: term(), actions()} | remove_rule.
+-callback terminate(Arg :: term(), State :: term()) -> term().
 
--optional_callbacks([handle_step/3, handle_call/4, handle_cast/3, handle_info/3, terminate/3]).
+-optional_callbacks([handle_call/3, handle_info/3, terminate/2]).
 
 -define(KEYS, [tick, max_dt, seed, priority, hibernate]).
 
@@ -148,25 +184,21 @@ about 10 % faster.
 
 -doc """
 Start a boid below the supervisor of its flock. The boid stops with its
-flock, and it does not start again after an error.
+flock, and it does not start again after an error. The options are those
+of a boid (`boids_boid`) and of its process, as a map or a list of
+`{Key, Value}`. `pos` is necessary.
 
-`Options` is a map, or a list of `{Key, Value}`: `flock` (necessary: the
-flock or its space), and `name` (a name for the process: an atom,
-`{global, Term}` or `{via, Module, Term}`).
-
-A bad option of `init/1` gives `{error, {bad_option, {Key, Value}}}`,
-and an id that is in the flock `{error, {exists, Id}}`.
+A bad option gives `{error, {bad_option, {Key, Value}}}`, and an id that
+is in the flock `{error, {exists, Id}}`.
 """.
--spec start(module(), term(), start_options() | [{atom(), term()}]) -> {ok, pid()} | ignore | {error, term()}.
-start(Module, Args, Options0) ->
-    Options = #{flock := Flock} = start_options(Options0),
+-spec start(boids:flock(), boids:options()) -> {ok, pid()} | {error, term()}.
+start(Flock, Options) ->
     Space = boids:space(Flock),
-    start_child(boids_flock:boid_sup(Space), Module, Args, Options#{flock := Space}).
+    start_child(boids_flock:boid_sup(Space), Space, Options).
 
 -doc false.
-start_child(Sup, Module, Args, Options) ->
-    case supervisor:start_child(Sup, [Module, Args, Options]) of
-        {ok, undefined} -> ignore;
+start_child(Sup, Space, Options) ->
+    case supervisor:start_child(Sup, [Space, Options]) of
         {ok, Pid} -> {ok, Pid};
         {error, {shutdown, Reason}} -> {error, Reason};
         {error, Reason} -> {error, Reason}
@@ -174,46 +206,42 @@ start_child(Sup, Module, Args, Options) ->
 
 -doc """
 Start a boid with a link to the caller: for a supervisor of yours. The
-options are those of `start/3`. Give the name of the flock, and not its
+options are those of `start/2`. Give the name of the flock, and not its
 pid, so that the boid finds a flock that started again.
 
-A bad option of `init/1` gives `{error, {shutdown, {bad_option, {Key,
-Value}}}}`, and an id that is in the flock `{error, {shutdown, {exists,
-Id}}}`.
+A bad option gives `{error, {shutdown, {bad_option, {Key, Value}}}}`,
+and an id that is in the flock `{error, {shutdown, {exists, Id}}}`.
 """.
--spec start_link(module(), term(), start_options() | [{atom(), term()}]) -> {ok, pid()} | ignore | {error, term()}.
-start_link(Module, Args, Options0) ->
-    case start_options(Options0) of
-        Options = #{name := Name} when is_atom(Name) ->
-            gen_server:start_link({local, Name}, ?MODULE, {Module, Args, Options}, ?GEN);
-        Options = #{name := Name} ->
-            gen_server:start_link(Name, ?MODULE, {Module, Args, Options}, ?GEN);
+-spec start_link(boids:flock(), boids:options()) -> {ok, pid()} | {error, term()}.
+start_link(Flock, Options0) ->
+    try boids_boid:to_map(Options0) of
+        #{name := Name} = Options when is_atom(Name) ->
+            gen_server:start_link({local, Name}, ?MODULE, {Flock, Options}, ?GEN);
+        #{name := Name} = Options ->
+            gen_server:start_link(Name, ?MODULE, {Flock, Options}, ?GEN);
         Options ->
-            gen_server:start_link(?MODULE, {Module, Args, Options}, ?GEN)
+            gen_server:start_link(?MODULE, {Flock, Options}, ?GEN)
+    catch
+        error:{bad_option, _} = Reason -> {error, {shutdown, Reason}}
     end.
-
-start_options(Options0) ->
-    Options = boids_boid:to_map(Options0),
-    is_map_key(flock, Options) orelse error({bad_option, {flock, undefined}}),
-    [error({bad_option, {Key, maps:get(Key, Options)}}) || Key <- maps:keys(Options), Key =/= flock, Key =/= name],
-    Options.
 
 -doc """
 The specification of a boid as a child of a supervisor of yours, from
-`{Module, Args, Options}` (see `start_link/3`).
+`{Flock, Options}` (see `start_link/2`).
 
 ```erlang
 {ok, {#{strategy => rest_for_one}, [
     boids:child_spec(#{name => my_flock}),
-    gen_boid:child_spec({hawk, {50, 50}, #{flock => my_flock}})
+    gen_boid:child_spec({my_flock, #{id => hawk, pos => {50, 50}, rules => [{hunger, 1.0, #{prey => birds}}]}})
 ]}}
 ```
 
-In Elixir, the child is `{:gen_boid, {Hawk, {50, 50}, flock: :my_flock}}`.
+In Elixir, the child is `{:gen_boid, {:my_flock, id: :hawk, pos: {50, 50}}}`.
 """.
--spec child_spec({module(), term(), start_options() | [{atom(), term()}]}) -> supervisor:child_spec().
-child_spec({Module, Args, Options}) ->
-    #{id => {?MODULE, Module, Args}, start => {?MODULE, start_link, [Module, Args, Options]}}.
+-spec child_spec({boids:flock(), boids:options()}) -> supervisor:child_spec().
+child_spec({Flock, Options}) ->
+    Id = maps:get(id, boids_boid:to_map(Options), make_ref()),
+    #{id => {?MODULE, Id}, start => {?MODULE, start_link, [Flock, Options]}}.
 
 -doc "Stop a boid: its process stops with the reason `normal`.".
 -spec stop(boid()) -> ok.
@@ -221,27 +249,45 @@ stop(Boid) ->
     gen_server:stop(Boid).
 
 -doc """
-Send a request to a boid, and wait for its answer: `handle_call/4` of
-its module gives it. The time limit is 5 seconds.
+Add a rule at the end of the rules of a boid: `{Name, Weight}` or
+`{Name, Weight, Args}`. A module of yours starts in the process of the
+boid: `Module:init(Args)`. A bad rule, or a module that does not start,
+gives `{error, Reason}`.
 """.
--spec call(boid(), term()) -> term().
-call(Boid, Request) ->
-    gen_server:call(Boid, {'$gen_boid', Request}).
+-spec add_rule(boid(), boids_boid:rule()) -> ok | {error, term()}.
+add_rule(Boid, Rule) ->
+    gen_server:call(Boid, {add_rule, Rule}).
 
--doc "As `call/2`, with a time limit in milliseconds, or `infinity`.".
--spec call(boid(), term(), timeout()) -> term().
-call(Boid, Request, Timeout) ->
-    gen_server:call(Boid, {'$gen_boid', Request}, Timeout).
+-doc """
+Remove the first rule with the name `Name` from a boid. For a module of
+yours with `terminate/2`, the result is what `Module:terminate(Args,
+State)` gives. For the other rules it is `ok`. A boid with no such rule
+gives `{error, not_found}`.
+""".
+-spec delete_rule(boid(), boids_boid:name(), term()) -> term() | {error, not_found}.
+delete_rule(Boid, Name, Args) ->
+    gen_server:call(Boid, {delete_rule, Name, Args}).
 
--doc "Send a request to a boid, with no answer: `handle_cast/3` of its module gets it.".
--spec cast(boid(), term()) -> ok.
-cast(Boid, Request) ->
-    gen_server:cast(Boid, {'$gen_boid', Request}).
+-doc "The names of the rules of a boid, in their order.".
+-spec which_rules(boid()) -> [boids_boid:name()].
+which_rules(Boid) ->
+    gen_server:call(Boid, which_rules).
 
--doc "Answer a request of `call/2`, when `handle_call/4` gave `noreply`.".
--spec reply(gen_server:from(), term()) -> ok.
-reply(From, Reply) ->
-    gen_server:reply(From, Reply).
+-doc """
+Send a request to a rule of a boid, and wait for its answer:
+`Module:handle_call(Request, Boid, State)` gives it. The time limit is 5
+seconds. A boid with no such rule, or a rule with no `handle_call/3`,
+gives `{error, bad_rule}`. A rule that fails gives `{error, {failed,
+Reason}}`.
+""".
+-spec call(boid(), boids_boid:name(), term()) -> term().
+call(Boid, Name, Request) ->
+    gen_server:call(Boid, {call, Name, Request}).
+
+-doc "As `call/3`, with a time limit in milliseconds, or `infinity`.".
+-spec call(boid(), boids_boid:name(), term(), timeout()) -> term().
+call(Boid, Name, Request, Timeout) ->
+    gen_server:call(Boid, {call, Name, Request}, Timeout).
 
 -doc """
 Divide the options into those of the process and those of the boid.
@@ -257,7 +303,7 @@ options(Opts) ->
         end,
     Server = maps:merge(#{tick => 50, max_dt => MaxDt, priority => low, hibernate => true}, Given),
     maps:foreach(fun check/2, Server),
-    {Server, maps:without(?KEYS, Opts)}.
+    {Server, maps:without([name | ?KEYS], Opts)}.
 
 check(tick, manual) -> ok;
 check(tick, Tick) when is_integer(Tick), Tick > 0 -> ok;
@@ -270,22 +316,16 @@ check(Key, Value) -> error({bad_option, {Key, Value}}).
 %% --- gen_server -------------------------------------------------------
 
 -doc false.
-init({Module, Args, #{flock := Flock}}) ->
-    case Module:init(Args) of
-        {ok, Opts, User} ->
-            try
-                Space = #{defaults := Defaults} = boids:space(Flock),
-                {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
-                {Space, Server, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
-            of
-                {Space, Server, Boid} -> join(Space, Server#{mod => Module, state => User}, Boid)
-            catch
-                error:{bad_option, _} = Reason -> {stop, {shutdown, Reason}}
-            end;
-        ignore ->
-            ignore;
-        {stop, Reason} ->
-            {stop, Reason}
+init({Flock, Opts}) ->
+    try
+        Space = #{defaults := Defaults} = boids:space(Flock),
+        {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
+        %% The rules of the boid start here, in its process.
+        {Space, Server, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
+    of
+        {Space, Server, Boid} -> join(Space, Server, Boid)
+    catch
+        error:{bad_option, _} = Reason -> {stop, {shutdown, Reason}}
     end.
 
 join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) ->
@@ -307,96 +347,76 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
             process_flag(priority, Priority),
             {ok, Server#{space => Space, boid => Boid, last => now_us(), due => Due, pending => undefined}};
         {error, Reason} ->
+            boids_boid:terminate(Boid, {stop, Reason}),
             {stop, {shutdown, Reason}}
     end.
 
 -doc false.
 handle_call(get, _From, State = #{boid := Boid}) ->
     {reply, Boid, State};
-handle_call({update, Changes}, _From, State) ->
-    try change(Changes, State) of
-        Changed -> {reply, ok, Changed}
+handle_call({update, Changes}, _From, State = #{boid := Boid}) ->
+    try boids_boid:update(Boid, Changes) of
+        Changed -> {reply, ok, changed(Changed, State)}
     catch
         error:{bad_option, _} = Reason -> {reply, {error, Reason}, State}
     end;
-handle_call({plan, Dt}, _From, State0) ->
-    case plan(State0, Dt) of
-        {ok, Boid, State} -> {reply, ok, State#{pending := Boid}};
-        {stop, Reason, State} -> {stop, Reason, ok, State}
+handle_call({add_rule, Rule}, _From, State = #{boid := Boid}) ->
+    case boids_boid:add_rule(Boid, Rule) of
+        {ok, Changed} -> {reply, ok, changed(Changed, State)};
+        {error, Reason} -> {reply, {error, Reason}, State}
+    end;
+handle_call({delete_rule, Name, Args}, _From, State = #{boid := Boid}) ->
+    case boids_boid:delete_rule(Boid, Name, Args) of
+        {ok, Result, Changed} -> {reply, Result, changed(Changed, State)};
+        {error, not_found} -> {reply, {error, not_found}, State}
+    end;
+handle_call(which_rules, _From, State = #{boid := Boid}) ->
+    {reply, boids_boid:which_rules(Boid), State};
+handle_call({call, Name, Request}, _From, State = #{boid := Boid}) ->
+    {Reply, Changed} = boids_boid:call_rule(Boid, Name, Request),
+    case Changed of
+        #{stop := Reason} -> {stop, Reason, Reply, State#{boid := Changed}};
+        _ -> {reply, Reply, changed(Changed, State)}
+    end;
+handle_call({plan, Dt}, _From, State = #{space := Space, boid := Boid}) ->
+    case boids:plan(Space, Boid, Dt) of
+        #{stop := Reason} = Planned -> {stop, Reason, ok, State#{boid := Planned}};
+        Planned -> {reply, ok, State#{pending := Planned}}
     end;
 handle_call(commit, _From, State = #{pending := undefined}) ->
     {reply, ok, State};
 handle_call(commit, _From, State = #{space := Space, pending := Boid}) ->
     boids:commit(Space, Boid),
-    rest({reply, ok, State#{boid := Boid, pending := undefined}});
-handle_call({'$gen_boid', Request}, From, State = #{mod := Module, boid := Boid, state := User}) ->
-    case erlang:function_exported(Module, handle_call, 4) of
-        true -> result(Module:handle_call(Request, From, Boid, User), State);
-        false -> {stop, {bad_call, Request}, State}
-    end.
+    rest({reply, ok, State#{boid := Boid, pending := undefined}}).
 
 -doc false.
-handle_cast({'$gen_boid', Request}, State = #{mod := Module, boid := Boid, state := User}) ->
-    case erlang:function_exported(Module, handle_cast, 3) of
-        true -> result(Module:handle_cast(Request, Boid, User), State);
-        false -> {stop, {bad_cast, Request}, State}
-    end;
 handle_cast(_Message, State) ->
     {noreply, State}.
 
 -doc false.
-handle_info(tick, State0 = #{space := Space, tick := Tick, last := Last, max_dt := MaxDt}) ->
+handle_info(tick, State = #{space := Space, boid := Boid0, tick := Tick, last := Last, max_dt := MaxDt}) ->
     Now = now_us(),
-    case plan(State0, min((Now - Last) / 1.0e6, MaxDt)) of
-        {ok, Boid, State} ->
-            boids:commit(Space, Boid),
+    case boids:advance(Space, Boid0, min((Now - Last) / 1.0e6, MaxDt)) of
+        #{stop := Reason} = Boid ->
+            {stop, Reason, State#{boid := Boid}};
+        Boid ->
             %% The wait starts after the step, so a boid always has a rest.
             Due = wait(Tick + extra(Now - maps:get(due, State))),
-            rest({noreply, State#{boid := Boid, last := Now, due := Due}});
-        {stop, Reason, State} ->
-            {stop, Reason, State}
+            rest({noreply, State#{boid := Boid, last := Now, due := Due}})
     end;
-handle_info(Info, State = #{mod := Module, boid := Boid, state := User}) ->
-    case erlang:function_exported(Module, handle_info, 3) of
-        true -> result(Module:handle_info(Info, Boid, User), State);
-        false -> {noreply, State}
+handle_info(Info, State = #{boid := Boid}) ->
+    case boids_boid:info(Boid, Info) of
+        #{stop := Reason} = Changed -> {stop, Reason, State#{boid := Changed}};
+        Changed -> {noreply, changed(Changed, State)}
     end.
 
 -doc false.
-terminate(Reason, #{mod := Module, boid := Boid, state := User}) ->
-    erlang:function_exported(Module, terminate, 3) andalso Module:terminate(Reason, Boid, User),
-    ok.
+terminate(Reason, #{boid := Boid}) ->
+    boids_boid:terminate(Boid, {stop, Reason}).
 
-%% One step of the boid, with no write to the flock: the module decides,
-%% then the rules give the force (specs/Step.tla, Plan).
-plan(State = #{space := Space, boid := Boid0, mod := Module, state := User0}, Dt) ->
-    Neighbors = boids:sense(Space, Boid0),
-    Decided =
-        case erlang:function_exported(Module, handle_step, 3) of
-            true -> Module:handle_step(Boid0, Neighbors, User0);
-            false -> {ok, User0}
-        end,
-    case Decided of
-        {ok, User} ->
-            {ok, boids:plan(Space, Boid0, Neighbors, Dt), State#{state := User}};
-        {ok, Changes, User} ->
-            Boid = boids_boid:update(Boid0, Changes),
-            {ok, boids:plan(Space, Boid, Neighbors, Dt), State#{state := User}};
-        {stop, Reason, User} ->
-            {stop, Reason, State#{state := User}}
-    end.
-
-%% The result of a callback of the module, as a result of gen_server.
-result({reply, Reply, User}, State) -> {reply, Reply, State#{state := User}};
-result({reply, Reply, Changes, User}, State) -> {reply, Reply, change(Changes, State#{state := User})};
-result({noreply, User}, State) -> {noreply, State#{state := User}};
-result({noreply, Changes, User}, State) -> {noreply, change(Changes, State#{state := User})};
-result({stop, Reason, Reply, User}, State) -> {stop, Reason, Reply, State#{state := User}};
-result({stop, Reason, User}, State) -> {stop, Reason, State#{state := User}}.
-
-%% Change options of the boid, and write the boid to the flock.
-change(Changes, State = #{space := Space, boid := Boid0}) ->
-    Boid = boids_boid:update(Boid0, Changes),
+%% The boid changed out of a step: write it to the flock. A plan of
+%% boids:step/2 that is not written is for the boid before the change.
+changed(Boid, State = #{space := Space}) ->
     boids:commit(Space, Boid),
     State#{boid := Boid, pending := undefined}.
 

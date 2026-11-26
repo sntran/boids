@@ -321,7 +321,7 @@ defmodule BoidsTest do
       assert {:ok, %{max_speed: 2, pos: {50, 60}}} = :boids.boid(flock, id)
       assert [%{id: ^id}] = :boids.near(flock, {50, 60}, 1)
       assert :boids.update(flock, id, rules: [wander: 1]) == :ok
-      assert {:ok, %{rules: [{:wander, 1, %{}}]}} = :boids.boid(flock, id)
+      assert {:ok, %{rules: [{:wander, 1, %{}, :undefined}]}} = :boids.boid(flock, id)
     end
 
     test "refuses a bad option, and changes nothing" do
@@ -352,15 +352,19 @@ defmodule BoidsTest do
     end
 
     @tag :capture_log
-    test "a boid with an error at each step does not stop the flock" do
+    test "a rule with an error does not stop its boid, and does not stop the flock" do
       flock = flock()
       {:ok, good} = :boids.populate(flock, 20, area: @box, tick: 5)
       bad = fn _boid, _neighbors, _env -> raise "a fault of a rule" end
-      for _ <- 1..15, do: {:ok, _} = :boids.add(flock, pos: {1, 1}, rules: [{bad, 1}], tick: 5)
-      assert eventually(fn -> :boids.count(flock) == 20 end)
-      assert Process.alive?(flock)
-      assert Enum.all?(good, &Process.alive?/1)
-      assert Enum.sort(Enum.map(:boids.snapshot(flock), & &1.id)) == Enum.sort(good)
+
+      faulty =
+        for _ <- 1..15, do: elem(:boids.add(flock, pos: {1, 1}, vel: {1, 0}, rules: [{bad, 1}], tick: 5), 1)
+
+      # Each boid loses the rule with the fault, and continues.
+      assert eventually(fn -> Enum.all?(faulty, &(:gen_boid.which_rules(&1) == [])) end)
+      assert eventually(fn -> Enum.all?(faulty, &(elem(pos(flock, &1), 0) > 1)) end)
+      assert :boids.count(flock) == 35
+      assert Enum.all?(good ++ faulty, &Process.alive?/1)
     end
 
     @tag :capture_log
@@ -419,7 +423,7 @@ defmodule BoidsTest do
 
       children = [
         {:boids, name: name, defaults: %{tick: :manual, rules: []}},
-        {:gen_boid, {:boids_boid, [id: :hawk, pos: {1, 1}, vel: {1, 0}], [flock: name]}}
+        {:gen_boid, {name, [id: :hawk, pos: {1, 1}, vel: {1, 0}]}}
       ]
 
       start = {Supervisor, :start_link, [children, [strategy: :rest_for_one]]}
@@ -465,23 +469,6 @@ defmodule BoidsTest do
       {:ok, other} = :boids.add(flock, pos: {5, 5})
       assert :boids.remove(flock, other) == :ok
       assert :boids.count(flock) == 1
-    end
-
-    test "the specification of the child has the module and its arguments" do
-      assert :gen_boid.child_spec({:boids_boid, %{id: :hawk}, %{flock: :f}}) == %{
-               id: {:gen_boid, :boids_boid, %{id: :hawk}},
-               start: {:gen_boid, :start_link, [:boids_boid, %{id: :hawk}, %{flock: :f}]}
-             }
-    end
-
-    test "start_link/3 refuses a bad option and an id of the flock", %{flock: flock} do
-      Process.flag(:trap_exit, true)
-      start = fn options -> :gen_boid.start_link(:boids_boid, options, flock: flock) end
-      assert start.(pos: {0, 0}, mass: 0) == {:error, {:shutdown, {:bad_option, {:mass, 0}}}}
-      assert start.(:bird) == {:error, {:shutdown, {:bad_option, :bird}}}
-      assert start.(id: :hawk, pos: {0, 0}) == {:error, {:shutdown, {:exists, :hawk}}}
-      assert {:ok, pid} = start.(pos: {0, 0})
-      assert :boids.whereis(flock, pid) == pid
     end
   end
 
@@ -734,8 +721,8 @@ defmodule BoidsTest do
       {:ok, [a, b]} = :boids.populate(flock, 2, id: :same, tick: :manual, seed: 5, rules: [wander: 1])
       assert a != b
       :boids.step(flock, 0.1)
-      {:ok, %{memory: %{1 => first}}} = :boids.boid(flock, a)
-      {:ok, %{memory: %{1 => second}}} = :boids.boid(flock, b)
+      {:ok, %{rules: [{:wander, 1, %{}, first}]}} = :boids.boid(flock, a)
+      {:ok, %{rules: [{:wander, 1, %{}, second}]}} = :boids.boid(flock, b)
       assert first != second
     end
 
@@ -745,7 +732,7 @@ defmodule BoidsTest do
       {:ok, one} = :boids.add(flock, pos: {1, 1}, seed: 101)
       {:ok, two} = :boids.add(flock, pos: {1, 1}, seed: 102)
       :boids.step(flock, 0.1)
-      point = fn id -> elem(:boids.boid(flock, id), 1).memory[1] end
+      point = fn id -> elem(hd(elem(:boids.boid(flock, id), 1).rules), 3) end
       assert point.(first) == point.(one)
       assert point.(second) == point.(two)
       assert point.(first) != point.(second)

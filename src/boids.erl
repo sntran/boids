@@ -27,12 +27,14 @@ In Elixir, the module is `:boids`:
 - A flock (`start_flock/1`, or `child_spec/1` for your supervisor) owns
   the space: ETS tables with one row for each boid, and a grid of cells
   as the index.
-- A boid is a process with the behavior `gen_boid`. At each tick it
-  reads its neighbors, calculates its force, moves and writes its row.
-  It sends no message. A module of yours tells what the boid decides at
-  each step, and how it answers messages.
-- A boid of `add/2` or `populate/3` is a `gen_boid` with no module of
-  yours, below the supervisor of the flock.
+- A boid is a process (`gen_boid`). At each tick it reads its
+  neighbors, calculates its force, moves and writes its row. It sends
+  no message.
+- The rules of a boid are those of the library, and modules of yours
+  with the behavior `gen_boid`. A boid gets rules and loses them while
+  it runs (`gen_boid:add_rule/2`, `gen_boid:delete_rule/3`).
+- A boid of `add/2` or `populate/3` is below the supervisor of the
+  flock.
 - A process with another behavior can be a boid too: `join/2` adds its
   row, and `advance/3` makes one step. The flock removes the row when
   the process stops.
@@ -184,10 +186,9 @@ add(Flock, Opts0) ->
         error:{bad_option, _} = Reason -> {error, Reason}
     end.
 
-%% A boid with no module of the user: a gen_boid with the module
-%% boids_boid. Its process checks the options.
+%% The process of the boid checks the options.
 start(Space = #{defaults := Defaults}, Sup, Opts) ->
-    case gen_boid:start_child(Sup, boids_boid, Opts, #{flock => Space}) of
+    case gen_boid:start_child(Sup, Space, Opts) of
         {ok, Pid} -> {ok, maps:get(id, maps:merge(Defaults, Opts), Pid)};
         {error, Reason} -> {error, Reason}
     end.
@@ -209,7 +210,10 @@ populate(Flock, Count, Opts0) when is_integer(Count), Count >= 0 ->
         Area = {Min, _} = area(maps:get(area, Opts, Bounds)),
         Template = maps:without([area, id], maps:merge(Defaults, Opts)),
         {_Server, BoidOpts} = gen_boid:options(Template),
-        {Area, Template, boids_boid:new(BoidOpts#{pos => Min})}
+        %% The check of the options, and the speeds of a boid. No rule
+        %% starts in this process.
+        _ = boids_boid:options(BoidOpts),
+        {Area, Template, boids_boid:new(BoidOpts#{pos => Min, rules => []})}
     of
         {{Min1, Max1}, Template1, Sample} ->
             Random = fun() -> random(Min1, Max1, Template1, Sample) end,
@@ -251,7 +255,7 @@ random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}) ->
 Remove a boid of `add/2` from its flock: stop its process. For an id
 that is not such a boid, the result is `{error, not_found}`: a process
 of yours with `join/2`, or a boid below a supervisor of yours
-(`gen_boid:start_link/3`).
+(`gen_boid:start_link/2`).
 """.
 -spec remove(flock(), term()) -> ok | {error, not_found}.
 remove(Flock, Id) ->
