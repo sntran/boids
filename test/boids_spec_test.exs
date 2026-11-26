@@ -12,14 +12,19 @@ defmodule BoidsSpecTest do
 
   defp config(model, name), do: [config: Path.rootname(model) <> name <> ".cfg"]
 
+  # The checker of Accord can use a worker for each processor. That makes
+  # the models of Flock and of Step about two times faster, and the
+  # models of Space a little slower.
+  @workers [workers: :auto]
+
   describe "specs/Flock.tla: the members of a flock" do
     test "a boid that runs has its row, and no row of a process that stopped stays" do
-      assert {:ok, %{distinct_states: states}} = Checker.check(@flock)
+      assert {:ok, %{distinct_states: states}} = Checker.check(@flock, @workers)
       assert states > 1000
     end
 
     test "the row of an id does not change with the messages for another id" do
-      assert {:ok, %{distinct_states: states}} = Checker.check(@flock, config(@flock, "Two"))
+      assert {:ok, %{distinct_states: states}} = Checker.check(@flock, config(@flock, "Two") ++ @workers)
       assert states > 1000
     end
 
@@ -63,7 +68,7 @@ defmodule BoidsSpecTest do
 
   describe "specs/Step.tla: one step of all the boids" do
     test "each boid calculates from the state at the start of the step, and each step ends" do
-      assert {:ok, %{distinct_states: states}} = Checker.check(@step)
+      assert {:ok, %{distinct_states: states}} = Checker.check(@step, @workers)
       assert states > 1000
     end
 

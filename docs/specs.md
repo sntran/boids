@@ -145,9 +145,9 @@ Thus a run gives the same result each time only when each boid has
 `Boids.FlockSpec` (`test/support/flock_spec.ex`) does two things.
 
 `trace/1` and `events/2` record the messages that the process of a real
-flock handles, with the trace of Erlang on `boids_flock:handle_call/3`
-and `boids_flock:handle_info/2`: a join with its answer, a leave, and a
-`'DOWN'` with the id of its monitor.
+flock handles, with a trace session of Erlang on
+`boids_flock:handle_call/3` and `boids_flock:handle_info/2`: a join with
+its answer, a leave, and a `'DOWN'` with the id of its monitor.
 
 `replay/3` takes the events and the rows of the real table at the end,
 and:

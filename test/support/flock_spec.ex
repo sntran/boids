@@ -26,26 +26,33 @@ defmodule Boids.FlockSpec do
 
   # --- The trace --------------------------------------------------------
 
-  @doc "Start to record the messages that the process of `flock` handles."
+  @doc """
+  Start to record the messages that the process of `flock` handles. The
+  record has its own trace session, so other tracers of the node and
+  other records do not change it.
+  """
   def trace(flock) do
     recorder = spawn_link(fn -> record([]) end)
-    :erlang.trace_pattern({:boids_flock, :handle_call, 3}, [{:_, [], [{:return_trace}]}], [:local])
-    :erlang.trace_pattern({:boids_flock, :handle_info, 2}, true, [:local])
-    :erlang.trace(flock, true, [:call, {:tracer, recorder}])
-    recorder
+    session = :trace.session_create(:boids_flock_spec, recorder, [])
+    :trace.function(session, {:boids_flock, :handle_call, 3}, [{:_, [], [{:return_trace}]}], [:local])
+    :trace.function(session, {:boids_flock, :handle_info, 2}, true, [:local])
+    :trace.process(session, flock, true, [:call])
+    {session, recorder}
   end
 
   @doc """
   Stop the record, and give the events in their order: `{:join, pid, id,
   answer}`, `{:leave, pid, id}` and `{:down, pid, id}`.
   """
-  def events(flock, recorder) do
-    :erlang.trace(flock, false, [:call])
-    ref = :erlang.trace_delivered(flock)
+  def events(flock, {session, recorder}) do
+    :trace.process(session, flock, false, [:call])
+    ref = :trace.delivered(session, flock)
 
     receive do
       {:trace_delivered, ^flock, ^ref} -> :ok
     end
+
+    :trace.session_destroy(session)
 
     send(recorder, {:give, self()})
 
