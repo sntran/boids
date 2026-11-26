@@ -251,6 +251,29 @@ defmodule BoidsTest do
       assert Process.alive?(other)
     end
 
+    test "a late leave for a process that stopped does not take the row of a new process" do
+      flock = flock()
+      {:ok, :a} = :boids.add(flock, still(id: :a))
+      first = :boids.whereis(flock, :a)
+      :ok = :boids.remove(flock, :a)
+      {:ok, :a} = :boids.add(flock, still(id: :a))
+      second = :boids.whereis(flock, :a)
+      # The message of remove/2 for the first process, after the start of the second.
+      assert :boids_flock.leave(:boids.space(flock), :a, first) == :ok
+      assert :boids.whereis(flock, :a) == second
+      assert :boids.remove(flock, :a) == :ok
+      assert :boids.count(flock) == 0
+    end
+
+    test "only the process of a boid of join/2 removes it with leave/2" do
+      flock = flock()
+      {:ok, space, boid} = :boids.join(flock, id: :me, pos: {1, 2})
+      assert Task.await(Task.async(fn -> :boids.leave(space, boid) end)) == :ok
+      assert :boids.whereis(flock, :me) == self()
+      assert :boids.leave(space, boid) == :ok
+      assert :boids.count(flock) == 0
+    end
+
     test "the id is free again" do
       flock = flock()
       {:ok, :a} = :boids.add(flock, still(id: :a))
@@ -297,6 +320,23 @@ defmodule BoidsTest do
       assert Process.alive?(:boids.whereis(flock, :a))
       assert pos(flock, :a) == {1, 1}
       assert :boids.count(flock) == 1
+    end
+
+    test "a boid that starts again when another process has its id stops, and its supervisor continues" do
+      flock = flock()
+      {:ok, :a} = :boids.add(flock, still(id: :a))
+      {:ok, other} = :boids.add(flock, still())
+      sup = :boids_flock.boid_sup(:boids.space(flock))
+      # The supervisor starts the boid again only after the join of this process.
+      :sys.suspend(sup)
+      Process.exit(:boids.whereis(flock, :a), :kill)
+      assert eventually(fn -> :boids.whereis(flock, :a) == :undefined end)
+      {:ok, _, _} = :boids.join(flock, id: :a, pos: {1, 1})
+      :sys.resume(sup)
+      assert eventually(fn -> Supervisor.count_children(sup).active == 1 end)
+      assert Process.alive?(sup)
+      assert Process.alive?(other)
+      assert :boids.whereis(flock, :a) == self()
     end
 
     test "a boid whose process stopped is not found" do
@@ -829,7 +869,7 @@ defmodule BoidsTest do
       assert {:ok, _, _} =
                :boids.join(flock, id: :other, pos: {0, 0}, tick: 5, priority: :normal, hibernate: false)
 
-      :ok = :boids_flock.leave(:boids.space(flock), :other)
+      :ok = :boids_flock.leave(:boids.space(flock), :other, self())
       assert :boids.join(flock, :me) == {:error, {:bad_option, :me}}
       assert :boids.count(flock) == 1
     end

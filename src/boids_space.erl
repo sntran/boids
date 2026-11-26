@@ -142,7 +142,8 @@ put(Space = #{rows := Rows, grid := Grid}, #{id := Id, pos := Pos, vel := Vel, g
                     true;
                 New ->
                     %% The new copy comes before the removal of the old
-                    %% copy, so a reader always finds the boid in its cell.
+                    %% copy, so a reader always finds the boid in its cell
+                    %% (specs/Space.tla, InsertFirst).
                     ets:insert(Rows, New),
                     ets:insert(Grid, spot(New)),
                     ets:delete_object(Grid, spot(Old))
@@ -225,7 +226,8 @@ near(Space = #{rows := Rows, grid := Grid}, Pos, Radius) when is_number(Radius),
                 lists:foldl(fun(Cell, Acc) -> within(ets:lookup(Grid, Cell), Pos, Widths, Limit, Acc) end, [], Cells)
         end,
     %% A boid that writes its row during the read can have two copies in
-    %% the grid: keep one of the two. Then the nearest comes first.
+    %% the grid: keep one of the two (specs/Space.tla, Dedupe). Then the
+    %% nearest comes first.
     [neighbor(Widths, Pos, Near) || Near <- lists:sort(lists:ukeysort(2, Found))].
 
 %% The sizes of the box when its sides continue, or none.

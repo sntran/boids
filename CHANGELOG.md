@@ -18,3 +18,8 @@ The first version.
 - A process of yours as a boid (`boids:join/2`, `boids:advance/3`).
 - Steps of all the boids from one state of the flock (`boids:step/2`),
   for tests and for simulations that do not follow the clock.
+- Specifications of the flows in TLA+ (`specs/`, `docs/specs.md`): the
+  members of a flock, a write against a read of the space, and the step
+  in two parts. The tests check the models and the fault models with the
+  native checker of Accord, and replay a real flock process against
+  `specs/Flock.tla`.

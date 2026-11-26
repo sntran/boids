@@ -210,6 +210,16 @@ A boid reads the rows while the other boids write them. Thus the
 neighbors that it sees are not all of the same moment, as for a bird.
 `boids:step/2` gives one moment for all the boids.
 
+## The specifications
+
+The flows where the order of the processes can change the result have a
+specification in TLA+ (`specs/`): the members of a flock, a write
+against a read of the space, and the step in two parts. The tests check
+a small model of each one, and fault models that must fail, with the
+native checker of [Accord](https://github.com/sntran/accord). They also
+replay the messages of a real flock process as a behavior of
+`specs/Flock.tla`. See [`docs/specs.md`](docs/specs.md).
+
 ## The speed
 
 These numbers are from a computer with 4 processors (x86_64, Erlang/OTP
@@ -251,8 +261,9 @@ mix test --cover
 mix format --check-formatted
 ```
 
-The tests must cover all the lines of the code. rebar3 builds the
-library too (`rebar3 compile`).
+The tests must cover all the lines of the code. A change of a flow that
+has a specification changes the specification in the same commit
+(`docs/specs.md`). rebar3 builds the library too (`rebar3 compile`).
 
 ## License
 

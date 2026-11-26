@@ -94,8 +94,12 @@ init({Space, Opts}) ->
                 end,
             process_flag(priority, Priority),
             {ok, Server#{space => Space, boid => Boid, last => now_us(), due => Due, pending => undefined}};
-        {error, Reason} ->
-            {stop, {shutdown, Reason}}
+        {error, _Reason} ->
+            %% The flock refused the boid. This is not an error of the
+            %% process: a boid that starts again when another process
+            %% has its id must not stop its supervisor. boids:add/2
+            %% finds the reason.
+            ignore
     end.
 
 -doc false.

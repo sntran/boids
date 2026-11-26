@@ -17,11 +17,12 @@ defmodule Boids.MixProject do
       version: @version,
       language: :erlang,
       erlc_options: [:debug_info, :warnings_as_errors],
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
-      test_coverage: [summary: [threshold: 100]],
+      test_coverage: [summary: [threshold: 100], ignore_modules: [Boids.FlockSpec]],
       description: "Boids: flocks of Erlang processes with steering rules",
       package: package(),
-      docs: [main: "readme", extras: ["README.md", "CHANGELOG.md", "LICENSE"]]
+      docs: [main: "readme", extras: ["README.md", "docs/specs.md", "CHANGELOG.md", "LICENSE"]]
     ]
   end
 
@@ -29,9 +30,21 @@ defmodule Boids.MixProject do
     [mod: {:boids_app, []}, registered: [:boids_sup]]
   end
 
+  # The replay of the code against the specifications (test/support).
+  defp elixirc_paths(:test), do: ["test/support"]
+  defp elixirc_paths(_), do: []
+
   defp deps do
     [
       {:stream_data, "~> 1.4", only: [:dev, :test]},
+      # The specifications of the flows in TLA+ (specs/): their model
+      # checks with the native checker of Accord (no Java), and the replay
+      # of the code (the branch feat/native-tla-checker).
+      {:accord,
+       github: "sntran/accord",
+       ref: "28bd66bbd218e2ac478c0b0e769a23ef0f8efae1",
+       only: [:dev, :test],
+       runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end

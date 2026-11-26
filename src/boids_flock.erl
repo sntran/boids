@@ -12,7 +12,7 @@ or as a child of your supervisor with `boids:child_spec/1`.
 """.
 -behavior(gen_server).
 
--export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/2]).
+-export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -export_type([flock/0]).
@@ -77,10 +77,13 @@ positions of the same size: two numbers, or three.
 join(#{owner := Flock}, Pid, Entry) ->
     gen_server:call(Flock, {join, Pid, Entry}).
 
--doc "Remove the row of a boid from the space.".
--spec leave(boids_space:space(), term()) -> ok.
-leave(#{owner := Flock}, Id) ->
-    gen_server:call(Flock, {leave, Id}).
+-doc """
+Remove the row of a boid of the process `Pid` from the space. When
+another process has the id now, its row stays.
+""".
+-spec leave(boids_space:space(), term(), pid()) -> ok.
+leave(#{owner := Flock}, Id, Pid) ->
+    gen_server:call(Flock, {leave, Id, Pid}).
 
 %% --- gen_server -------------------------------------------------------
 
@@ -114,8 +117,13 @@ handle_call({join, Pid, Entry = #{id := Id, pos := Pos}}, _From, State0 = #{spac
         false ->
             {reply, {error, {bad_option, {pos, Pos}}}, State}
     end;
-handle_call({leave, Id}, _From, State) ->
-    {reply, ok, forget(Id, State)}.
+handle_call({leave, Id, Pid}, _From, State = #{space := Space}) ->
+    %% A leave can come late: after the end of its process, and after
+    %% another process has the id (specs/Flock.tla, CheckOwner).
+    case boids_space:lookup(Space, Id) of
+        {ok, #{pid := Pid}} -> {reply, ok, forget(Id, State)};
+        _ -> {reply, ok, State}
+    end.
 
 -doc false.
 handle_cast(_Message, State) ->
@@ -131,7 +139,7 @@ handle_info(_Message, State) ->
     {noreply, State}.
 
 %% A boid that starts again with its id can come before the message
-%% 'DOWN' of its last process.
+%% 'DOWN' of its last process (specs/Flock.tla, TakeOver).
 forget_dead(Id, State = #{space := Space}) ->
     case boids_space:lookup(Space, Id) of
         {ok, #{pid := Pid}} when node(Pid) =:= node() ->

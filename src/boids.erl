@@ -184,8 +184,16 @@ add(Flock, Opts0) ->
 
 start(Space, Sup, Opts) ->
     case supervisor:start_child(Sup, [Space, Opts]) of
-        {ok, Pid} -> {ok, maps:get(id, Opts, Pid)};
-        {error, {shutdown, Reason}} -> {error, Reason}
+        {ok, Pid} when is_pid(Pid) -> {ok, maps:get(id, Opts, Pid)};
+        {ok, undefined} -> {error, refusal(Space, Opts)}
+    end.
+
+%% Why the flock refused a boid: its position does not have the size of
+%% the vectors of the flock, or its id is in the flock.
+refusal(Space, Opts = #{pos := Pos}) ->
+    case boids_space:dim(Space) of
+        Dim when Dim =/= undefined, Dim =/= tuple_size(Pos) -> {bad_option, {pos, Pos}};
+        _ -> {exists, maps:get(id, Opts)}
     end.
 
 -doc """
@@ -253,7 +261,7 @@ remove(Flock, Id) ->
     case boids_space:server(Space, Id) of
         {ok, Pid} ->
             _ = supervisor:terminate_child(boids_flock:boid_sup(Space), Pid),
-            boids_flock:leave(Space, Id);
+            boids_flock:leave(Space, Id, Pid);
         error ->
             {error, not_found}
     end.
@@ -369,8 +377,9 @@ step(Flock, Dt) when is_number(Dt), Dt >= 0 ->
     request(Pids, {plan, Dt}),
     request(Pids, commit).
 
-%% A boid that stops during the step gives an error, which changes
-%% nothing for the other boids.
+%% The two parts of a step are in specs/Step.tla. A boid that stops
+%% during the step gives an error, which changes nothing for the other
+%% boids.
 request(Pids, Request) ->
     Sent = [gen_server:send_request(Pid, Request) || Pid <- Pids],
     lists:foreach(fun(Id) -> gen_server:receive_response(Id, infinity) end, Sent).
@@ -446,7 +455,7 @@ advance(Space, Boid0, Dt) ->
 -doc "Remove a boid of `join/2` from its flock. The process of the boid calls this function.".
 -spec leave(boids_space:space(), boids_boid:boid()) -> ok.
 leave(Space, #{id := Id}) ->
-    boids_flock:leave(Space, Id).
+    boids_flock:leave(Space, Id, self()).
 
 to_map(Opts) when is_map(Opts) -> Opts;
 to_map(Opts) when is_list(Opts) ->
