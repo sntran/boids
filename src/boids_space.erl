@@ -38,7 +38,7 @@ can be out of the box.
     workers => tuple()
 }.
 -type kind() :: data | server | process.
--type cache() :: none | #{tuple() => [tuple()]}.
+-type cache() :: none | #{tuple() => [tuple()]} | {#{tuple() => [tuple()]}, #{tuple() => [tuple()]}}.
 -type entry() :: #{
     id := term(),
     pos := vec(),
@@ -284,6 +284,20 @@ near(Space = #{rows := Rows, grid := Grid}, Pos, Radius, Cache0) when is_number(
 %% The boids of cells in the radius, from the cache or from the table.
 read([Cell | Rest], Grid, Query, Acc, none) ->
     read(Rest, Grid, Query, within(ets:lookup(Grid, Cell), Query, Acc), none);
+read([Cell | Rest], Grid, Query, Acc, {New, Old}) ->
+    %% A cache in two parts, for a worker (boids_worker): the cells of
+    %% this part of its work, and those of the part before.
+    case New of
+        #{Cell := Spots} ->
+            read(Rest, Grid, Query, within(Spots, Query, Acc), {New, Old});
+        _ ->
+            Spots =
+                case Old of
+                    #{Cell := Kept} -> Kept;
+                    _ -> ets:lookup(Grid, Cell)
+                end,
+            read(Rest, Grid, Query, within(Spots, Query, Acc), {New#{Cell => Spots}, Old})
+    end;
 read([Cell | Rest], Grid, Query, Acc, Cache) ->
     case Cache of
         #{Cell := Spots} ->

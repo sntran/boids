@@ -14,7 +14,7 @@ defmodule Boids.TestBoids do
 
     def init(args) do
       if args[:trap], do: Process.flag(:trap_exit, true)
-      options = Map.merge(%{pos: {0, 0}, group: :hawks, rules: [], tick: :manual}, Map.get(args, :boid, %{}))
+      options = Map.merge(%{pos: {0, 0}, group: :hawks, rules: []}, Map.get(args, :boid, %{}))
       {:ok, options, %{owner: args[:owner], steps: 0, stop_at: args[:stop_at]}}
     end
 

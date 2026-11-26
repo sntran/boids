@@ -7,9 +7,23 @@ defmodule GenBoidTest do
   @moduletag :capture_log
 
   setup do
-    {:ok, flock} = :boids.start_flock(defaults: %{tick: :manual})
+    {:ok, flock} = :boids.start_flock(tick: :manual)
     on_exit(fn -> :boids.stop_flock(flock) end)
     %{flock: flock}
+  end
+
+  # A flock with a clock: its boids move in real time.
+  defp timed do
+    {:ok, flock} = :boids.start_flock(tick: 5)
+    on_exit(fn -> :boids.stop_flock(flock) end)
+    flock
+  end
+
+  # Only a process that hibernates has a heap smaller than the minimum
+  # heap of a new process.
+  defp hibernates?(pid) do
+    {:total_heap_size, words} = Process.info(pid, :total_heap_size)
+    words < 233
   end
 
   defp hawk(flock, args \\ %{}) do
@@ -27,7 +41,11 @@ defmodule GenBoidTest do
       pid = hawk(flock, boid: %{id: :hawk, pos: {1, 2}, max_speed: 3})
       assert :boids.whereis(flock, :hawk) == pid
       assert {:ok, %{id: :hawk, pos: {1, 2}, group: :hawks, max_speed: 3}} = :boids.boid(flock, :hawk)
-      assert pid in :boids_space.servers(:boids.space(flock))
+      space = :boids.space(flock)
+      assert :boids_space.owner(space, :hawk) == {:server, pid}
+      assert {:ok, %{id: :hawk, pid: ^pid}} = :boids.lookup(flock, :hawk)
+      # The clock of the flock moves it.
+      assert Map.keys(:sys.get_state(space.clock).servers) == [pid]
       assert :proc_lib.get_label(pid) == {:boids, :boid, :hawk}
       # The supervisor of the flock stops it with the flock.
       assert :boids.stop_flock(flock) == :ok
@@ -54,8 +72,15 @@ defmodule GenBoidTest do
       assert :gen_boid.start(Hawk, {:stop, :no_sky}, flock: flock) == {:error, :no_sky}
       assert :gen_boid.start(Mouse, %{}, flock: flock) == {:error, {:bad_option, {:pos, :undefined}}}
 
-      assert :gen_boid.start(Mouse, %{pos: {0, 0}, tick: 0}, flock: flock) ==
-               {:error, {:bad_option, {:tick, 0}}}
+      # The tick is an option of the flock, and not of a boid.
+      assert :gen_boid.start(Mouse, %{pos: {0, 0}, tick: 5}, flock: flock) ==
+               {:error, {:bad_option, {:tick, 5}}}
+
+      assert :gen_boid.start(Mouse, %{pos: {0, 0}, priority: :low}, flock: flock) ==
+               {:error, {:bad_option, {:priority, :low}}}
+
+      assert :gen_boid.start(Mouse, %{pos: {0, 0}, seed: :random}, flock: flock) ==
+               {:error, {:bad_option, {:seed, :random}}}
 
       assert :gen_boid.start(Mouse, :cheese, flock: flock) == {:error, {:bad_option, :cheese}}
       {:ok, _} = :gen_boid.start(Mouse, %{id: :a, pos: {0, 0}}, flock: flock)
@@ -67,6 +92,50 @@ defmodule GenBoidTest do
       assert catch_error(:gen_boid.start(Mouse, %{pos: {0, 0}}, [])) == {:bad_option, {:flock, :undefined}}
       assert catch_error(:gen_boid.start(Mouse, %{}, flock: flock, speed: 1)) == {:bad_option, {:speed, 1}}
       assert catch_error(:gen_boid.start_link(Mouse, %{}, :here)) == {:bad_option, :here}
+
+      assert catch_error(:gen_boid.start(Mouse, %{pos: {0, 0}}, flock: flock, hibernate: :yes)) ==
+               {:bad_option, {:hibernate, :yes}}
+
+      assert :boids.count(flock) == 0
+    end
+
+    test "the process hibernates after each step", %{flock: flock} do
+      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}}, flock: flock)
+      refute hibernates?(pid)
+      :boids.step(flock, 0.1)
+      assert eventually(fn -> hibernates?(pid) end)
+      # A boid that hibernates answers, and moves.
+      assert {:ok, %{id: :mouse}} = :boids.boid(flock, :mouse)
+      :boids.step(flock, 0.1)
+      assert_vec(row(flock, :mouse).pos, {0.2, 0.0})
+      late = timed()
+      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}}, flock: late)
+      assert eventually(fn -> hibernates?(pid) and row(late, :mouse).pos != {0, 0} end)
+    end
+
+    test "without hibernate, the process keeps its heap", %{flock: flock} do
+      options = %{id: :mouse, pos: {0, 0}, vel: {1, 0}, rules: []}
+      {:ok, pid} = :gen_boid.start(Mouse, options, flock: flock, hibernate: false)
+      {:ok, other} = :gen_boid.start(Mouse, %{options | id: :other}, %{flock: flock, hibernate: true})
+      for _ <- 1..3, do: :boids.step(flock, 0.1)
+      assert eventually(fn -> hibernates?(other) end)
+      refute hibernates?(pid)
+      assert_vec(row(flock, :mouse).pos, {0.3, 0.0})
+    end
+
+    test "a seed in the options of init/1 gives the random numbers of the process", %{flock: flock} do
+      start = fn id, pos, seed ->
+        {:ok, _} = :gen_boid.start(Mouse, %{id: id, pos: pos, seed: seed, rules: [wander: 1]}, flock: flock)
+      end
+
+      start.(:a, {0, 0}, 42)
+      start.(:b, {50, 50}, 42)
+      start.(:c, {90, 90}, 43)
+      for _ <- 1..10, do: :boids.step(flock, 0.1)
+      assert_vec(:boids_vec.sub(row(flock, :b).pos, {50, 50}), row(flock, :a).pos)
+      refute :boids_vec.sub(row(flock, :c).pos, {90, 90}) == row(flock, :a).pos
+      # The boid has no random numbers of its own.
+      assert {:ok, %{rand: :undefined}} = :boids.boid(flock, :a)
     end
   end
 
@@ -111,20 +180,26 @@ defmodule GenBoidTest do
       assert :gen_boid.call(pid, :steps) == 2
     end
 
-    test "runs at each tick of the clock", %{flock: flock} do
-      pid = hawk(flock, boid: %{tick: 5})
+    test "runs at each tick of the clock of the flock" do
+      pid = hawk(timed())
       assert eventually(fn -> :gen_boid.call(pid, :steps) > 3 end)
     end
 
     test "can stop the boid, at a step of boids:step/2 and at a tick", %{flock: flock} do
       manual = hawk(flock, owner: self(), stop_at: 1, boid: %{id: :manual})
+      {:ok, id} = :boids.add(flock, pos: {5, 5}, vel: {1, 0}, rules: [])
       :boids.step(flock, 1)
       assert Process.alive?(manual)
+      # The step continues for the other boids.
       assert :boids.step(flock, 1) == :ok
       assert_receive {:terminated, :normal, :manual, 1}
-      timed = hawk(flock, owner: self(), stop_at: 2, boid: %{id: :timed, tick: 5})
+      assert row(flock, id).pos == {7.0, 5.0}
+      assert eventually(fn -> not Process.alive?(manual) and :boids.count(flock) == 1 end)
+      assert :boids.step(flock, 1) == :ok
+      late = timed()
+      timed = hawk(late, owner: self(), stop_at: 2, boid: %{id: :timed})
       assert_receive {:terminated, :normal, :timed, 2}
-      assert eventually(fn -> not Process.alive?(timed) and :boids.count(flock) == 0 end)
+      assert eventually(fn -> not Process.alive?(timed) and :boids.count(late) == 0 end)
     end
 
     test "a module without it has the rules of its options only", %{flock: flock} do
@@ -178,8 +253,55 @@ defmodule GenBoidTest do
       {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}}, flock: flock)
       assert {:ok, %{id: :mouse}} = :boids.boid(flock, :mouse)
       assert :boids.update(flock, :mouse, %{max_speed: 2}) == :ok
+      assert :boids.update(flock, :mouse, %{max_speed: -2}) == {:error, {:bad_option, {:max_speed, -2}}}
+      assert {:ok, %{max_speed: 2}} = :boids.boid(flock, :mouse)
       assert :boids.remove(flock, :mouse) == :ok
       refute Process.alive?(pid)
+    end
+  end
+
+  describe "add_rule/2, delete_rule/2 and which_rules/1" do
+    test "change the rules of a boid, from its next step", %{flock: flock} do
+      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, max_force: 100, rules: []}, flock: flock)
+      assert :gen_boid.which_rules(pid) == []
+      assert :gen_boid.add_rule(pid, {{:seek, :home}, 1, target: {10, 0}}) == :ok
+      assert :gen_boid.add_rule(pid, {:wander, 0}) == :ok
+      assert :gen_boid.which_rules(pid) == [{:seek, :home}, :wander]
+      :boids.step(flock, 0.1)
+      {x, y} = row(flock, :mouse).pos
+      assert x > 0 and y == 0
+      assert :gen_boid.delete_rule(pid, {:seek, :home}) == :ok
+      assert :gen_boid.delete_rule(pid, :cruise) == :ok
+      assert :gen_boid.which_rules(pid) == [:wander]
+      assert :gen_boid.add_rule(pid, {:seek, 1}) == {:error, {:bad_option, {:rules, {:seek, 1, %{}}}}}
+      assert :gen_boid.which_rules(pid) == [:wander]
+    end
+
+    test "the functions of boids with the id of the boid do the same", %{flock: flock} do
+      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, rules: [avoid: 1]}, flock: flock)
+      assert :boids.add_rule(flock, :mouse, {{:seek, :home}, 1, target: {10, 0}}) == :ok
+      assert :boids.which_rules(flock, :mouse) == {:ok, [:avoid, {:seek, :home}]}
+      assert :boids.delete_rule(flock, :mouse, :avoid) == :ok
+      assert :gen_boid.which_rules(pid) == [{:seek, :home}]
+      assert :boids.add_rule(flock, :mouse, :seek) == {:error, {:bad_option, {:rules, :seek}}}
+    end
+
+    test "a change after the first part of a step removes the step", %{flock: flock} do
+      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}, rules: []}, flock: flock)
+      # The messages of the clock of the flock, and the answers of the boid.
+      part = fn request ->
+        ref = make_ref()
+        send(pid, {:"$boids_clock", self(), ref, request})
+        assert_receive {^ref, ^pid}
+      end
+
+      part.(:commit)
+      assert row(flock, :mouse).pos == {0, 0}
+      part.({:plan, 1})
+      assert row(flock, :mouse).pos == {0, 0}
+      :ok = :boids.update(flock, :mouse, %{pos: {7, 7}})
+      part.(:commit)
+      assert row(flock, :mouse).pos == {7, 7}
     end
   end
 

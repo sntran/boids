@@ -243,9 +243,8 @@ end
 - `handle_step/3` is for a decision: which rules the boid has now. A
   force of your own is a rule (see "A rule of your own").
 - A process costs more than a value: the step of a `gen_boid` takes
-  about two times that of a boid of `boids:add/2`, and its process
-  holds about 5 KB. Use `boids:add/2` for the many boids that only
-  follow their rules.
+  about two times that of a boid of `boids:add/2`. Use `boids:add/2`
+  for the many boids that only follow their rules.
 
 ## The space of a flock
 
@@ -364,7 +363,41 @@ replay the messages of a real flock process as a behavior of
 
 ## The speed
 
-SPEED_SECTION
+These numbers are from a computer with 4 virtual processors (x86_64,
+Erlang/OTP 29 with the JIT). Each boid has the three rules of a flock,
+and sees about 15 neighbors. `examples/speed.exs` measures the same on
+your computer:
+
+```sh
+mix run examples/speed.exs 10000
+```
+
+| Workers | Boid steps in a second | Boids at 20 steps in a second | Boids at 60 steps in a second |
+|---|---|---|---|
+| 1 | 50,000 | 2,500 | 800 |
+| 2 | 87,000 | 4,300 | 1,400 |
+| 4 | 135,000 | 6,700 | 2,200 |
+
+- One step of one boid takes about 20 µs on one processor: the search
+  of the neighbors, the forces, the movement, and the write to the
+  tables. With about 6 neighbors, it takes about 14 µs.
+- With the clock at 50 ms, 4,000 boids make 20.0 steps in a second.
+  With too many boids for the processors, the flock makes fewer steps in
+  a second, and each step is longer (`max_dt` at most): 12,000 boids
+  make 8.8 steps in a second. The node continues to answer:
+  `boids:populate/3` of the 12,000 boids took 85 ms, and
+  `boids:snapshot/1` 13 ms.
+- A flock of 8,000 `gen_boid` makes 78,000 boid steps in a second: a
+  boid that is a process costs about two times a boid that is a value.
+- A boid of `boids:add/2` uses about 1 KB in the tables, and 5 KB to
+  10 KB in its worker. Most of that is the garbage of the last step. A
+  `gen_boid` process holds about 2.5 KB between two steps.
+- Make `cell_size` near the `perception` of the boids. Keep the `data`
+  of a boid small, because each neighbor gets a copy of it.
+- The numbers change with the computer and with the density of the
+  boids. On a computer that other programs use, they change from run to
+  run by about 10 %.
+
 ## A boid that stops
 
 - A boid of `boids:add/2` whose rule has an error goes from the flock,

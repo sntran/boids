@@ -93,25 +93,56 @@ handle_info(tick, State = #{tick := Tick, last := Last, max_dt := MaxDt}) ->
     %% A late tick does not make a long step.
     Stepped = run(State#{last := Now}, min((Now - Last) / 1.0e6, MaxDt)),
     {noreply, wait(Stepped, Tick)};
-handle_info({'DOWN', _Ref, process, Pid, _Reason}, State = #{servers := Servers, subscribers := Subscribers}) ->
-    {noreply, State#{servers := maps:remove(Pid, Servers), subscribers := maps:remove(Pid, Subscribers)}};
+handle_info({'DOWN', _Ref, process, Pid, _Reason}, State) ->
+    {noreply, forget(Pid, State)};
 handle_info(_Message, State) ->
     {noreply, State}.
 
+%% A process that stopped: a gen_boid, or a subscriber.
+forget(Pid, State = #{servers := Servers, subscribers := Subscribers}) ->
+    State#{servers := maps:remove(Pid, Servers), subscribers := maps:remove(Pid, Subscribers)}.
+
 %% One step of the flock, then a message to each subscriber.
-run(State = #{space := #{owner := Flock}, workers := Workers, servers := Servers, subscribers := Subscribers}, Dt) ->
-    Count = maps:get(count, State) + 1,
-    Pids = Workers ++ maps:keys(Servers),
-    request(Pids, {plan, Dt}),
-    request(Pids, commit),
+run(State0 = #{space := #{owner := Flock}}, Dt) ->
+    Count = maps:get(count, State0) + 1,
+    State = #{subscribers := Subscribers} = ask(ask(State0, {plan, Dt}), commit),
     maps:foreach(fun(Pid, _Ref) -> Pid ! {boids, Flock, {step, Count, Dt}} end, Subscribers),
     State#{count := Count}.
 
-%% A gen_boid that stops during the step gives an error, which changes
-%% nothing for the other boids.
-request(Pids, Request) ->
-    Sent = [gen_server:send_request(Pid, Request) || Pid <- Pids],
-    lists:foreach(fun(Id) -> gen_server:receive_response(Id, infinity) end, Sent).
+%% One part of a step: ask each worker and each gen_boid, and wait for
+%% each answer.
+ask(State = #{workers := Workers, servers := Servers}, Request) ->
+    Sent = lists:foldl(
+        fun(Pid, Acc) -> gen_server:send_request(Pid, Request, Pid, Acc) end,
+        gen_server:reqids_new(),
+        Workers
+    ),
+    %% A flock can have thousands of gen_boid: a message to each one,
+    %% with no monitor for each request. The clock has a monitor of each
+    %% gen_boid from its start.
+    Ref = make_ref(),
+    maps:foreach(fun(Pid, _Monitor) -> Pid ! {'$boids_clock', self(), Ref, Request} end, Servers),
+    Waited = wait(Ref, Servers, State),
+    collect(Sent),
+    Waited.
+
+%% A gen_boid that stops during the step answers with its 'DOWN', which
+%% changes nothing for the other boids.
+wait(_Ref, Waiting, State) when map_size(Waiting) =:= 0 ->
+    State;
+wait(Ref, Waiting, State) ->
+    receive
+        {Ref, Pid} ->
+            wait(Ref, maps:remove(Pid, Waiting), State);
+        {'DOWN', _Monitor, process, Pid, _Reason} when is_map_key(Pid, Waiting) ->
+            wait(Ref, maps:remove(Pid, Waiting), forget(Pid, State))
+    end.
+
+collect(Sent) ->
+    case gen_server:receive_response(Sent, infinity, true) of
+        {_Response, _Pid, Rest} -> collect(Rest);
+        no_request -> ok
+    end.
 
 %% The ticks have a constant period. When the steps need more time than
 %% the period, the next tick comes immediately, and the period starts

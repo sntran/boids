@@ -63,7 +63,9 @@ handle_call(commit, _From, State = #{space := Space, boids := Boids, pending := 
         case map_size(Stale) =:= 0 andalso length(Moved) =:= map_size(Boids) of
             %% Each boid of the worker made the step: the usual step.
             true -> maps:from_list(Moved);
-            false -> maps:merge(maps:without([Id || {Id, failed} <- Pending], Boids), maps:from_list(Moved))
+            false ->
+                Failed = [Id || {Id, {failed, _}} <- Pending, not is_map_key(Id, Stale)],
+                maps:merge(maps:without(Failed, Boids), maps:from_list(Moved))
         end,
     {reply, ok, State#{boids := Next, pending := [], stale := #{}}};
 handle_call({add, Boid = #{id := Id, pos := Pos}}, _From, State = #{space := Space, boids := Boids}) ->
@@ -122,7 +124,7 @@ stale(Id, State = #{stale := Stale}) -> State#{stale := Stale#{Id => true}}.
 
 %% The step of each boid, with no write to the space. The boids read
 %% each cell of the grid one time, and the environment one time. The
-%% result is a list of {Id, Boid}, or {Id, failed}.
+%% result is a list of {Id, Boid}, or {Id, {failed, Error}}.
 plan(Space, Boids, Dt0) ->
     Env0 = #{time_scale := Scale} = boids_space:env(Space),
     case Dt0 * Scale of
@@ -132,25 +134,29 @@ plan(Space, Boids, Dt0) ->
             %% the other read the same cells: the processor has them in
             %% its cache.
             Sorted = lists:sort([{boids_space:cell(Space, Pos), Id, Boid} || Id := Boid = #{pos := Pos} <- Boids]),
-            plan(Sorted, Space, Env, Dt, #{}, []);
+            plan(Sorted, Space, Env, Dt, none, {#{}, #{}}, []);
         _ ->
             []
     end.
 
-plan([{_Cell, Id, Boid = #{pos := Pos, perception := Perception}} | Rest], Space, Env, Dt, Cache0, Acc) ->
-    {Near, Cache} = boids_space:near(Space, Pos, Perception, Cache0),
+plan([{Cell, Id, Boid = #{pos := Pos, perception := Perception}} | Rest], Space, Env, Dt, Line0, Cache0, Acc) ->
+    %% The worker keeps the cells that it read for the boids of this
+    %% line of cells and of the line before. The cells of the lines
+    %% before those are garbage: a worker that keeps all the cells
+    %% uses a third of its time for the collection of the garbage.
+    {Line, Cache1} =
+        case {element(1, Cell), Cache0} of
+            {Line0, _} -> {Line0, Cache0};
+            {Other, {New, _Old}} -> {Other, {#{}, New}}
+        end,
+    {Near, Cache} = boids_space:near(Space, Pos, Perception, Cache1),
     try boids_boid:step(Boid, boids_boid:perceive(Boid, Near), Env, Dt) of
-        Next -> plan(Rest, Space, Env, Dt, Cache, [{Id, Next} | Acc])
+        Next -> plan(Rest, Space, Env, Dt, Line, Cache, [{Id, Next} | Acc])
     catch
         Class:Reason:Stack ->
-            logger:error(
-                "The boid ~0tp stops, because a rule of the boid had an error: ~0tp",
-                [Id, {Class, Reason, Stack}],
-                #{domain => [boids]}
-            ),
-            plan(Rest, Space, Env, Dt, Cache, [{Id, failed} | Acc])
+            plan(Rest, Space, Env, Dt, Line, Cache, [{Id, {failed, {Class, Reason, Stack}}} | Acc])
     end;
-plan([], _Space, _Env, _Dt, _Cache, Acc) ->
+plan([], _Space, _Env, _Dt, _Line, _Cache, Acc) ->
     Acc.
 
 %% Write the boids of a step to the space. The result has the boids
@@ -158,7 +164,12 @@ plan([], _Space, _Env, _Dt, _Cache, Acc) ->
 commit(Space, [{Id, Boid} | Rest], Stale, Acc) when is_map_key(Id, Stale) ->
     _ = Boid,
     commit(Space, Rest, Stale, Acc);
-commit(Space, [{Id, failed} | Rest], Stale, Acc) ->
+commit(Space, [{Id, {failed, Error}} | Rest], Stale, Acc) ->
+    logger:error(
+        "The boid ~0tp stops, because a rule of the boid had an error: ~0tp",
+        [Id, Error],
+        #{domain => [boids]}
+    ),
     boids_space:remove(Space, Id),
     commit(Space, Rest, Stale, Acc);
 commit(Space, [Moved = {_Id, Boid} | Rest], Stale, Acc) ->

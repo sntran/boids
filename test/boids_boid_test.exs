@@ -255,7 +255,11 @@ defmodule BoidsBoidTest do
       assert %{:wander => point, {:wander, :slow} => slow} = moved.memory
       # A change of the weight or of the options keeps the memory.
       assert :boids_boid.update(moved, %{rules: [wander: 3]}).memory == %{wander: point}
-      assert :boids_boid.update(moved, %{rules: [{{:wander, :slow}, 1}]}).memory == %{{:wander, :slow} => slow}
+
+      assert :boids_boid.update(moved, %{rules: [{{:wander, :slow}, 1}]}).memory == %{
+               {:wander, :slow} => slow
+             }
+
       assert :boids_boid.update(moved, %{rules: [cruise: 1]}).memory == %{}
     end
 
@@ -400,6 +404,15 @@ defmodule BoidsBoidTest do
         force({:separation, 1, radius: 9, groups: :same}, %{}, ns),
         :boids_steer.separation(body, same)
       )
+    end
+
+    test "separation from a neighbor at the position of the boid has a random direction" do
+      for pos <- [{0, 0}, {0, 0, 0}] do
+        :rand.seed(:exsss, 4)
+        away = :boids_vec.scale(:boids_vec.random_unit(tuple_size(pos)), 10.0)
+        :rand.seed(:exsss, 4)
+        assert_vec(force({:separation, 1}, %{pos: pos}, [neighbor(pos, pos)]), away)
+      end
     end
 
     test "alignment and cohesion use the group of the boid", %{neighbors: ns, body: body} do
@@ -814,7 +827,7 @@ defmodule BoidsBoidTest do
 
     test "a boid with a seed uses its own random numbers" do
       run = fn seed ->
-        boid = boid(seed: seed, rules: [wander: 1], vel: {1, 0})
+        boid = boid(id: :a, seed: seed, rules: [wander: 1], vel: {1, 0})
         Enum.reduce(1..5, boid, fn _, b -> :boids_boid.step(b, [], %{}, 0.1) end)
       end
 
@@ -824,6 +837,7 @@ defmodule BoidsBoidTest do
       assert run.(1) == first
       assert run.(2).pos != first.pos
       assert first.rand != boid(seed: 1).rand
+      assert first.rand != run.(2).rand
       assert {:exsss, _} = first.rand
     end
 

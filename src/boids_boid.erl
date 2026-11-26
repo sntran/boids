@@ -145,6 +145,8 @@ vector of a rule has the size of the position.
 -spec new(map() | [{atom(), term()}]) -> boid().
 new(Opts0) ->
     Opts = to_map(Opts0),
+    %% The random numbers of a boid come from the option seed.
+    is_map_key(rand, Opts) andalso error({bad_option, {rand, maps:get(rand, Opts)}}),
     Pos = check(pos, maps:get(pos, Opts, undefined)),
     Base = #{
         id => make_ref(),
@@ -373,8 +375,9 @@ force(Boid = #{rules := Rules, memory := Memory0, combine := Combine, max_force 
         lists:mapfoldl(
             fun({Name, Weight, Opts}, Memory1) ->
                 case apply_rule(base(Name), Opts, Boid, Neighbors, Env, Memory1, Name) of
-                    %% A force is a tuple of numbers.
-                    {Force, Kept} when is_tuple(Force) ->
+                    %% A force is a tuple of numbers. Only a rule of the
+                    %% library keeps a memory.
+                    {Force, Kept} when is_tuple(Force), not is_function(Name) ->
                         {boids_vec:scale(Force, Weight), Memory1#{Name => Kept}};
                     Force ->
                         {boids_vec:scale(Force, Weight), Memory1}
@@ -523,15 +526,10 @@ select(Ns, #{group := Own}, Opts, Radius0, Groups0) ->
     case {maps:get(radius, Opts, Radius0), maps:get(groups, Opts, Groups0)} of
         {infinity, all} -> Ns;
         {infinity, same} -> [N || N = #{group := Group} <- Ns, Group =:= Own];
-        {Radius, all} -> near(Ns, Radius);
+        {Radius, all} -> [N || N = #{dist := Dist} <- Ns, Dist =< Radius];
         {Radius, Groups} -> [N || N = #{dist := Dist, group := Group} <- Ns, Dist =< Radius, in_groups(Group, Groups, Own)]
     end.
 
-%% The neighbors are in the order of their distance.
-near([N = #{dist := Dist} | Rest], Radius) when Dist =< Radius -> [N | near(Rest, Radius)];
-near(_Ns, _Radius) -> [].
-
-in_groups(_Group, all, _Own) -> true;
 in_groups(Group, same, Own) -> Group =:= Own;
 in_groups(Group, Groups, _Own) -> lists:member(Group, Groups).
 

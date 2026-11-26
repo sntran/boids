@@ -86,8 +86,8 @@ two kinds are neighbors in the same flock.
 
 A step makes garbage: the copies of the rows of the neighbors. The
 process hibernates after each step: it drops its heap, and it holds
-about 4 KB. With `hibernate => false` in the options of the start, the
-process holds about 80 KB, and a step is about 10 % faster.
+about 2.5 KB. With `hibernate => false` in the options of the start, the
+process holds about 75 KB, and a step is about 10 % faster.
 """.
 -behavior(gen_server).
 
@@ -300,16 +300,6 @@ handle_call({change, Function, Arg}, _From, State = #{space := Space, boid := Bo
     catch
         error:{bad_option, _} = Reason -> {reply, {error, Reason}, State}
     end;
-handle_call({plan, Dt}, _From, State0) ->
-    case plan(State0, Dt) of
-        {ok, Boid, State} -> {reply, ok, State#{pending := Boid}};
-        {stop, Reason, State} -> {stop, Reason, ok, State}
-    end;
-handle_call(commit, _From, State = #{pending := undefined}) ->
-    {reply, ok, State};
-handle_call(commit, _From, State = #{space := Space, pending := Boid}) ->
-    boids:commit(Space, Boid),
-    rest({reply, ok, State#{boid := Boid, pending := undefined}});
 handle_call({'$gen_boid', Request}, From, State = #{mod := Module, boid := Boid, state := User}) ->
     case erlang:function_exported(Module, handle_call, 4) of
         true -> result(Module:handle_call(Request, From, Boid, User), State);
@@ -326,6 +316,23 @@ handle_cast(_Message, State) ->
     {noreply, State}.
 
 -doc false.
+handle_info({'$boids_clock', Clock, Ref, {plan, Dt}}, State0) ->
+    %% The first part of a step of the clock of the flock.
+    case plan(State0, Dt) of
+        {ok, Boid, State} ->
+            Clock ! {Ref, self()},
+            {noreply, State#{pending := Boid}};
+        {stop, Reason, State} ->
+            {stop, Reason, State}
+    end;
+handle_info({'$boids_clock', Clock, Ref, commit}, State = #{pending := undefined}) ->
+    Clock ! {Ref, self()},
+    {noreply, State};
+handle_info({'$boids_clock', Clock, Ref, commit}, State = #{space := Space, pending := Boid}) ->
+    %% The second part: the boid moves.
+    boids:commit(Space, Boid),
+    Clock ! {Ref, self()},
+    rest({noreply, State#{boid := Boid, pending := undefined}});
 handle_info(Info, State = #{mod := Module, boid := Boid, state := User}) ->
     case erlang:function_exported(Module, handle_info, 3) of
         true -> result(Module:handle_info(Info, Boid, User), State);

@@ -24,9 +24,9 @@ defmodule Boids.MixProject do
       deps: deps(),
       test_coverage: [
         summary: [threshold: 100],
-        ignore_modules: [Boids.FlockSpec, ~r/TestRules/, ~r/TestBoids/]
+        ignore_modules: [Boids.FlockSpec, ~r/TestBoids/]
       ],
-      description: "Boids: flocks of Erlang processes with steering rules",
+      description: "Boids: fast flocks with steering rules, for Erlang and Elixir",
       package: package(),
       docs: [
         main: "readme",

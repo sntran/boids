@@ -312,6 +312,7 @@ defmodule BoidsSpaceTest do
       space = :boids_space.new(%{bounds: {{0, 0}, {100, 100}}, wrap: true})
       :boids_space.insert_new(space, entry(:a, {99, 50}))
       :boids_space.insert_new(space, entry(:b, {50, 2}))
+
       assert [%{id: :a, pos: {-1.0, 50.0}, offset: {-2.0, +0.0}, dist: 2.0}] =
                :boids_space.near(space, {1, 50}, 5)
 
