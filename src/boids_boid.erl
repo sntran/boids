@@ -49,6 +49,10 @@ is the three rules of a flock:
 | `avoid` | `lookahead` (`1.0` second), `clearance` (a tenth of `perception`) | Move around the obstacles of the flock. |
 | `contain` | `margin` (`perception`), `bounds` (those of the flock) | Stay in the box. |
 | `follow` | `path`, `ahead` (`perception`), `predict` (`0.5` second), `loop` (`false`) | Move along a list of points. |
+| `cruise` | `speed` (`max_speed`) | Keep a speed in the direction of the movement. |
+| `leader` | `target`, `distance` (half of `perception`), `slow_radius` (`perception`) | Stay behind a leader, and move out of its way. |
+| `dodge` | `radius` (a quarter of `perception`), `horizon` (`2.0` seconds), `groups` (`all`) | Move away from a neighbor that comes too near in the time of the horizon. |
+| `flow` | `field`, `predict` (`0.5` second) | Move in the direction of a field: a vector, or a function of a position. |
 
 `groups` is `all`, `same` (the group of the boid) or a list of groups.
 
@@ -56,10 +60,17 @@ is the three rules of a flock:
 Group}` (the nearest neighbor of that group). A target that does not
 exist gives no force.
 
-A rule of your own is `{Fun, Weight}` or `{{Module, Function, Args},
-Weight}`. `Fun(Boid, Neighbors, Env)` gives a force, and so does
-`Module:Function(Boid, Neighbors, Env, Args...)`. `Env` has `dt` (the
-seconds of the step), `obstacles`, `bounds` and `wrap`.
+A rule of your own is a module or a function:
+
+- `{Module, Weight}` or `{Module, Weight, Options}`, where `Module` has
+  the behavior `boids_rule`. The module checks its options, and
+  `Module:force(Boid, Neighbors, Env, Options)` gives the force.
+- `{Fun, Weight}`, where `Fun(Boid, Neighbors, Env)` gives the force.
+
+`Env` has `dt` (the seconds of the step), `obstacles`, `bounds`, `wrap`
+and `memory`. A rule that gives `{Force, Memory}` gets that memory in
+`Env` at the next step of the boid: `wander` keeps its point there. A
+change of the rules of a boid removes the memory of its rules.
 
 With `combine => sum`, the force is the sum of the forces, each
 multiplied by its weight, with the length `max_force` at most. With
@@ -102,8 +113,12 @@ multiplied by its weight, with the length `max_force` at most. With
     | wander
     | avoid
     | contain
-    | follow.
--type custom() :: fun((boid(), [boids_space:neighbor()], env()) -> vec()) | {module(), atom(), [term()]}.
+    | follow
+    | cruise
+    | leader
+    | dodge
+    | flow.
+-type custom() :: module() | fun((boid(), [boids_space:neighbor()], env()) -> vec() | {vec(), term()}).
 -type rule() ::
     {rule_name() | custom(), number()} | {rule_name() | custom(), number(), map() | [{atom(), term()}]}.
 -type target() :: vec() | {boid, term()} | {group, term()}.
@@ -113,6 +128,7 @@ multiplied by its weight, with the length `max_force` at most. With
     wrap => boolean(),
     obstacles => [boids_steer:obstacle()],
     lookup => fun((term()) -> {ok, #{pos := vec(), vel := vec(), _ => _}} | error),
+    memory => term(),
     _ => _
 }.
 
@@ -155,6 +171,8 @@ update(Boid = #{pos := Old}, Changes0) ->
     [error({bad_option, {Key, maps:get(Key, Changes)}}) || Key <- [id, memory], is_map_key(Key, Changes)],
     case validate(maps:merge(Boid, Changes)) of
         #{pos := New} when tuple_size(New) =/= tuple_size(Old) -> error({bad_option, {pos, New}});
+        %% The memory of a rule is at the position of the rule in the list.
+        Changed when is_map_key(rules, Changes) -> Changed#{memory := #{}};
         Changed -> Changed
     end.
 
@@ -185,7 +203,7 @@ validate(Boid) ->
     Checked = #{pos := Pos, vel := Vel, rules := Rules} = maps:map(fun check/2, Boid),
     Dim = tuple_size(Pos),
     %% The vectors of a rule have the size of the position.
-    [error({bad_option, {rules, Rule}}) || Rule = {_, _, Opts} <- Rules, not sized(Opts, Dim)],
+    [error({bad_option, {rules, Rule}}) || Rule = {Name, _, Opts} <- Rules, is_builtin(Name), not sized(Opts, Dim)],
     case {Dim =:= tuple_size(Vel), Checked} of
         {false, _} -> error({bad_option, {vel, Vel}});
         {true, #{min_speed := Min, max_speed := Max}} when Min > Max -> error({bad_option, {min_speed, Min}});
@@ -195,6 +213,7 @@ validate(Boid) ->
 sized(Opts, Dim) ->
     Vectors =
         [Point || #{target := Point} <- [Opts], is_tuple(Point), not is_atom(element(1, Point))] ++
+            [Vector || #{field := Vector} <- [Opts], is_tuple(Vector)] ++
             [Corner || #{bounds := {Min, Max}} <- [Opts], Corner <- [Min, Max]] ++
             maps:get(path, Opts, []),
     lists:all(fun(Vector) -> tuple_size(Vector) =:= Dim end, Vectors).
@@ -234,33 +253,63 @@ rule({Name, Weight, Opts}) when is_list(Opts) ->
         error:badarg -> error({bad_option, {rules, {Name, Weight, Opts}}})
     end;
 rule(Rule = {Name, Weight, Opts}) when is_number(Weight), is_map(Opts) ->
-    {Necessary, Optional} = keys(Rule),
-    Good =
-        Necessary -- maps:keys(Opts) =:= [] andalso
-            maps:keys(Opts) -- (Necessary ++ Optional) =:= [] andalso
-            lists:all(fun({Key, Value}) -> opt(Name, Key, Value) end, maps:to_list(Opts)),
-    Good orelse error({bad_option, {rules, Rule}}),
-    Rule;
+    case keys(Name) of
+        {Necessary, Optional} ->
+            Good =
+                Necessary -- maps:keys(Opts) =:= [] andalso
+                    maps:keys(Opts) -- (Necessary ++ Optional) =:= [] andalso
+                    lists:all(fun({Key, Value}) -> opt(Name, Key, Value) end, maps:to_list(Opts)),
+            Good orelse error({bad_option, {rules, Rule}}),
+            Rule;
+        custom when is_function(Name, 3), Opts =:= #{} ->
+            Rule;
+        custom when is_atom(Name) ->
+            {Name, Weight, module_options(Name, Opts, Rule)};
+        custom ->
+            error({bad_option, {rules, Rule}})
+    end;
 rule(Rule) ->
     error({bad_option, {rules, Rule}}).
 
-keys({separation, _, _}) -> {[], [radius, groups]};
-keys({alignment, _, _}) -> {[], [radius, groups]};
-keys({cohesion, _, _}) -> {[], [radius, groups]};
-keys({seek, _, _}) -> {[target], []};
-keys({flee, _, _}) -> {[target], [radius]};
-keys({arrive, _, _}) -> {[target], [slow_radius]};
-keys({pursue, _, _}) -> {[target], [max_time]};
-keys({evade, _, _}) -> {[target], [radius, max_time]};
-keys({wander, _, _}) -> {[], [distance, radius, jitter]};
-keys({avoid, _, _}) -> {[], [lookahead, clearance]};
-keys({contain, _, _}) -> {[], [bounds, margin]};
-keys({follow, _, _}) -> {[path], [ahead, predict, loop]};
-keys({Fun, _, _}) when is_function(Fun, 3) -> {[], []};
-keys({{Module, Function, Args}, _, _}) when is_atom(Module), is_atom(Function), is_list(Args) -> {[], []};
-keys(Rule) -> error({bad_option, {rules, Rule}}).
+%% The options of a rule that is a module with the behavior boids_rule.
+%% The module checks them, when it has options/1.
+module_options(Module, Opts, Rule) ->
+    _ = code:ensure_loaded(Module),
+    erlang:function_exported(Module, force, 4) orelse error({bad_option, {rules, Rule}}),
+    case erlang:function_exported(Module, options, 1) of
+        true ->
+            try Module:options(Opts) of
+                Checked when is_map(Checked) -> Checked;
+                _ -> error({bad_option, {rules, Rule}})
+            catch
+                error:_ -> error({bad_option, {rules, Rule}})
+            end;
+        false ->
+            Opts
+    end.
 
-opt(wander, radius, N) -> boids_vec:is_size(N);
+is_builtin(Name) -> keys(Name) =/= custom.
+
+%% The necessary options and the other options of each rule of the library.
+keys(separation) -> {[], [radius, groups]};
+keys(alignment) -> {[], [radius, groups]};
+keys(cohesion) -> {[], [radius, groups]};
+keys(seek) -> {[target], []};
+keys(flee) -> {[target], [radius]};
+keys(arrive) -> {[target], [slow_radius]};
+keys(pursue) -> {[target], [max_time]};
+keys(evade) -> {[target], [radius, max_time]};
+keys(wander) -> {[], [distance, radius, jitter]};
+keys(avoid) -> {[], [lookahead, clearance]};
+keys(contain) -> {[], [bounds, margin]};
+keys(follow) -> {[path], [ahead, predict, loop]};
+keys(cruise) -> {[], [speed]};
+keys(leader) -> {[target], [distance, slow_radius]};
+keys(dodge) -> {[], [radius, horizon, groups]};
+keys(flow) -> {[field], [predict]};
+keys(_) -> custom.
+
+opt(Name, radius, N) when Name =:= wander; Name =:= dodge -> boids_vec:is_size(N);
 opt(_, radius, N) -> is_distance(N);
 opt(_, max_time, N) -> is_distance(N);
 opt(_, groups, Groups) -> Groups =:= all orelse Groups =:= same orelse is_list(Groups);
@@ -270,6 +319,7 @@ opt(_, target, Point) -> boids_vec:is_vec(Point);
 opt(_, bounds, {Min, Max}) -> boids_vec:is_box(Min, Max);
 opt(_, path, Path) -> is_list(Path) andalso Path =/= [] andalso lists:all(fun boids_vec:is_vec/1, Path);
 opt(_, loop, Loop) -> is_boolean(Loop);
+opt(_, field, Field) -> is_function(Field, 1) orelse boids_vec:is_vec(Field);
 opt(_, Key, N) when Key =/= bounds -> boids_vec:is_size(N);
 opt(_, _, _) -> false.
 
@@ -302,18 +352,23 @@ The force of all the rules of a boid, and the boid with the memory of
 its rules. See the module for `Env`.
 """.
 -spec force(boid(), [boids_space:neighbor()], env()) -> {vec(), boid()}.
-force(Boid = #{rules := Rules, combine := Combine, max_force := MaxForce, pos := Pos}, Neighbors, Env) ->
-    {Forces, Boid1} =
+force(Boid = #{rules := Rules, memory := Memory0, combine := Combine, max_force := MaxForce, pos := Pos}, Neighbors, Env) ->
+    {Forces, {_, Memory}} =
         lists:mapfoldl(
-            fun({Name, Weight, Opts}, B0) ->
-                {Force, B1} = apply_rule(Name, Opts, B0, Neighbors, Env),
-                {boids_vec:scale(Force, Weight), B1}
+            fun({Name, Weight, Opts}, {N, Memory1}) ->
+                case apply_rule(Name, Opts, Boid, Neighbors, Env, maps:get(N, Memory1, undefined)) of
+                    %% A force is a tuple of numbers.
+                    {Force, Kept} when is_tuple(Force) ->
+                        {boids_vec:scale(Force, Weight), {N + 1, Memory1#{N => Kept}}};
+                    Force ->
+                        {boids_vec:scale(Force, Weight), {N + 1, Memory1}}
+                end
             end,
-            Boid,
+            {1, Memory0},
             Rules
         ),
     Zero = boids_vec:zero(boids_vec:dim(Pos)),
-    {combine(Combine, Forces, MaxForce, Zero), Boid1}.
+    {combine(Combine, Forces, MaxForce, Zero), Boid#{memory := Memory}}.
 
 combine(sum, Forces, MaxForce, Zero) ->
     boids_vec:limit(lists:foldl(fun boids_vec:add/2, Zero, Forces), MaxForce);
@@ -358,59 +413,76 @@ step(Boid, Neighbors, Env, Dt) ->
 
 %% --- The rules: the forces --------------------------------------------
 
-apply_rule(separation, Opts, B = #{perception := Perception}, Ns, _Env) ->
-    {boids_steer:separation(B, select(Ns, B, Opts, Perception / 2, all)), B};
-apply_rule(alignment, Opts, B, Ns, _Env) ->
-    {boids_steer:alignment(B, select(Ns, B, Opts, infinity, same)), B};
-apply_rule(cohesion, Opts, B, Ns, _Env) ->
-    {boids_steer:cohesion(B, select(Ns, B, Opts, infinity, same)), B};
-apply_rule(seek, Opts, B, Ns, Env) ->
+%% The force of one rule, or {Force, Memory} for a rule that keeps a
+%% memory. Memory is the memory that the rule gave at the last step.
+apply_rule(separation, Opts, B = #{perception := Perception}, Ns, _Env, _Memory) ->
+    boids_steer:separation(B, select(Ns, B, Opts, Perception / 2, all));
+apply_rule(alignment, Opts, B, Ns, _Env, _Memory) ->
+    boids_steer:alignment(B, select(Ns, B, Opts, infinity, same));
+apply_rule(cohesion, Opts, B, Ns, _Env, _Memory) ->
+    boids_steer:cohesion(B, select(Ns, B, Opts, infinity, same));
+apply_rule(seek, Opts, B, Ns, Env, _Memory) ->
     to_target(Opts, B, Ns, Env, fun(Pos, _Vel) -> boids_steer:seek(B, Pos) end);
-apply_rule(flee, Opts, B, Ns, Env) ->
+apply_rule(flee, Opts, B, Ns, Env, _Memory) ->
     to_target(Opts, B, Ns, Env, fun(Pos, _Vel) -> boids_steer:flee(B, Pos) end);
-apply_rule(arrive, Opts, B = #{perception := Perception}, Ns, Env) ->
+apply_rule(arrive, Opts, B = #{perception := Perception}, Ns, Env, _Memory) ->
     Slow = maps:get(slow_radius, Opts, Perception),
     to_target(Opts, B, Ns, Env, fun(Pos, _Vel) -> boids_steer:arrive(B, Pos, Slow) end);
-apply_rule(pursue, Opts, B, Ns, Env) ->
+apply_rule(pursue, Opts, B, Ns, Env, _Memory) ->
     Time = maps:get(max_time, Opts, infinity),
     to_target(Opts, B, Ns, Env, fun(Pos, Vel) -> boids_steer:pursue(B, Pos, Vel, Time) end);
-apply_rule(evade, Opts, B, Ns, Env) ->
+apply_rule(evade, Opts, B, Ns, Env, _Memory) ->
     Time = maps:get(max_time, Opts, infinity),
     to_target(Opts, B, Ns, Env, fun(Pos, Vel) -> boids_steer:evade(B, Pos, Vel, Time) end);
-apply_rule(wander, Opts, B = #{pos := Pos, memory := Memory}, _Ns, Env) ->
+apply_rule(wander, Opts, B = #{pos := Pos}, _Ns, Env, Memory) ->
     Dim = boids_vec:dim(Pos),
     Point0 =
         case Memory of
-            #{wander := Known} -> Known;
-            _ -> boids_vec:random_unit(Dim)
+            undefined -> boids_vec:random_unit(Dim);
+            Known -> Known
         end,
     %% The square root makes the change in a second the same for each
     %% length of step.
     Step = maps:get(jitter, Opts, 2.0) * math:sqrt(maps:get(dt, Env, 0.0)),
     Point = wander_point(Point0, boids_vec:scale(boids_vec:random_unit(Dim), Step)),
-    Force = boids_steer:wander(B, Point, maps:get(distance, Opts, 2.0), maps:get(radius, Opts, 1.0)),
-    {Force, B#{memory := Memory#{wander => Point}}};
-apply_rule(avoid, Opts, B = #{pos := Pos, vel := Vel, perception := Perception}, _Ns, Env) ->
+    {boids_steer:wander(B, Point, maps:get(distance, Opts, 2.0), maps:get(radius, Opts, 1.0)), Point};
+apply_rule(avoid, Opts, B = #{pos := Pos, vel := Vel, perception := Perception}, _Ns, Env, _Memory) ->
     %% A boid does not see an obstacle with a center of another size.
     Obstacles = [
         O#{pos := seen_at(Env, Pos, At)}
      || O = #{pos := At} <- maps:get(obstacles, Env, []), tuple_size(At) =:= tuple_size(Pos)
     ],
     Ahead = boids_vec:norm(Vel) * maps:get(lookahead, Opts, 1.0),
-    {boids_steer:avoid(B, Obstacles, Ahead, maps:get(clearance, Opts, Perception / 10)), B};
-apply_rule(contain, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Env) ->
+    boids_steer:avoid(B, Obstacles, Ahead, maps:get(clearance, Opts, Perception / 10));
+apply_rule(contain, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Env, _Memory) ->
     case maps:get(bounds, Opts, maps:get(bounds, Env, undefined)) of
-        undefined -> {boids_vec:zero(boids_vec:dim(Pos)), B};
-        Bounds -> {boids_steer:contain(B, Bounds, maps:get(margin, Opts, Perception)), B}
+        undefined -> boids_vec:zero(boids_vec:dim(Pos));
+        Bounds -> boids_steer:contain(B, Bounds, maps:get(margin, Opts, Perception))
     end;
-apply_rule(follow, Opts = #{path := Path}, B = #{perception := Perception}, _Ns, _Env) ->
+apply_rule(follow, Opts = #{path := Path}, B = #{perception := Perception}, _Ns, _Env, _Memory) ->
     Ahead = maps:get(ahead, Opts, Perception),
     Predict = maps:get(predict, Opts, 0.5),
-    {boids_steer:follow(B, Path, Ahead, Predict, maps:get(loop, Opts, false)), B};
-apply_rule(Fun, _Opts, B, Ns, Env) when is_function(Fun, 3) ->
-    {Fun(B, Ns, Env), B};
-apply_rule({Module, Function, Args}, _Opts, B, Ns, Env) ->
-    {apply(Module, Function, [B, Ns, Env | Args]), B}.
+    boids_steer:follow(B, Path, Ahead, Predict, maps:get(loop, Opts, false));
+apply_rule(cruise, Opts, B = #{max_speed := Max}, _Ns, _Env, _Memory) ->
+    boids_steer:cruise(B, maps:get(speed, Opts, Max));
+apply_rule(leader, Opts, B = #{perception := Perception}, Ns, Env, _Memory) ->
+    Distance = maps:get(distance, Opts, Perception / 2),
+    Slow = maps:get(slow_radius, Opts, Perception),
+    to_target(Opts, B, Ns, Env, fun(Pos, Vel) -> boids_steer:leader(B, Pos, Vel, Distance, Slow) end);
+apply_rule(dodge, Opts, B = #{perception := Perception}, Ns, _Env, _Memory) ->
+    Near = select(Ns, B, maps:remove(radius, Opts), infinity, all),
+    boids_steer:dodge(B, Near, maps:get(radius, Opts, Perception / 4), maps:get(horizon, Opts, 2.0));
+apply_rule(flow, Opts = #{field := Field}, B = #{pos := Pos, vel := Vel}, _Ns, _Env, _Memory) ->
+    Direction =
+        case is_function(Field) of
+            true -> Field(boids_vec:add(Pos, boids_vec:scale(Vel, maps:get(predict, Opts, 0.5))));
+            false -> Field
+        end,
+    boids_steer:flow(B, Direction);
+apply_rule(Fun, _Opts, B, Ns, Env, Memory) when is_function(Fun) ->
+    Fun(B, Ns, Env#{memory => Memory});
+apply_rule(Module, Opts, B, Ns, Env, Memory) ->
+    Module:force(B, Ns, Env#{memory => Memory}, Opts).
 
 %% Move the point of wander a step on its circle. A step that moves the
 %% point to the center changes nothing.
@@ -438,11 +510,11 @@ to_target(Opts = #{target := Target}, B = #{pos := Pos}, Ns, Env, Force) ->
     case target(Target, B, Ns, Env) of
         {At, Vel} ->
             case boids_vec:dist(Pos, At) =< Radius of
-                true -> {Force(At, Vel), B};
-                false -> {boids_vec:zero(boids_vec:dim(Pos)), B}
+                true -> Force(At, Vel);
+                false -> boids_vec:zero(boids_vec:dim(Pos))
             end;
         none ->
-            {boids_vec:zero(boids_vec:dim(Pos)), B}
+            boids_vec:zero(boids_vec:dim(Pos))
     end.
 
 target({boid, Id}, #{id := Id}, _Ns, _Env) ->

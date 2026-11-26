@@ -652,8 +652,8 @@ defmodule BoidsTest do
       {:ok, [a, b]} = :boids.populate(flock, 2, id: :same, tick: :manual, seed: 5, rules: [wander: 1])
       assert a != b
       :boids.step(flock, 0.1)
-      {:ok, %{memory: %{wander: first}}} = :boids.boid(flock, a)
-      {:ok, %{memory: %{wander: second}}} = :boids.boid(flock, b)
+      {:ok, %{memory: %{1 => first}}} = :boids.boid(flock, a)
+      {:ok, %{memory: %{1 => second}}} = :boids.boid(flock, b)
       assert first != second
     end
 
@@ -663,7 +663,7 @@ defmodule BoidsTest do
       {:ok, one} = :boids.add(flock, pos: {1, 1}, seed: 101)
       {:ok, two} = :boids.add(flock, pos: {1, 1}, seed: 102)
       :boids.step(flock, 0.1)
-      point = fn id -> elem(:boids.boid(flock, id), 1).memory.wander end
+      point = fn id -> elem(:boids.boid(flock, id), 1).memory[1] end
       assert point.(first) == point.(one)
       assert point.(second) == point.(two)
       assert point.(first) != point.(second)

@@ -12,7 +12,8 @@ The first version.
   (`wrap`), obstacles, and a scale of the time.
 - The rules of a boid: `separation`, `alignment`, `cohesion`, `seek`,
   `flee`, `arrive`, `pursue`, `evade`, `wander`, `avoid`, `contain`,
-  `follow`, and a function of yours (`boids_boid`, `boids_steer`).
+  `follow`, `cruise`, `leader`, `dodge`, `flow`, and a module or a
+  function of yours (`boids_boid`, `boids_steer`, `boids_rule`).
 - Boids in two or three dimensions, with groups, an angle that a boid
   sees, and a maximum number of neighbors.
 - A process of yours as a boid (`boids:join/2`, `boids:advance/3`).

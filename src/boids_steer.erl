@@ -17,6 +17,7 @@ gives it.
 -export([seek/2, flee/2, arrive/3, pursue/4, evade/4, wander/4]).
 -export([separation/2, alignment/2, cohesion/2]).
 -export([avoid/4, contain/3, follow/5]).
+-export([cruise/2, leader/5, dodge/4, flow/2]).
 
 -export_type([body/0, neighbor/0, obstacle/0]).
 
@@ -273,3 +274,72 @@ point_at([{A, B, Length} | Rest], Along) ->
         true -> A;
         false -> point_at(Rest, Along - Length)
     end.
+
+-doc """
+Keep the speed `Speed` in the direction of the movement. A boid that
+does not move gets no force.
+""".
+-spec cruise(body(), number()) -> vec().
+cruise(Boid = #{vel := Vel}, Speed) ->
+    boids_vec:scale(heading(Boid), Speed - boids_vec:norm(Vel)).
+
+-doc """
+Follow a leader at `Pos` with the velocity `Vel`: go to the point at the
+distance `Distance` behind it, and stop there (see `arrive/3`). A boid
+ahead of the leader, in its way, also moves away from where the leader
+will be.
+""".
+-spec leader(body(), vec(), vec(), number(), number()) -> vec().
+leader(Boid = #{pos := Own}, Pos, Vel, Distance, SlowRadius) ->
+    Direction = boids_vec:normalize(Vel),
+    Behind = boids_vec:sub(Pos, boids_vec:scale(Direction, Distance)),
+    Ahead = boids_vec:add(Pos, boids_vec:scale(Direction, Distance)),
+    Arrive = arrive(Boid, Behind, SlowRadius),
+    case boids_vec:norm2(Direction) > 0 andalso boids_vec:dist(Own, Ahead) =< Distance of
+        true -> boids_vec:add(Arrive, evade(Boid, Pos, Vel, infinity));
+        false -> Arrive
+    end.
+
+-doc """
+Move away from the neighbor that comes too near first. For each
+neighbor, the boid calculates the moment when the two are the nearest,
+if the two keep their velocities. A neighbor counts when that moment is
+in the next `Horizon` seconds, and the distance is then less than
+`Radius`. The force is away from where that neighbor will be, and it
+increases when the moment comes near.
+""".
+-spec dodge(body(), [neighbor()], number(), number()) -> vec().
+dodge(#{vel := Vel, max_speed := Max}, Neighbors, Radius, Horizon) ->
+    case lists:sort([Threat || N <- Neighbors, Threat <- approach(Vel, N, Radius, Horizon)]) of
+        [] -> boids_vec:zero(boids_vec:dim(Vel));
+        [{Time, Away} | _] -> boids_vec:scale(Away, Max * (1 - Time / Horizon))
+    end.
+
+%% The moment when a neighbor is the nearest, and the direction away
+%% from it then: {Time, Away}.
+approach(Vel, #{offset := Offset, vel := Other}, Radius, Horizon) ->
+    Relative = boids_vec:sub(Other, Vel),
+    case boids_vec:norm2(Relative) of
+        Speed2 when Speed2 > 0 ->
+            Time = -boids_vec:dot(Offset, Relative) / Speed2,
+            Gap = boids_vec:add(Offset, boids_vec:scale(Relative, Time)),
+            case boids_vec:norm(Gap) of
+                %% The two move apart, or the moment is too far.
+                _ when Time =< 0; Time >= Horizon -> [];
+                Dist when Dist >= Radius -> [];
+                %% The two will be at the same point: go to a side.
+                Dist when Dist == 0 -> [{Time, boids_vec:orthogonal(Relative)}];
+                Dist -> [{Time, boids_vec:scale(Gap, -1 / Dist)}]
+            end;
+        _ ->
+            %% The two have the same velocity: the distance does not change.
+            []
+    end.
+
+-doc """
+Move in the direction `Direction` at the maximum speed: the vector of a
+field at the position of the boid. A zero vector gives no force.
+""".
+-spec flow(body(), vec()) -> vec().
+flow(#{vel := Vel, max_speed := Max}, Direction) ->
+    wanted(Direction, Vel, Max).

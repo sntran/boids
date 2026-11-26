@@ -290,6 +290,109 @@ defmodule BoidsSteerTest do
     end
   end
 
+  describe "cruise/2" do
+    test "goes faster or slower in the direction of the movement" do
+      assert_vec(:boids_steer.cruise(body({0, 0}, {3, 4}), 10), {3.0, 4.0})
+      assert_vec(:boids_steer.cruise(body({0, 0}, {3, 4}), 5), {0.0, 0.0})
+      assert_vec(:boids_steer.cruise(body({0, 0, 0}, {0, 0, 4}), 1), {0.0, 0.0, -3.0})
+    end
+
+    test "a boid that does not move gets no force" do
+      assert :boids_steer.cruise(body({0, 0}, {0, 0}), 10) == {0.0, 0.0}
+    end
+  end
+
+  describe "leader/5" do
+    test "goes to the point behind the leader" do
+      boid = body({0, 0}, {0, 0})
+      assert_vec(:boids_steer.leader(boid, {10, 0}, {2, 0}, 3, 5), :boids_steer.arrive(boid, {7, 0}, 5))
+
+      deep = body({0, 0, 0}, {0, 0, 0})
+
+      assert_vec(
+        :boids_steer.leader(deep, {0, 10, 0}, {0, 0, -1}, 3, 5),
+        :boids_steer.arrive(deep, {0, 10, 3}, 5)
+      )
+    end
+
+    test "a boid in the way of the leader also moves away from it" do
+      boid = body({12, 1}, {0, 0})
+      force = :boids_steer.leader(boid, {10, 0}, {2, 0}, 3, 5)
+
+      assert_vec(
+        force,
+        :boids_vec.add(
+          :boids_steer.arrive(boid, {7, 0}, 5),
+          :boids_steer.evade(boid, {10, 0}, {2, 0}, :infinity)
+        )
+      )
+
+      # Out of the way, at the side of the leader.
+      beside = body({10, 4}, {0, 0})
+      assert_vec(:boids_steer.leader(beside, {10, 0}, {2, 0}, 3, 5), :boids_steer.arrive(beside, {7, 0}, 5))
+    end
+
+    test "a leader that does not move has no direction: the boid goes to it" do
+      boid = body({0, 0}, {1, 0})
+      assert_vec(:boids_steer.leader(boid, {10, 0}, {0, 0}, 3, 5), :boids_steer.arrive(boid, {10, 0}, 5))
+    end
+  end
+
+  describe "dodge/4" do
+    @me {0, 0}
+
+    test "no neighbor gives no force" do
+      assert :boids_steer.dodge(body(@me, {1, 0}), [], 2, 10) == {0.0, 0.0}
+      assert :boids_steer.dodge(body({0, 0, 0}, {1, 0, 0}), [], 2, 10) == {0.0, 0.0, 0.0}
+    end
+
+    test "moves away from where a neighbor will be at the nearest moment" do
+      # The two are the nearest after 5 seconds: the neighbor is then 0.5 unit to the left.
+      coming = neighbor(@me, {10, 0.5}, {-1, 0})
+      assert_vec(:boids_steer.dodge(body(@me, {1, 0}), [coming], 2, 10), {0.0, -5.0})
+    end
+
+    test "the force increases when the moment comes near" do
+      far = :boids_steer.dodge(body(@me, {1, 0}), [neighbor(@me, {10, 0.5}, {-1, 0})], 2, 10)
+      near = :boids_steer.dodge(body(@me, {1, 0}), [neighbor(@me, {4, 0.5}, {-1, 0})], 2, 10)
+      assert :boids_vec.norm(near) > :boids_vec.norm(far)
+    end
+
+    test "two boids that will be at the same point go to a side" do
+      force = :boids_steer.dodge(body(@me, {1, 0}), [neighbor(@me, {10, 0}, {-1, 0})], 2, 10)
+      assert_in_delta :boids_vec.dot(force, {1, 0}), 0.0, 1.0e-9
+      assert_in_delta :boids_vec.norm(force), 5.0, 1.0e-9
+    end
+
+    test "a neighbor that goes away, that stays far, or that comes late gives no force" do
+      boid = body(@me, {1, 0})
+      assert :boids_steer.dodge(boid, [neighbor(@me, {10, 0.5}, {3, 0})], 2, 10) == {0.0, 0.0}
+      assert :boids_steer.dodge(boid, [neighbor(@me, {10, 0.5}, {1, 0})], 2, 10) == {0.0, 0.0}
+      assert :boids_steer.dodge(boid, [neighbor(@me, {10, 3}, {-1, 0})], 2, 10) == {0.0, 0.0}
+      assert :boids_steer.dodge(boid, [neighbor(@me, {10, 0.5}, {-1, 0})], 2, 5) == {0.0, 0.0}
+      assert :boids_steer.dodge(boid, [neighbor(@me, {10, 0.5}, {-1, 0})], 2, 0) == {0.0, 0.0}
+    end
+
+    test "the neighbor that comes first counts" do
+      late = neighbor(@me, {10, 0.5}, {-1, 0})
+      soon = neighbor(@me, {0.5, 4}, {1, -1})
+      boid = body(@me, {1, 0})
+      assert :boids_steer.dodge(boid, [late, soon], 2, 10) == :boids_steer.dodge(boid, [soon], 2, 10)
+      assert :boids_steer.dodge(boid, [late, soon], 2, 10) != :boids_steer.dodge(boid, [late], 2, 10)
+    end
+  end
+
+  describe "flow/2" do
+    test "wants the maximum speed in the direction of the field" do
+      assert_vec(:boids_steer.flow(body({0, 0}, {1, 0}), {0, 2}), {-1.0, 10.0})
+      assert_vec(:boids_steer.flow(body({0, 0, 0}, {0, 0, 0}, 2.0), {0, 0, -9}), {0.0, 0.0, -2.0})
+    end
+
+    test "a field of zero gives no force" do
+      assert :boids_steer.flow(body({0, 0}, {1, 0}), {0, 0}) == {0.0, 0.0}
+    end
+  end
+
   describe "follow/5" do
     @path [{0, 0}, {10, 0}, {10, 10}]
 

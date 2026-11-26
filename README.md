@@ -32,7 +32,11 @@ In this library, each boid is an Erlang process:
 | `avoid` | moves around the obstacles |
 | `contain` | stays in a box |
 | `follow` | moves along a path |
-| a function of yours | gets the force that the function gives |
+| `cruise` | keeps a speed |
+| `leader` | stays behind a leader, and moves out of its way |
+| `dodge` | moves away from a neighbor that will come too near |
+| `flow` | moves in the direction of a field |
+| a module or a function of yours | gets the force that it gives |
 
 Each rule has a weight. A boid has two or three dimensions, a maximum
 speed, a maximum force, a distance and an angle that it sees, and a
@@ -114,8 +118,43 @@ ok = boids:set_obstacle(Flock, rock, {30, 30}, 5).
   of the list use the force first.
 - `separation` sees all the groups. `alignment` and `cohesion` see only
   the group of the boid. The option `groups` of a rule changes this.
-- A rule of your own is a function: `{fun(Boid, Neighbors, Env) ->
-  Force end, Weight}`, or `{{Module, Function, Args}, Weight}`.
+- A rule of your own is a module with the behavior `boids_rule`, or a
+  function. See "A rule of your own".
+
+## A rule of your own
+
+A rule is a module with the behavior `boids_rule`. The module checks its
+options, and gives the force of the rule for one boid at one step:
+
+```erlang
+-module(my_gravity).
+-behavior(boids_rule).
+-export([options/1, force/4]).
+
+options(Options) ->
+    #{g := G} = maps:merge(#{g => 9.81}, Options),
+    true = is_number(G),
+    #{g => G}.
+
+force(_Boid, _Neighbors, _Env, #{g := G}) ->
+    {0, -G}.
+```
+
+```erlang
+boids:add(Flock, #{pos => {0, 50}, rules => [{my_gravity, 1.0, #{g => 3.7}}, {wander, 0.5}]}).
+```
+
+In Elixir, the module has `@behaviour :boids_rule`.
+
+- A bad option gives an error when the boid gets its rules, and not at
+  each step of the boid.
+- A rule can keep a memory between the steps of a boid: `force/4` gives
+  `{Force, Memory}`, and gets the memory in `Env` at the next step.
+- For a rule with no option, a function is sufficient:
+  `{fun(Boid, Neighbors, Env) -> Force end, Weight}`.
+- The functions of `boids_steer` and `boids_vec` are the parts of a new
+  rule: for example `boids_steer:seek/2` to a point that the rule
+  calculates.
 
 ## The space of a flock
 

@@ -134,7 +134,14 @@ defmodule BoidsBoidTest do
         {:contain, 1, bounds: {{0, 0}, {10, 10}}, margin: 2},
         {:follow, 1, path: [{0, 0}, {1, 1}], ahead: 2, predict: 0.1, loop: true},
         {fn _, _, _ -> {0, 0} end, 1},
-        {{:boids_vec, :zero, [2]}, 1}
+        {:cruise, 1, speed: 3},
+        {:leader, 1, target: {:boid, 1}, distance: 2, slow_radius: 3},
+        {:dodge, 1, radius: 1, horizon: 3, groups: :all},
+        {:flow, 1, field: {1, 0}},
+        {:flow, 1, field: fn pos -> pos end, predict: 1},
+        {Boids.TestRules.Push, 1},
+        {Boids.TestRules.Push, 1, force: {2, 2}},
+        {Boids.TestRules.Turn, 1, anything: :goes}
       ]
 
       assert length(boid(rules: rules).rules) == length(rules)
@@ -178,9 +185,22 @@ defmodule BoidsBoidTest do
             {:arrive, 1, target: {1, 2}, slow_radius: 1.0e200},
             {fn _, _ -> {0, 0} end, 1},
             {fn _, _, _ -> {0, 0} end, 1, radius: 1},
-            {{:boids_vec, :zero}, 1},
+            {{:boids_vec, :zero, []}, 1},
+            {:lists, 1},
+            {:no_such_module_of_rules, 1},
+            {Boids.TestRules.Push, 1, force: :up},
+            {Boids.TestRules.NoMap, 1},
+            {:cruise, 1, speed: -1},
+            {:leader, 1},
+            {:leader, 1, target: {:boid, 1}, distance: :far},
+            {:dodge, 1, radius: :infinity},
+            {:dodge, 1, horizon: -1},
+            {:flow, 1},
+            {:flow, 1, field: fn a, b -> {a, b} end},
+            {:flow, 1, field: {1, 0, 0}},
+            {:flow, 1, field: :wind},
             {{:boids_vec, "zero", []}, 1},
-            {{:boids_vec, :zero, :none}, 1}
+            {"separation", 1}
           ] do
         assert {:bad_option, {:rules, _}} = catch_error(boid(rules: [rule])), "#{inspect(rule)} is accepted"
       end
@@ -210,8 +230,14 @@ defmodule BoidsBoidTest do
     test "keeps the memory of the rules" do
       boid = boid(rules: [wander: 1])
       {_, moved} = :boids_boid.force(boid, [], %{dt: 0.1})
-      assert %{wander: point} = moved.memory
-      assert :boids_boid.update(moved, %{max_speed: 2}).memory == %{wander: point}
+      assert %{1 => point} = moved.memory
+      assert :boids_boid.update(moved, %{max_speed: 2}).memory == %{1 => point}
+    end
+
+    test "a change of the rules removes the memory of the rules" do
+      {_, moved} = :boids_boid.force(boid(rules: [wander: 1]), [], %{dt: 0.1})
+      assert map_size(moved.memory) == 1
+      assert :boids_boid.update(moved, %{rules: [wander: 1]}).memory == %{}
     end
 
     test "refuses a rule with a vector of another size" do
@@ -425,20 +451,20 @@ defmodule BoidsBoidTest do
       :rand.seed(:exsss, 7)
       boid = boid(rules: [wander: 1], vel: {1, 0})
       {force, moved} = :boids_boid.force(boid, [], %{dt: 0.1})
-      assert %{wander: point} = moved.memory
+      assert %{1 => point} = moved.memory
       assert_in_delta :boids_vec.norm(point), 1.0, 1.0e-9
       assert_vec(force, :boids_vec.limit(:boids_steer.wander(boid, point, 2.0, 1.0), 20.0))
       {_, again} = :boids_boid.force(moved, [], %{dt: 0.1})
-      assert again.memory.wander != point
-      assert :boids_vec.dist(again.memory.wander, point) < 1.0
+      assert again.memory[1] != point
+      assert :boids_vec.dist(again.memory[1], point) < 1.0
     end
 
     test "without time, the point stays" do
       boid = boid(rules: [wander: 1], pos: {0, 0, 0})
       {_, first} = :boids_boid.force(boid, [], %{})
       {_, second} = :boids_boid.force(first, [], %{dt: 0})
-      assert tuple_size(first.memory.wander) == 3
-      assert second.memory.wander == first.memory.wander
+      assert tuple_size(first.memory[1]) == 3
+      assert second.memory[1] == first.memory[1]
     end
 
     test "uses its options" do
@@ -453,8 +479,8 @@ defmodule BoidsBoidTest do
       :rand.seed(:exsss, 3)
       opposite = :boids_vec.neg(:boids_vec.random_unit(2))
       :rand.seed(:exsss, 3)
-      {_, moved} = :boids_boid.force(%{boid | memory: %{wander: opposite}}, [], %{dt: 1})
-      assert moved.memory.wander == opposite
+      {_, moved} = :boids_boid.force(%{boid | memory: %{1 => opposite}}, [], %{dt: 1})
+      assert moved.memory[1] == opposite
     end
   end
 
@@ -508,6 +534,53 @@ defmodule BoidsBoidTest do
     end
   end
 
+  describe "cruise, leader, dodge and flow" do
+    test "cruise keeps the maximum speed, or its speed" do
+      opts = %{vel: {3, 4}}
+      assert_vec(force({:cruise, 1}, opts), :boids_steer.cruise(body({0, 0}, {3, 4}), 10.0))
+      assert_vec(force({:cruise, 1}, opts), {3.0, 4.0})
+      assert_vec(force({:cruise, 1, speed: 2}, opts), {-1.8, -2.4})
+    end
+
+    test "leader uses the position and the velocity of its target" do
+      body = body({0, 0}, {0.0, 0.0})
+      ns = [neighbor({0, 0}, {10, 0}, {2, 0}, %{id: :first})]
+
+      assert force({:leader, 1, target: {:boid, :first}}, %{}, ns) ==
+               :boids_steer.leader(body, {10, 0}, {2, 0}, 5.0, 10.0)
+
+      assert force({:leader, 1, target: {:boid, :first}, distance: 3, slow_radius: 4}, %{}, ns) ==
+               :boids_steer.leader(body, {10, 0}, {2, 0}, 3, 4)
+
+      assert force({:leader, 1, target: {:boid, :nobody}}, %{}, ns) == {0.0, 0.0}
+    end
+
+    test "dodge uses its groups, and all the neighbors that the boid sees" do
+      body = body({0, 0}, {1, 0})
+      near = neighbor({0, 0}, {8, 0.5}, {-1, 0}, %{group: :cars})
+      far = neighbor({0, 0}, {9, -0.5}, {-1, 0}, %{group: :default})
+      opts = %{vel: {1, 0}}
+      assert force({:dodge, 1}, opts, [near, far]) == :boids_steer.dodge(body, [near, far], 2.5, 2.0)
+
+      assert force({:dodge, 1, radius: 1, horizon: 9}, opts, [near, far]) ==
+               :boids_steer.dodge(body, [near, far], 1, 9)
+
+      assert force({:dodge, 1, horizon: 9, groups: :same}, opts, [near, far]) ==
+               :boids_steer.dodge(body, [far], 2.5, 9)
+
+      assert force({:dodge, 1, horizon: 9, groups: [:cars]}, opts, [near, far]) ==
+               :boids_steer.dodge(body, [near], 2.5, 9)
+    end
+
+    test "flow uses a vector, or a function of the position after the time of the prediction" do
+      assert_vec(force({:flow, 1, field: {0, 2}}, %{vel: {1, 0}}), {-1.0, 10.0})
+      turn = fn {x, y} -> {-y, x} end
+      assert_vec(force({:flow, 1, field: turn}, %{pos: {1, 0}}), {0.0, 10.0})
+      assert_vec(force({:flow, 1, field: turn}, %{pos: {0, 0}, vel: {2, 0}}), {-2.0, 10.0})
+      assert_vec(force({:flow, 1, field: turn, predict: 0}, %{pos: {0, 3}, vel: {2, 0}}), {-12.0, 0.0})
+    end
+  end
+
   describe "a rule of your own" do
     test "a function gets the boid, the neighbors and the environment" do
       me = self()
@@ -518,16 +591,48 @@ defmodule BoidsBoidTest do
       end
 
       assert force({rule, 1}, %{id: :a}, [:n], %{dt: 0.5, more: 1}) == {1, 2}
-      assert_received {:a, [:n], %{dt: 0.5, more: 1}}
+      assert_received {:a, [:n], %{dt: 0.5, more: 1, memory: :undefined}}
     end
 
-    test "a module, a function and arguments" do
-      assert force({{:boids_steer, :contain, []}, 1}, %{pos: {1, 5}}, {{0, 0}, {10, 10}}, 2) == {10.0, 0.0}
-      assert force({{__MODULE__, :push, [{0, 3}]}, 2}, %{}) == {0, 6}
+    test "a function with a memory gets it at the next step" do
+      count = fn _boid, _neighbors, %{memory: memory} ->
+        # The first call has no memory.
+        seen = if memory == :undefined, do: 1, else: memory + 1
+        {{seen, 0}, seen}
+      end
+
+      boid = boid(rules: [{count, 1}, {:wander, 0}, {count, 10}], max_force: 1000)
+      {first, boid} = :boids_boid.force(boid, [], %{dt: 0.1})
+      {second, boid} = :boids_boid.force(boid, [], %{dt: 0.1})
+      assert_vec(first, {11.0, 0.0})
+      assert_vec(second, {22.0, 0.0})
+      # Each rule has its memory, at its position in the list.
+      assert %{1 => 2, 2 => {_, _}, 3 => 2} = boid.memory
+    end
+
+    test "a module with the behavior boids_rule checks its options, and gives the force" do
+      boid =
+        boid(rules: [{Boids.TestRules.Push, 2}, {Boids.TestRules.Push, 1, force: {3, 0}}], max_force: 100)
+
+      # The check gives the defaults of the options.
+      assert boid.rules == [
+               {Boids.TestRules.Push, 2, %{force: {0, 1}}},
+               {Boids.TestRules.Push, 1, %{force: {3, 0}}}
+             ]
+
+      assert_vec(elem(:boids_boid.force(boid, [], %{}), 0), {3.0, 2.0})
+      # A second check of the options that the module gave changes nothing.
+      assert :boids_boid.update(boid, %{max_speed: 1}).rules == boid.rules
+    end
+
+    test "a module with a memory gets it at the next step" do
+      boid = boid(rules: [{Boids.TestRules.Turn, 1, start: {0, 2}}], max_force: 100)
+      {first, boid} = :boids_boid.force(boid, [], %{})
+      {second, boid} = :boids_boid.force(boid, [], %{})
+      {third, _} = :boids_boid.force(boid, [], %{})
+      assert {first, second, third} == {{0.0, 2.0}, {-2.0, 0.0}, {0.0, -2.0}}
     end
   end
-
-  def push(_boid, _neighbors, _env, force), do: force
 
   describe "the sum of the forces" do
     test "each force is multiplied by its weight" do
@@ -676,6 +781,69 @@ defmodule BoidsBoidTest do
       arrived = Enum.reduce(1..400, boid, fn _, b -> :boids_boid.step(b, [], %{}, 0.05) end)
       assert_vec(arrived.pos, {30.0, 40.0}, 0.01)
       assert :boids_vec.norm(arrived.vel) < 0.01
+    end
+
+    test "with cruise, a boid gets its speed and keeps it" do
+      boid = boid(vel: {0.1, 0}, rules: [{:cruise, 1, speed: 6}])
+      moved = Enum.reduce(1..200, boid, fn _, b -> :boids_boid.step(b, [], %{}, 0.05) end)
+      assert_vec(moved.vel, {6.0, 0.0}, 0.01)
+    end
+
+    test "with leader, a boid stays behind its leader" do
+      rules = [{:leader, 1, target: {:boid, :first}, distance: 4, slow_radius: 5}]
+      follower = boid(pos: {0, 5}, rules: rules, max_force: 40)
+
+      {follower, at} =
+        Enum.reduce(1..400, {follower, {10, 0}}, fn _, {b, at} ->
+          first = neighbor(b.pos, at, {3, 0}, %{id: :first})
+          {:boids_boid.step(b, [first], %{}, 0.05), :boids_vec.add(at, {0.15, 0})}
+        end)
+
+      # A boid that arrives at a point that moves stays a little behind it.
+      assert_vec(follower.pos, :boids_vec.sub(at, {4, 0}), 2.0)
+      assert_vec(follower.vel, {3.0, 0.0}, 0.5)
+    end
+
+    test "with dodge, two boids that come at each other do not hit" do
+      nearest = fn rules ->
+        a = boid(id: :a, pos: {0, 0.2}, vel: {5, 0}, rules: rules, max_force: 30)
+        b = boid(id: :b, pos: {40, -0.2}, vel: {-5, 0}, rules: rules, max_force: 30)
+
+        {_, _, nearest} =
+          Enum.reduce(1..120, {a, b, 1.0e9}, fn _, {a, b, nearest} ->
+            see = fn me, other -> [neighbor(me.pos, other.pos, other.vel, %{id: other.id})] end
+            a1 = :boids_boid.step(a, see.(a, b), %{}, 0.05)
+            b1 = :boids_boid.step(b, see.(b, a), %{}, 0.05)
+            {a1, b1, min(nearest, :boids_vec.dist(a1.pos, b1.pos))}
+          end)
+
+        nearest
+      end
+
+      assert nearest.([{:cruise, 1, speed: 5}]) < 0.5
+      assert nearest.([{:dodge, 3, radius: 3, horizon: 3}, {:cruise, 1, speed: 5}]) > 2.0
+    end
+
+    test "with flow, a boid goes around the circle of a field" do
+      # The field turns around the center, and goes to the circle of the radius 10.
+      field = fn {x, y} ->
+        radius = :math.sqrt(x * x + y * y)
+        to_circle = 3 * (10 - radius) / radius
+        {-y + to_circle * x, x + to_circle * y}
+      end
+
+      boid = boid(pos: {14, 0}, rules: [{:flow, 1, field: field, predict: 0.1}], max_speed: 5, max_force: 50)
+
+      {places, _} =
+        Enum.map_reduce(1..700, boid, fn _, b ->
+          next = :boids_boid.step(b, [], %{}, 0.02)
+          {next.pos, next}
+        end)
+
+      # 70 units of way: more than one time around the circle.
+      for pos <- Enum.drop(places, 100), do: assert_in_delta(:boids_vec.norm(pos), 10.0, 2.0)
+      assert Enum.any?(places, fn {x, _} -> x < -9 end)
+      assert Enum.any?(places, fn {_, y} -> y < -9 end)
     end
 
     test "a boid follows a path to its end" do
