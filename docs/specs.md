@@ -37,7 +37,7 @@ message at a time. The messages of two processes come in each order.
 
 | Action | When it can occur | In the code |
 |---|---|---|
-| `Start(p, i)` | `p` is new: it asks the flock for the row of `i`. | `boids:add/2`, a restart by the supervisor, `boids:join/2` |
+| `Start(p, i)` | `p` is new: it asks the flock for the row of `i`. | `boids:add/2`, or `boids:join/2` in a process of yours, also one that its supervisor starts again |
 | `Stop(p)` | `p` runs: an error, a kill, or the end of its work. The flock gets `'DOWN'` when it watches `p`. | |
 | `Find(p)` | `p` has the row of its id: a caller reads the table. | the start of `boids:remove/2` |
 | `Remove(p)` | A caller found `p`: it stops `p`, then sends a leave. | the end of `boids:remove/2` |
@@ -51,7 +51,7 @@ message at a time. The messages of two processes come in each order.
 | `LiveHasRow` | A process that runs as a boid has the row of its id. | A boid that moves, but that no boid sees and no caller finds. |
 | `Watched` | The flock watches each process that has a row, and no other process. | A row that stays after the end of its process. |
 | `NoLostRow` | When the flock handled each message, each row has a process that runs. | A boid that does not move in the flock. |
-| `Fair` | The flock refuses an id only when its process did not stop. | A boid that cannot start again after an error. |
+| `Fair` | The flock refuses an id only when its process did not stop. | A process of yours that cannot be a boid again after an error. |
 | `Cleans` | In the end, each row has a process that runs. | |
 
 The small model (`specs/MCFlock.tla`): three processes for one id (a
@@ -79,6 +79,8 @@ models. The grid has a copy of each row in the cell of its position.
 | `Write(b, c)` | `b` does not write: it writes its row, with a position in the cell `c`. | `ets:insert/2` of the row in `put/2` |
 | `Insert(b)` | The row is written: the new copy goes into the grid. | `ets:insert/2` of the copy |
 | `Delete(b)` | The new copy is in the grid: the old copy goes. | `ets:delete_object/2` |
+| `Kill(b)` | The process of `b` runs: it stops, also in the middle of a write. | |
+| `Remove(b)` | The process of `b` stopped: the flock removes its row, the copy of the row, and the copy before its last write. | `remove/2` |
 | `Begin` | A read starts, one time. | `near/3` |
 | `Read(c)` | The reader reads all the copies of the cell `c`. | one `ets:lookup/2` |
 | `End` | Each cell is read: the reader keeps one copy of each boid. | `lists:ukeysort/2` |
@@ -86,8 +88,9 @@ models. The grid has a copy of each row in the cell of its position.
 | Invariant or property | What it says | The fault that it stops |
 |---|---|---|
 | `OneTime` | A boid is in the result of a read one time at most. | A neighbor that counts two times. |
-| `Finds` | A boid that did not change its cell during the read is in the result. | A neighbor that a boid does not see, and hits. |
-| `Whole` | When a boid does not write, the grid has one copy of its row, in the cell of the row. | An old copy that stays: a boid at two places, and memory that is lost. |
+| `Finds` | A boid that runs, and that did not change its cell during the read, is in the result. | A neighbor that a boid does not see, and hits. |
+| `Whole` | When a boid that runs does not write, the grid has one copy of its row, in the cell of the row. | An old copy that stays: a boid at two places. |
+| `Gone` | The grid has no copy of a boid whose row the flock removed. | A boid that is not in the flock, but that the other boids see and move away from. |
 | `Reads` | The read ends. | |
 
 A boid that changes its cell during the read can be absent from the
@@ -99,8 +102,14 @@ The small model (`specs/MCSpace.tla`): two cells, and two boids that
 write one time each. `MCSpaceLong.cfg` has one boid that writes three
 times during one read. `MCSpaceGap.cfg` removes the old copy before it
 adds the new copy: `Finds` violated. `MCSpaceTwice.cfg` keeps each copy
-that the reader read: `OneTime` violated. The first version of `put/2`
-had the order of `MCSpaceGap.cfg`.
+that the reader read: `OneTime` violated. `MCSpaceLeak.cfg` removes only
+the copy of the row at the end of a boid: `Gone` violated.
+
+Two of these faults were in the code. The first version of `put/2` had
+the order of `MCSpaceGap.cfg`. The first version of `remove/2` was
+`MCSpaceLeak.cfg`: a review found copies in the grid after the kill of
+boids that wrote at that moment. The row now keeps the copy before its
+last write, and `remove/2` removes the two copies.
 
 ### `specs/Step.tla`
 
@@ -165,7 +174,7 @@ join, the process of the row stopped, or not. The result is `:ok`,
 
 - a flock with boids that start, stop, start again with their id, leave
   and go;
-- boids that a test kills, which the supervisor starts again at once:
+- boids that a test kills, each with a new boid of the same id at once:
   the join of the new process and the `'DOWN'` of the old process come
   in the two orders;
 - 40 random lists of acts, where the processes of the test and of the

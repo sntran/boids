@@ -2,6 +2,7 @@ defmodule BoidsVecTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
   import Boids.Helpers
+  import Bitwise
 
   describe "the basic operations" do
     test "zero/1 and dim/1" do
@@ -146,8 +147,45 @@ defmodule BoidsVecTest do
       assert_vec(:boids_vec.wrap({-6.0, 7.5}, {-5, -5}, {5, 5}), {4.0, -2.5})
     end
 
-    test "wrap/3 never gives the maximum" do
+    test "wrap/3 never gives the maximum, or less than the minimum" do
       assert :boids_vec.wrap({-1.0e-17, 5}, {0, 0}, {10, 10}) == {0, 5}
+      assert :boids_vec.wrap({100.1, 5}, {0.1, 0}, {100.1, 10}) == {0.1, 5}
+    end
+
+    test "is_vec/1, is_size/1 and is_box/2" do
+      assert :boids_vec.is_vec({1, 2.5})
+      assert :boids_vec.is_vec({-1.0e100, 0, 1.0e100})
+
+      for bad <- [
+            {1},
+            {1, 2, 3, 4},
+            {1, :a},
+            {:a, 1, 2},
+            {1, 2, :a},
+            [1, 2],
+            {1.0e101, 0},
+            {0, 0, -1.0e101},
+            {1 <<< 1100, 0}
+          ] do
+        refute :boids_vec.is_vec(bad)
+      end
+
+      assert :boids_vec.is_size(0)
+      assert :boids_vec.is_size(1.0e100)
+      for bad <- [-1, 1.0e101, :infinity, "1"], do: refute(:boids_vec.is_size(bad))
+      assert :boids_vec.is_box({0, 0}, {1, 1})
+      assert :boids_vec.is_box({-1, -1, -1}, {0, 0, 0})
+
+      for {min, max} <- [
+            {{0, 0}, {0, 1}},
+            {{0, 0}, {1, 1, 1}},
+            {{0, 0}, {1, -1}},
+            {:a, {1, 1}},
+            {{0, 0}, :b},
+            {{:a, 0}, {1, 1}}
+          ] do
+        refute :boids_vec.is_box(min, max)
+      end
     end
 
     property "wrap/3 gives a point of the box at a multiple of its size" do

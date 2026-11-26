@@ -13,7 +13,7 @@ boid (see `boids_boid`), and these:
 | Option | Default | Description |
 |---|---|---|
 | `tick` | `50` | The milliseconds between two steps, or `manual`: the boid moves only with `boids:step/2`. |
-| `max_dt` | `0.25` | The maximum of the seconds of one step. A late tick does not make a long step. |
+| `max_dt` | `0.25`, or 4 ticks | The maximum of the seconds of one step. A late tick does not make a long step. The default is the larger of 0.25 second and 4 ticks. |
 | `seed` | (none) | An integer: the seed of the random numbers of the process. |
 | `priority` | `low` | The priority of the process: `low` or `normal`. |
 | `hibernate` | `true` | The process hibernates between two steps. |
@@ -60,8 +60,13 @@ A bad option of the process gives the error `{bad_option, {Key, Value}}`.
 """.
 -spec options(map()) -> {map(), map()}.
 options(Opts) ->
-    Defaults = #{tick => 50, max_dt => 0.25, priority => low, hibernate => true},
-    Server = maps:merge(Defaults, maps:with(?KEYS, Opts)),
+    Given = maps:with(?KEYS, Opts),
+    MaxDt =
+        case Given of
+            #{tick := Tick} when is_integer(Tick) -> max(0.25, 4 * Tick / 1000);
+            _ -> 0.25
+        end,
+    Server = maps:merge(#{tick => 50, max_dt => MaxDt, priority => low, hibernate => true}, Given),
     maps:foreach(fun check/2, Server),
     {Server, maps:without(?KEYS, Opts)}.
 
@@ -94,12 +99,8 @@ init({Space, Opts}) ->
                 end,
             process_flag(priority, Priority),
             {ok, Server#{space => Space, boid => Boid, last => now_us(), due => Due, pending => undefined}};
-        {error, _Reason} ->
-            %% The flock refused the boid. This is not an error of the
-            %% process: a boid that starts again when another process
-            %% has its id must not stop its supervisor. boids:add/2
-            %% finds the reason.
-            ignore
+        {error, Reason} ->
+            {stop, {shutdown, Reason}}
     end.
 
 -doc false.
@@ -119,7 +120,7 @@ handle_call(commit, _From, State = #{pending := undefined}) ->
     {reply, ok, State};
 handle_call(commit, _From, State = #{space := Space, pending := Boid}) ->
     boids:commit(Space, Boid),
-    rest({reply, ok, State#{boid := Boid, pending := undefined, last := now_us()}}).
+    rest({reply, ok, State#{boid := Boid, pending := undefined}}).
 
 -doc false.
 handle_cast(_Message, State) ->

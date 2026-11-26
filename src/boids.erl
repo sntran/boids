@@ -167,6 +167,10 @@ necessary.
 All the boids of a flock have positions of the same size: two numbers,
 or three. An id that is in the flock gives `{error, {exists, Id}}`. A
 bad option gives `{error, {bad_option, {Key, Value}}}`.
+
+A boid that stops with an error does not start again: the flock removes
+it, and the other boids continue. `whereis/2` gives its process, for a
+monitor.
 """.
 -spec add(flock(), options()) -> {ok, term()} | {error, term()}.
 add(Flock, Opts0) ->
@@ -184,16 +188,8 @@ add(Flock, Opts0) ->
 
 start(Space, Sup, Opts) ->
     case supervisor:start_child(Sup, [Space, Opts]) of
-        {ok, Pid} when is_pid(Pid) -> {ok, maps:get(id, Opts, Pid)};
-        {ok, undefined} -> {error, refusal(Space, Opts)}
-    end.
-
-%% Why the flock refused a boid: its position does not have the size of
-%% the vectors of the flock, or its id is in the flock.
-refusal(Space, Opts = #{pos := Pos}) ->
-    case boids_space:dim(Space) of
-        Dim when Dim =/= undefined, Dim =/= tuple_size(Pos) -> {bad_option, {pos, Pos}};
-        _ -> {exists, maps:get(id, Opts)}
+        {ok, Pid} -> {ok, maps:get(id, Opts, Pid)};
+        {error, {shutdown, Reason}} -> {error, Reason}
     end.
 
 -doc """
@@ -217,22 +213,22 @@ populate(Flock, Count, Opts0) when is_integer(Count), Count >= 0 ->
     of
         {{Min1, Max1}, Template1, Sample} ->
             Random = fun() -> random(Min1, Max1, Template1, Sample) end,
-            populate(Space, boids_flock:boid_sup(Space), Count, Template1, Random, [])
+            populate(Space, boids_flock:boid_sup(Space), 1, Count, Template1, Random, [])
     catch
         error:{bad_option, _} = Reason -> {error, Reason}
     end.
 
 %% The check of the options is done one time, for all the boids.
-populate(_Space, _Sup, 0, _Template, _Random, Ids) ->
+populate(_Space, _Sup, N, Count, _Template, _Random, Ids) when N > Count ->
     {ok, lists:reverse(Ids)};
-populate(Space, Sup, Count, Template, Random, Ids) ->
+populate(Space, Sup, N, Count, Template, Random, Ids) ->
     Opts =
         case Template of
-            #{seed := Seed} -> Template#{seed := Seed + Count};
+            #{seed := Seed} -> Template#{seed := Seed + N};
             _ -> Template
         end,
     case start(Space, Sup, maps:merge(Opts, Random())) of
-        {ok, Id} -> populate(Space, Sup, Count - 1, Template, Random, [Id | Ids]);
+        {ok, Id} -> populate(Space, Sup, N + 1, Count, Template, Random, [Id | Ids]);
         {error, Reason} -> {error, Reason}
     end.
 

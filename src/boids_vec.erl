@@ -11,6 +11,7 @@ have the same size.
 -export([normalize/1, set_norm/2, limit/2, lerp/3]).
 -export([orthogonal/1, random_unit/1, random_in/2]).
 -export([wrap/3, shortest/3]).
+-export([is_vec/1, is_size/1, is_box/2]).
 
 -export_type([vec/0]).
 
@@ -130,6 +131,31 @@ random_in({X1, Y1, Z1}, {X2, Y2, Z2}) ->
 between(Min, Max) -> Min + rand:uniform() * (Max - Min).
 
 -doc """
+`true` for a vector of two or three numbers that this module can use:
+each number is from -1.0e100 to 1.0e100. With larger numbers, a product
+of two of them is not a number of the computer.
+""".
+-spec is_vec(term()) -> boolean().
+is_vec({X, Y}) -> is_coordinate(X) andalso is_coordinate(Y);
+is_vec({X, Y, Z}) -> is_coordinate(X) andalso is_coordinate(Y) andalso is_coordinate(Z);
+is_vec(_) -> false.
+
+is_coordinate(X) -> is_number(X) andalso X >= -1.0e100 andalso X =< 1.0e100.
+
+-doc "`true` for a number from 0 to 1.0e100: a distance, a speed or a time.".
+-spec is_size(term()) -> boolean().
+is_size(N) -> is_number(N) andalso N >= 0 andalso N =< 1.0e100.
+
+-doc """
+`true` for a box: two vectors of the same size, with each number of
+`Min` less than its number of `Max`.
+""".
+-spec is_box(term(), term()) -> boolean().
+is_box(Min, Max) ->
+    is_vec(Min) andalso is_vec(Max) andalso tuple_size(Min) =:= tuple_size(Max) andalso
+        lists:all(fun({Lo, Hi}) -> Lo < Hi end, lists:zip(tuple_to_list(Min), tuple_to_list(Max))).
+
+-doc """
 The point `P` in the box from `Min` to `Max`, when each side of the box
 continues at the opposite side. Each number of the result is in
 `[Min, Max)`.
@@ -145,8 +171,9 @@ wrap1(X, Min, Max) when X >= Min, X < Max ->
 wrap1(X, Min, Max) ->
     Size = Max - Min,
     case X - Size * floor((X - Min) / Size) of
-        %% The limit of the precision can give Max.
-        W when W >= Max -> Min;
+        %% The limit of the precision can give Max, or a number a little
+        %% less than Min.
+        W when W >= Max; W < Min -> Min;
         W -> W
     end.
 

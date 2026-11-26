@@ -67,7 +67,7 @@ multiplied by its weight, with the length `max_force` at most. With
 `max_force`, and the last rules get what stays. Put `avoid` first there.
 """.
 
--export([new/1, update/2, entry/1]).
+-export([new/1, update/2, options/1, entry/1]).
 -export([perceive/2, force/3, integrate/4, step/4]).
 
 -export_type([boid/0, rule/0, target/0, env/0]).
@@ -120,7 +120,8 @@ multiplied by its weight, with the length `max_force` at most. With
 
 -doc """
 Make a boid from its options. A bad option gives the error
-`{bad_option, {Key, Value}}`.
+`{bad_option, {Key, Value}}`. Each number is 1.0e100 at most, and each
+vector of a rule has the size of the position.
 """.
 -spec new(map() | [{atom(), term()}]) -> boid().
 new(Opts0) ->
@@ -157,6 +158,15 @@ update(Boid = #{pos := Old}, Changes0) ->
         Changed -> Changed
     end.
 
+-doc """
+Check options with no boid, and give them as a map: each value alone,
+and not the values together. `boids:start_flock/1` checks the `defaults`
+of a flock with this function.
+""".
+-spec options(map() | [{atom(), term()}]) -> map().
+options(Opts) ->
+    maps:map(fun check/2, to_map(Opts)).
+
 -doc "The part of a boid that the other boids see: the row of `boids_space`.".
 -spec entry(boid()) -> #{id := term(), pos := vec(), vel := vec(), group := term(), data := term()}.
 entry(Boid) ->
@@ -172,12 +182,22 @@ to_map(Opts) when is_list(Opts) ->
 to_map(Opts) -> error({bad_option, Opts}).
 
 validate(Boid) ->
-    Checked = #{pos := Pos, vel := Vel} = maps:map(fun check/2, Boid),
-    case {boids_vec:dim(Pos) =:= boids_vec:dim(Vel), Checked} of
+    Checked = #{pos := Pos, vel := Vel, rules := Rules} = maps:map(fun check/2, Boid),
+    Dim = tuple_size(Pos),
+    %% The vectors of a rule have the size of the position.
+    [error({bad_option, {rules, Rule}}) || Rule = {_, _, Opts} <- Rules, not sized(Opts, Dim)],
+    case {Dim =:= tuple_size(Vel), Checked} of
         {false, _} -> error({bad_option, {vel, Vel}});
         {true, #{min_speed := Min, max_speed := Max}} when Min > Max -> error({bad_option, {min_speed, Min}});
         {true, _} -> Checked
     end.
+
+sized(Opts, Dim) ->
+    Vectors =
+        [Point || #{target := Point} <- [Opts], is_tuple(Point), not is_atom(element(1, Point))] ++
+            [Corner || #{bounds := {Min, Max}} <- [Opts], Corner <- [Min, Max]] ++
+            maps:get(path, Opts, []),
+    lists:all(fun(Vector) -> tuple_size(Vector) =:= Dim end, Vectors).
 
 check(Key, Value) ->
     case ok(Key, Value) of
@@ -190,22 +210,18 @@ ok(id, _) -> true;
 ok(group, _) -> true;
 ok(data, _) -> true;
 ok(memory, Memory) -> is_map(Memory);
-ok(pos, Pos) -> is_vec(Pos);
-ok(vel, Vel) -> is_vec(Vel);
-ok(max_speed, N) -> is_number(N) andalso N >= 0;
-ok(min_speed, N) -> is_number(N) andalso N >= 0;
-ok(max_force, N) -> is_number(N) andalso N >= 0;
-ok(mass, N) -> is_number(N) andalso N > 0;
-ok(perception, N) -> is_number(N) andalso N >= 0;
-ok(fov, N) -> is_number(N) andalso N >= 0;
+ok(pos, Pos) -> boids_vec:is_vec(Pos);
+ok(vel, Vel) -> boids_vec:is_vec(Vel);
+ok(max_speed, N) -> boids_vec:is_size(N);
+ok(min_speed, N) -> boids_vec:is_size(N);
+ok(max_force, N) -> boids_vec:is_size(N);
+ok(mass, N) -> boids_vec:is_size(N) andalso N > 0;
+ok(perception, N) -> boids_vec:is_size(N);
+ok(fov, N) -> boids_vec:is_size(N);
 ok(max_neighbors, N) -> N =:= infinity orelse (is_integer(N) andalso N > 0);
 ok(combine, Combine) -> Combine =:= sum orelse Combine =:= priority;
 ok(rules, Rules) when is_list(Rules) -> {ok, [rule(Rule) || Rule <- Rules]};
 ok(_, _) -> false.
-
-is_vec({X, Y}) -> is_number(X) andalso is_number(Y);
-is_vec({X, Y, Z}) -> is_number(X) andalso is_number(Y) andalso is_number(Z);
-is_vec(_) -> false.
 
 %% --- The rules: the check ---------------------------------------------
 
@@ -244,20 +260,20 @@ keys({Fun, _, _}) when is_function(Fun, 3) -> {[], []};
 keys({{Module, Function, Args}, _, _}) when is_atom(Module), is_atom(Function), is_list(Args) -> {[], []};
 keys(Rule) -> error({bad_option, {rules, Rule}}).
 
-opt(wander, radius, N) -> is_number(N) andalso N >= 0;
+opt(wander, radius, N) -> boids_vec:is_size(N);
 opt(_, radius, N) -> is_distance(N);
 opt(_, max_time, N) -> is_distance(N);
 opt(_, groups, Groups) -> Groups =:= all orelse Groups =:= same orelse is_list(Groups);
 opt(_, target, {boid, _}) -> true;
 opt(_, target, {group, _}) -> true;
-opt(_, target, Point) -> is_vec(Point);
-opt(_, bounds, {Min, Max}) -> is_vec(Min) andalso is_vec(Max) andalso tuple_size(Min) =:= tuple_size(Max);
-opt(_, path, Path) -> is_list(Path) andalso Path =/= [] andalso lists:all(fun is_vec/1, Path);
+opt(_, target, Point) -> boids_vec:is_vec(Point);
+opt(_, bounds, {Min, Max}) -> boids_vec:is_box(Min, Max);
+opt(_, path, Path) -> is_list(Path) andalso Path =/= [] andalso lists:all(fun boids_vec:is_vec/1, Path);
 opt(_, loop, Loop) -> is_boolean(Loop);
-opt(_, Key, N) when Key =/= bounds -> is_number(N) andalso N >= 0;
+opt(_, Key, N) when Key =/= bounds -> boids_vec:is_size(N);
 opt(_, _, _) -> false.
 
-is_distance(N) -> N =:= infinity orelse (is_number(N) andalso N >= 0).
+is_distance(N) -> N =:= infinity orelse boids_vec:is_size(N).
 
 %% --- One step ---------------------------------------------------------
 
@@ -375,7 +391,11 @@ apply_rule(wander, Opts, B = #{pos := Pos, memory := Memory}, _Ns, Env) ->
     Force = boids_steer:wander(B, Point, maps:get(distance, Opts, 2.0), maps:get(radius, Opts, 1.0)),
     {Force, B#{memory := Memory#{wander => Point}}};
 apply_rule(avoid, Opts, B = #{pos := Pos, vel := Vel, perception := Perception}, _Ns, Env) ->
-    Obstacles = [O#{pos := seen_at(Env, Pos, At)} || O = #{pos := At} <- maps:get(obstacles, Env, [])],
+    %% A boid does not see an obstacle with a center of another size.
+    Obstacles = [
+        O#{pos := seen_at(Env, Pos, At)}
+     || O = #{pos := At} <- maps:get(obstacles, Env, []), tuple_size(At) =:= tuple_size(Pos)
+    ],
     Ahead = boids_vec:norm(Vel) * maps:get(lookahead, Opts, 1.0),
     {boids_steer:avoid(B, Obstacles, Ahead, maps:get(clearance, Opts, Perception / 10)), B};
 apply_rule(contain, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Env) ->

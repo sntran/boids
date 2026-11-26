@@ -81,6 +81,12 @@ defmodule BoidsBoidTest do
             mass: 0,
             perception: -1,
             fov: -1,
+            pos: {1.0e200, 0},
+            vel: {0, -1.0e200},
+            max_speed: 1.0e200,
+            max_force: 1.0e200,
+            perception: 1.0e200,
+            mass: 1.0e200,
             max_neighbors: 0,
             max_neighbors: 1.5,
             combine: :mean,
@@ -163,6 +169,13 @@ defmodule BoidsBoidTest do
             {:follow, 1, path: [{0, 0}, :end]},
             {:follow, 1, path: {0, 0}},
             {:follow, 1, path: [{0, 0}], loop: :yes},
+            {:follow, 1, path: [{0, 0}, {1, 1, 1}]},
+            {:follow, 1, path: [{0, 0, 0}]},
+            {:seek, 1, target: {1, 2, 3}},
+            {:seek, 1, target: {1.0e200, 0}},
+            {:contain, 1, bounds: {{0, 0, 0}, {1, 1, 1}}},
+            {:contain, 1, bounds: {{0, 0}, {0, 1}}},
+            {:arrive, 1, target: {1, 2}, slow_radius: 1.0e200},
             {fn _, _ -> {0, 0} end, 1},
             {fn _, _, _ -> {0, 0} end, 1, radius: 1},
             {{:boids_vec, :zero}, 1},
@@ -171,6 +184,18 @@ defmodule BoidsBoidTest do
           ] do
         assert {:bad_option, {:rules, _}} = catch_error(boid(rules: [rule])), "#{inspect(rule)} is accepted"
       end
+    end
+  end
+
+  describe "options/1" do
+    test "checks each option alone" do
+      assert :boids_boid.options(vel: {0, 0, 1}, min_speed: 12, rules: [wander: 1]) ==
+               %{vel: {0, 0, 1}, min_speed: 12, rules: [{:wander, 1, %{}}]}
+
+      assert :boids_boid.options(%{}) == %{}
+      assert catch_error(:boids_boid.options(%{max_speed: -1})) == {:bad_option, {:max_speed, -1}}
+      assert catch_error(:boids_boid.options(%{wings: 2})) == {:bad_option, {:wings, 2}}
+      assert catch_error(:boids_boid.options(:fast)) == {:bad_option, :fast}
     end
   end
 
@@ -187,6 +212,16 @@ defmodule BoidsBoidTest do
       {_, moved} = :boids_boid.force(boid, [], %{dt: 0.1})
       assert %{wander: point} = moved.memory
       assert :boids_boid.update(moved, %{max_speed: 2}).memory == %{wander: point}
+    end
+
+    test "refuses a rule with a vector of another size" do
+      boid = boid(pos: {0, 0, 0})
+      rules = [{:seek, 1, target: {1, 2}}]
+
+      assert catch_error(:boids_boid.update(boid, %{rules: rules})) ==
+               {:bad_option, {:rules, {:seek, 1, %{target: {1, 2}}}}}
+
+      assert %{rules: [_]} = :boids_boid.update(boid, %{rules: [{:seek, 1, target: {1, 2, 3}}]})
     end
 
     test "refuses a bad option, the id and the memory" do
@@ -436,6 +471,11 @@ defmodule BoidsBoidTest do
                :boids_steer.avoid(body, obstacles, 20, 0)
 
       assert force({:avoid, 1}, opts, [], %{}) == {0.0, 0.0}
+    end
+
+    test "avoid does not see an obstacle with a center of another size" do
+      obstacles = [%{id: :rock, pos: {10, 0, 0}, radius: 2}]
+      assert force({:avoid, 1}, %{pos: {0, 1}, vel: {5, 0}}, [], %{obstacles: obstacles}) == {0.0, 0.0}
     end
 
     test "with wrap, avoid sees an obstacle across a side" do

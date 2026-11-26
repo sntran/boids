@@ -49,8 +49,8 @@ Init ==
 
 \* --- The processes -----------------------------------------------------
 
-\* A process starts for an id (boids:add/2, a restart by the supervisor,
-\* or boids:join/2), and asks the flock for the row.
+\* A process starts for an id (boids:add/2, or boids:join/2 in a process
+\* that its supervisor starts again), and asks the flock for the row.
 Start(p, i) ==
     /\ state[p] = "new"
     /\ state' = [state EXCEPT ![p] = "asked"]

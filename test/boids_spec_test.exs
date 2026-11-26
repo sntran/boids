@@ -50,6 +50,11 @@ defmodule BoidsSpecTest do
                Checker.check(@space, config(@space, "Gap"))
     end
 
+    test "a flock that removes only the copy of the row leaves a copy of a boid that stopped in a write" do
+      assert {:error, %{kind: :invariant, property: "Gone"}, _} =
+               Checker.check(@space, config(@space, "Leak"))
+    end
+
     test "a reader that keeps each copy finds a boid two times" do
       assert {:error, %{kind: :invariant, property: "OneTime"}, _} =
                Checker.check(@space, config(@space, "Twice"))

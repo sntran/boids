@@ -41,9 +41,10 @@ options(Opts) when is_list(Opts) ->
     end;
 options(Opts) when is_map(Opts) ->
     Space = boids_space:options(maps:remove(name, Opts)),
-    %% The defaults must make a boid.
+    %% Each default is good alone. The check of a boid sees them together,
+    %% with its own options.
     {_Server, Boid} = boids_server:options(maps:get(defaults, Space)),
-    _ = boids_boid:new(maps:merge(#{pos => {0, 0}}, Boid)),
+    _ = boids_boid:options(Boid),
     case Opts of
         #{name := Name} when is_atom(Name) -> Opts;
         #{name := {global, _}} -> Opts;

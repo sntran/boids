@@ -127,7 +127,7 @@ defmodule BoidsFlockSpecTest do
     ]
 
     {events, table} = run(acts, true)
-    assert Enum.count(events, &match?({:join, _, _, :ok}, &1)) >= 7
+    assert Enum.count(events, &match?({:join, _, _, :ok}, &1)) >= 6
     assert Enum.any?(events, &match?({:join, _, :a, {:error, {:exists, :a}}}, &1))
     assert Enum.any?(events, &match?({:down, _, _}, &1))
     assert Enum.any?(events, &match?({:leave, _, _}, &1))
@@ -135,13 +135,13 @@ defmodule BoidsFlockSpecTest do
     assert FlockSpec.replay(events, table, dir) == :ok
   end
 
-  test "a boid that starts again takes its row before or after the 'DOWN' of its last process", %{
+  test "a new boid with the id of a boid that stopped takes its row before or after its 'DOWN'", %{
     tmp_dir: dir
   } do
-    # The supervisor starts each boid again at once. It permits 10 in a second.
-    acts = Enum.flat_map(1..3, fn _ -> [add: :a, kill: :a, add: :b, kill: :b, kill: :a] end)
+    # Each add comes at once after a kill: its join and the 'DOWN' come in the two orders.
+    acts = Enum.flat_map(1..20, fn _ -> [add: :a, kill: :a, join: :b, kill: :b, add: :a, kill: :a] end)
     {events, table} = run(acts)
-    assert Enum.count(events, &match?({:down, _, _}, &1)) >= 3
+    assert Enum.count(events, &match?({:join, _, _, :ok}, &1)) >= 20
     assert FlockSpec.replay(events, table, dir) == :ok
   end
 

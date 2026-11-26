@@ -13,7 +13,8 @@ In this library, each boid is an Erlang process:
   force, moves, and writes its position. It sends no message to do this.
 - A process of your own can be a boid: a person, a vehicle or an animal
   of your program gets the rules of a boid with two function calls.
-- A boid that stops with an error starts again. The other boids continue.
+- A boid that stops with an error goes from its flock. The other boids
+  continue.
 - The library is Erlang code with no dependency. It uses only `kernel`
   and `stdlib`, from Erlang/OTP 27.
 
@@ -241,6 +242,20 @@ about 15 neighbors.
   `boids:snapshot/1` 10 ms.
 - Make `cell_size` near the `perception` of the boids. Keep the `data`
   of a boid small, because each neighbor gets a copy of it.
+
+## A boid that stops
+
+- A boid of `boids:add/2` that stops with an error does not start again:
+  the flock removes its row, and its id is free. A boid with an error at
+  each step would start again without end. `boids:whereis/2` gives the
+  process of a boid, for a monitor.
+- A process of yours that is a boid has the supervisor that you gave it.
+  When it starts again and calls `boids:join/2` with the same id, it
+  gets its row again, also before the flock saw the end of the old
+  process.
+- When the process of a flock stops with an error, all the flock stops.
+  A flock below a supervisor of yours starts again, with no boid.
+- Each number of an option is 1.0e100 at most.
 
 ## The limits
 

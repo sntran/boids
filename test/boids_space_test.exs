@@ -34,6 +34,9 @@ defmodule BoidsSpaceTest do
             cell_size: 0,
             cell_size: :big,
             bounds: {{0, 0}, {0, 10}},
+            bounds: {{0, 0}, {10, 1.0e200}},
+            bounds: :box,
+            cell_size: 1.0e200,
             bounds: {{0, 0}, {10, 10, 10}},
             bounds: {{:a, :b}, {:c, :d}},
             bounds: {{0, 0, 0}, {10, 10, 0}},
@@ -129,6 +132,26 @@ defmodule BoidsSpaceTest do
       assert :ets.tab2list(space.grid) == []
     end
 
+    test "remove/2 removes the copies of a boid that stopped in the middle of a write", %{space: space} do
+      new = %{id: :a, pos: {55, 5}, vel: {1, 0}, group: :default, data: nil}
+      old = {{0, 0}, :a, {1, 2}, {0.0, 0.0}, :default, :undefined}
+      # The process stopped after the write of the row.
+      :boids_space.insert_new(space, entry(:a, {1, 2}))
+      assert :boids_space.put(space, new)
+      [copy] = :ets.tab2list(space.grid)
+      :ets.delete_object(space.grid, copy)
+      :ets.insert(space.grid, old)
+      assert :boids_space.remove(space, :a) == :ok
+      assert :ets.tab2list(space.grid) == []
+      # The process stopped after the write of the new copy.
+      :boids_space.insert_new(space, entry(:a, {1, 2}))
+      assert :boids_space.put(space, new)
+      :ets.insert(space.grid, old)
+      assert :boids_space.remove(space, :a) == :ok
+      assert :ets.tab2list(space.grid) == []
+      assert :ets.tab2list(space.rows) == []
+    end
+
     test "remove/2 removes the row and its cell", %{space: space} do
       :boids_space.insert_new(space, entry(:a, {1, 2}))
       :boids_space.insert_new(space, entry(:b, {1, 3}))
@@ -198,6 +221,27 @@ defmodule BoidsSpaceTest do
       free = :boids_space.new(%{})
       :boids_space.insert_new(free, entry(:a, {1, 1, 29}))
       assert [%{id: :a, pos: {1, 1, 29}, offset: {0, 0, 3}}] = :boids_space.near(free, {1, 1, 26}, 5)
+    end
+
+    test "the ids 1 and 1.0 are two boids" do
+      space = :boids_space.new(%{})
+      :boids_space.insert_new(space, entry(1, {1, 1}))
+      :boids_space.insert_new(space, entry(1.0, {2, 2}))
+      assert [%{id: 1, pos: {1, 1}}, %{id: 1.0, pos: {2, 2}}] = :boids_space.near(space, {0, 0}, 5)
+    end
+
+    test "with wrap, a point at a side of the box is in a cell that a reader reads" do
+      # The precision gives a number a little less than the minimum.
+      space = :boids_space.new(%{bounds: {{0.1, 0.1}, {100.1, 100.1}}, wrap: true})
+      :boids_space.insert_new(space, entry(:a, {100.1, 50}))
+      assert [%{id: :a}] = :boids_space.near(space, {0.5, 50}, 1.0)
+      assert [%{id: :a}] = :boids_space.near(space, {99.9, 50}, 1.0)
+      # A point very near the maximum is at the width of the box for the precision.
+      space = :boids_space.new(%{bounds: {{-100, -100}, {0, 0}}, wrap: true})
+      :boids_space.insert_new(space, entry(:b, {-1.0e-20, -50}))
+      assert :ets.tab2list(space.grid) |> hd() |> elem(0) == {9, 5}
+      assert [%{id: :b, dist: 0.5}] = :boids_space.near(space, {-99.5, -50}, 1.0)
+      assert [%{id: :b, dist: 0.5}] = :boids_space.near(space, {-0.5, -50}, 1.0)
     end
 
     test "boids at the same distance are in the order of their ids" do
@@ -332,9 +376,20 @@ defmodule BoidsSpaceTest do
     end
 
     test "set_obstacle/4 refuses a bad obstacle", %{space: space} do
-      assert_raise FunctionClauseError, fn -> :boids_space.set_obstacle(space, :rock, {10, 10}, -1) end
-      assert_raise FunctionClauseError, fn -> :boids_space.set_obstacle(space, :rock, :here, 1) end
-      assert_raise FunctionClauseError, fn -> :boids_space.set_obstacle(space, :rock, {1}, 1) end
+      for {pos, radius} <- [
+            {{10, 10}, -1},
+            {{10, 10}, :big},
+            {{10, 10}, 1.0e200},
+            {:here, 1},
+            {{1}, 1},
+            {{:a, :b}, 1},
+            {{1.0e200, 0}, 1},
+            {{10, 10, 10}, 1}
+          ] do
+        assert_raise ArgumentError, fn -> :boids_space.set_obstacle(space, :rock, pos, radius) end
+      end
+
+      assert :boids_space.obstacles(space) == []
     end
 
     test "set_time_scale/2 sets the scale of the time", %{space: space} do
@@ -343,6 +398,7 @@ defmodule BoidsSpaceTest do
       assert :boids_space.set_time_scale(space, 86_400.0) == :ok
       assert :boids_space.env(space).time_scale == 86_400.0
       assert_raise FunctionClauseError, fn -> :boids_space.set_time_scale(space, -1) end
+      assert_raise FunctionClauseError, fn -> :boids_space.set_time_scale(space, 1.0e200) end
     end
   end
 

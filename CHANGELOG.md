@@ -23,3 +23,5 @@ The first version.
   in two parts. The tests check the models and the fault models with the
   native checker of Accord, and replay a real flock process against
   `specs/Flock.tla`.
+- A boid of `boids:add/2` that stops with an error does not start again,
+  so a boid with an error at each step cannot stop its flock.

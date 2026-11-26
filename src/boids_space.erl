@@ -61,12 +61,17 @@ can be out of the box.
     time_scale := number()
 }.
 
-%% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Server}. Server is true
-%% when the process of the boid is a boids_server.
+%% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Server, Last}. Server is
+%% true when the process of the boid is a boids_server.
 %%
 %% The grid has a copy of the row in the cell of its position:
 %% {Cell, Id, Pos, Vel, Group, Data}. One read of a cell gives all its
 %% boids, with no read of their rows.
+%%
+%% A write changes the row, adds the new copy, then removes the old copy
+%% (specs/Space.tla). Last is that old copy, or none: when the process
+%% of a boid stops in the middle of a write, the removal of its row
+%% finds the two copies.
 
 -doc """
 Make a space. The process that calls this function is the owner of the
@@ -106,13 +111,15 @@ options(Opts) when is_map(Opts) ->
 options(Opts) ->
     error({bad_option, Opts}).
 
-check(cell_size, Size) when is_number(Size), Size > 0 -> ok;
-check(bounds, undefined) -> ok;
-check(bounds, {{X1, Y1}, {X2, Y2}}) when is_number(X1 + Y1 + X2 + Y2), X1 < X2, Y1 < Y2 -> ok;
-check(bounds, {{X1, Y1, Z1}, {X2, Y2, Z2}}) when is_number(X1 + Y1 + Z1 + X2 + Y2 + Z2), X1 < X2, Y1 < Y2, Z1 < Z2 -> ok;
-check(wrap, Wrap) when is_boolean(Wrap) -> ok;
-check(defaults, Defaults) when is_map(Defaults) -> ok;
-check(Key, Value) -> error({bad_option, {Key, Value}}).
+check(Key, Value) ->
+    ok(Key, Value) orelse error({bad_option, {Key, Value}}).
+
+ok(cell_size, Size) -> boids_vec:is_size(Size) andalso Size > 0;
+ok(bounds, undefined) -> true;
+ok(bounds, {Min, Max}) -> boids_vec:is_box(Min, Max);
+ok(wrap, Wrap) -> is_boolean(Wrap);
+ok(defaults, Defaults) -> is_map(Defaults);
+ok(_, _) -> false.
 
 -doc "Delete the tables of a space. Only the owner can do this.".
 -spec delete(space()) -> ok.
@@ -136,17 +143,19 @@ not in the space. Only the process of the boid calls this function.
 -spec put(space(), entry() | boids_boid:boid()) -> boolean().
 put(Space = #{rows := Rows, grid := Grid}, #{id := Id, pos := Pos, vel := Vel, group := Group, data := Data}) ->
     case ets:lookup(Rows, Id) of
-        [Old = {_, _, _, _, _, _, Pid, Server}] ->
-            case {Id, Pos, Vel, Group, Data, cell(Space, Pos), Pid, Server} of
+        [Row = {_, _, _, _, _, _, Pid, Server, _}] ->
+            Old = spot(Row),
+            Cell = cell(Space, Pos),
+            case {Cell, Id, Pos, Vel, Group, Data} of
                 Old ->
                     true;
                 New ->
                     %% The new copy comes before the removal of the old
                     %% copy, so a reader always finds the boid in its cell
                     %% (specs/Space.tla, InsertFirst).
-                    ets:insert(Rows, New),
-                    ets:insert(Grid, spot(New)),
-                    ets:delete_object(Grid, spot(Old))
+                    ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Server, Old}),
+                    ets:insert(Grid, New),
+                    ets:delete_object(Grid, Old)
             end;
         [] ->
             false
@@ -159,8 +168,15 @@ or another process after the end of that process.
 -spec remove(space(), term()) -> ok.
 remove(#{rows := Rows, grid := Grid}, Id) ->
     case ets:take(Rows, Id) of
-        [Row] -> ets:delete_object(Grid, spot(Row));
-        [] -> true
+        [Row] ->
+            %% The process of the boid can stop in the middle of a write:
+            %% the grid then has the copy before the write
+            %% (specs/Space.tla, RemoveLast).
+            ets:delete_object(Grid, spot(Row)),
+            Last = element(tuple_size(Row), Row),
+            Last =/= none andalso ets:delete_object(Grid, Last);
+        [] ->
+            true
     end,
     ok.
 
@@ -178,7 +194,7 @@ The process of a boid, when that process is a `boids_server`.
 -spec server(space(), term()) -> {ok, pid()} | error.
 server(#{rows := Rows}, Id) ->
     case ets:lookup(Rows, Id) of
-        [{_, _, _, _, _, _, Pid, true}] -> {ok, Pid};
+        [{_, _, _, _, _, _, Pid, true, _}] -> {ok, Pid};
         _ -> error
     end.
 
@@ -226,9 +242,11 @@ near(Space = #{rows := Rows, grid := Grid}, Pos, Radius) when is_number(Radius),
                 lists:foldl(fun(Cell, Acc) -> within(ets:lookup(Grid, Cell), Pos, Widths, Limit, Acc) end, [], Cells)
         end,
     %% A boid that writes its row during the read can have two copies in
-    %% the grid: keep one of the two (specs/Space.tla, Dedupe). Then the
-    %% nearest comes first.
-    [neighbor(Widths, Pos, Near) || Near <- lists:sort(lists:ukeysort(2, Found))].
+    %% the grid: keep one of the two (specs/Space.tla, Dedupe). The keys
+    %% of a map are exact, as the keys of the table: 1 and 1.0 are two
+    %% ids. Then the nearest comes first.
+    One = maps:values(#{element(2, Near) => Near || Near <- Found}),
+    [neighbor(Widths, Pos, Near) || Near <- lists:sort(One)].
 
 %% The sizes of the box when its sides continue, or none.
 widths(#{wrap := true, bounds := {Min, Max}}) -> boids_vec:sub(Max, Min);
@@ -315,16 +333,17 @@ obstacles(#{meta := Meta}) ->
 -doc """
 Add an obstacle, or change it: a circle (a sphere in 3D) with the center
 `Pos`. Each process can call this function, so an obstacle can move.
-A center that does not have the size of the vectors of the space gives
-the error `badarg`.
+A center that is not a vector, or that does not have the size of the
+vectors of the space, gives the error `badarg`. So does a radius that is
+not a number of 0 or more.
 """.
 -spec set_obstacle(space(), term(), vec(), number()) -> ok.
-set_obstacle(Space = #{meta := Meta}, Id, Pos, Radius) when is_tuple(Pos), is_number(Radius), Radius >= 0 ->
-    Size = boids_vec:dim(Pos),
-    case dim(Space) of
-        Other when Other =/= undefined, Other =/= Size -> error(badarg);
-        _ -> ok
-    end,
+set_obstacle(Space = #{meta := Meta}, Id, Pos, Radius) ->
+    Size = dim(Space),
+    Good =
+        boids_vec:is_vec(Pos) andalso boids_vec:is_size(Radius) andalso
+            (Size =:= undefined orelse Size =:= tuple_size(Pos)),
+    Good orelse error(badarg),
     ets:insert(Meta, {{obstacle, Id}, Pos, Radius}),
     ok.
 
@@ -339,7 +358,7 @@ Set the scale of the time: the seconds of the boids for each second of
 the caller. With 0, the boids stop. The default is 1.0.
 """.
 -spec set_time_scale(space(), number()) -> ok.
-set_time_scale(#{meta := Meta}, Scale) when is_number(Scale), Scale >= 0 ->
+set_time_scale(#{meta := Meta}, Scale) when is_number(Scale), Scale >= 0, Scale =< 1.0e100 ->
     ets:insert(Meta, {time_scale, Scale}),
     ok.
 
@@ -349,23 +368,24 @@ row(Space, #{id := Id, pos := Pos, vel := Vel} = Entry) ->
     Group = maps:get(group, Entry, default),
     Data = maps:get(data, Entry, undefined),
     Pid = maps:get(pid, Entry, undefined),
-    {Id, Pos, Vel, Group, Data, cell(Space, Pos), Pid, maps:get(server, Entry, false)}.
+    {Id, Pos, Vel, Group, Data, cell(Space, Pos), Pid, maps:get(server, Entry, false), none}.
 
-entry({Id, Pos, Vel, Group, Data, _Cell, Pid, _Server}) ->
+entry({Id, Pos, Vel, Group, Data, _Cell, Pid, _Server, _Last}) ->
     #{id => Id, pos => Pos, vel => Vel, group => Group, data => Data, pid => Pid}.
 
-spot({Id, Pos, Vel, Group, Data, Cell, _Pid, _Server}) ->
+spot({Id, Pos, Vel, Group, Data, Cell, _Pid, _Server, _Last}) ->
     {Cell, Id, Pos, Vel, Group, Data}.
 
 %% The cell of a point. With wrap, the cells start at the minimum of the
 %% box, and a point out of the box is in the cell of its point in the box.
 cell(#{wrap := true, bounds := {Min, Max}, cell_size := Size}, Pos) ->
-    cell1(boids_vec:sub(boids_vec:wrap(Pos, Min, Max), Min), Size);
+    At = tuple_to_list(boids_vec:sub(boids_vec:wrap(Pos, Min, Max), Min)),
+    Box = tuple_to_list(boids_vec:sub(Max, Min)),
+    %% A point very near the maximum can be at the width of the box,
+    %% because of the precision: it is in the last cell.
+    list_to_tuple([min(floor(X / Size), ceil(Width / Size) - 1) || {X, Width} <- lists:zip(At, Box)]);
 cell(#{cell_size := Size}, Pos) ->
-    cell1(Pos, Size).
-
-cell1({X, Y}, Size) -> {floor(X / Size), floor(Y / Size)};
-cell1({X, Y, Z}, Size) -> {floor(X / Size), floor(Y / Size), floor(Z / Size)}.
+    list_to_tuple([floor(X / Size) || X <- tuple_to_list(Pos)]).
 
 %% The cells that the ball of Radius at Pos touches, or all when a read
 %% of all the rows costs less than a read of these cells.
