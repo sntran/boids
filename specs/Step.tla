@@ -1,6 +1,6 @@
 ---- MODULE Step ----
 (***************************************************************************)
-(* One step of all the boids of a flock (boids:step/2, gen_boid).        *)
+(* One step of all the boids of a flock (boids:step/2, gen_boid).         *)
 (* The caller asks each boid for its plan: the boid reads the flock and   *)
 (* calculates its new position, but it does not move. When each boid      *)
 (* answered, the caller asks each boid to move (commit). Thus each boid   *)
