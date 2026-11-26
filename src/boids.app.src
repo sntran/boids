@@ -1,0 +1,9 @@
+{application, boids, [
+    {description, "Boids: flocks of Erlang processes with steering rules"},
+    {vsn, "0.1.0"},
+    {registered, [boids_sup]},
+    {mod, {boids_app, []}},
+    {applications, [kernel, stdlib]},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.
