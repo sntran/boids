@@ -96,14 +96,20 @@ jobs:
     timeout-minutes: 30
     env:
       MIX_ENV: test
+      # A fixed build of beam.com with Hex and rebar3: the kept file of
+      # the build URL https://mkfifo.com/beam.com?hex=1&rebar3=1&debug_info=1&apps+=eunit,dialyzer,edoc
+      # (docs/BUILDING.md of BEAM.com, "A fixed version of a build").
+      BEAM_COM_SHA256: c3b6f8fd0f4ecbc3e1ec30a159218f45b566d844820c64135aacb50d4a57e1d2
+      BEAM_COM_RELEASE: https://github.com/sntran/BEAM.com/releases/download/kept-202611
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # The build URL gives the file, or builds it first: curl asks again
-      # until the file is ready.
+      # Mix runs mix.com as a program: an ELF copy of beam.com
+      # (--assimilate) is that program on the runner.
       - name: Get beam.com with Hex and rebar3
         run: |
           mkdir -p "$RUNNER_TEMP/tools"
-          curl --retry 40 -fsS -o "$RUNNER_TEMP/tools/beam.com" 'https://mkfifo.com/beam.com?hex=1&rebar3=1'
+          curl --retry 5 -fsSL -o "$RUNNER_TEMP/tools/beam.com" "$BEAM_COM_RELEASE/beam-$BEAM_COM_SHA256.com"
+          echo "$BEAM_COM_SHA256  $RUNNER_TEMP/tools/beam.com" | sha256sum -c -
           sh "$RUNNER_TEMP/tools/beam.com" --assimilate
           chmod +x "$RUNNER_TEMP/tools/beam.com"
           ln -sf "$RUNNER_TEMP/tools/beam.com" "$RUNNER_TEMP/tools/mix.com"
