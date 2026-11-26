@@ -1,0 +1,115 @@
+name: CI
+
+# One run for each push to a branch. A pull request from a fork runs too:
+# a pull request from a branch of this repository has the run of its push.
+on:
+  push:
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The tests on each supported Erlang/OTP, with the oldest Elixir that
+  # has it. The tests are ExUnit tests of the Erlang code, the model
+  # checks of specs/ and the replay of the flock (docs/specs.md).
+  test:
+    name: Tests (OTP ${{ matrix.otp }}, Elixir ${{ matrix.elixir }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - otp: "27"
+            elixir: "1.19"
+          - otp: "28"
+            elixir: "1.19"
+          - otp: "29"
+            elixir: "1.20"
+            latest: true
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('mix.lock') }}
+      - name: Get the dependencies
+        run: mix deps.get
+      - name: Check the format
+        if: matrix.latest
+        run: mix format --check-formatted
+      # The tests must cover all the lines of the Erlang code.
+      - name: Run the tests
+        run: mix test --cover
+
+  # The build of a rebar3 project, as an Erlang user has it, with the
+  # checks of rebar3: calls to functions that do not exist (xref), and
+  # the types (dialyzer).
+  rebar3:
+    name: rebar3 (compile, xref, dialyzer)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: "29"
+          rebar3-version: "3"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/rebar3
+          key: rebar3-plt-${{ steps.beam.outputs.otp-version }}
+      - run: rebar3 compile
+      - run: rebar3 xref
+      - run: rebar3 dialyzer
+
+  # The tests with beam.com as the only tool: Erlang/OTP, Elixir, Mix, Hex
+  # and rebar3 in one file (https://github.com/sntran/BEAM.com).
+  beam-com:
+    name: Tests (beam.com)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The build URL gives the file, or builds it first: curl asks again
+      # until the file is ready.
+      - name: Get beam.com with Hex and rebar3
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools"
+          curl --retry 40 -fsS -o "$RUNNER_TEMP/tools/beam.com" 'https://mkfifo.com/beam.com?hex=1&rebar3=1'
+          sh "$RUNNER_TEMP/tools/beam.com" --assimilate
+          chmod +x "$RUNNER_TEMP/tools/beam.com"
+          ln -sf "$RUNNER_TEMP/tools/beam.com" "$RUNNER_TEMP/tools/mix.com"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/tools/beam.com" --version
+      - name: Get the dependencies
+        run: mix.com deps.get
+      - name: Run the tests
+        run: mix.com test --cover
