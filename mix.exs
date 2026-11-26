@@ -11,10 +11,13 @@ defmodule Boids.MixProject do
               to_string(props[:vsn])
             end).()
 
+  @source_url "https://github.com/sntran/boids"
+
   def project do
     [
       app: :boids,
       version: @version,
+      source_url: @source_url,
       language: :erlang,
       erlc_options: [:debug_info, :warnings_as_errors],
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -22,7 +25,11 @@ defmodule Boids.MixProject do
       test_coverage: [summary: [threshold: 100], ignore_modules: [Boids.FlockSpec]],
       description: "Boids: flocks of Erlang processes with steering rules",
       package: package(),
-      docs: [main: "readme", extras: ["README.md", "docs/specs.md", "CHANGELOG.md", "LICENSE"]]
+      docs: [
+        main: "readme",
+        source_ref: "v#{@version}",
+        extras: ["README.md", "docs/specs.md", "CHANGELOG.md", "LICENSE"]
+      ]
     ]
   end
 
@@ -52,7 +59,7 @@ defmodule Boids.MixProject do
   defp package do
     [
       licenses: ["Apache-2.0"],
-      links: %{},
+      links: %{"GitHub" => @source_url},
       files: ~w(src rebar.config mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end

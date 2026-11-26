@@ -2,5 +2,7 @@
 /deps/
 /doc/
 /cover/
+# The directories of the tmp_dir tag of ExUnit.
+/tmp/
 erl_crash.dump
 *.beam
