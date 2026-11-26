@@ -175,13 +175,9 @@ monitor.
 -spec add(flock(), options()) -> {ok, term()} | {error, term()}.
 add(Flock, Opts0) ->
     Space = #{defaults := Defaults} = space(Flock),
-    try
-        Opts = maps:merge(Defaults, to_map(Opts0)),
-        {_Server, BoidOpts} = boids_server:options(Opts),
-        _ = boids_boid:new(BoidOpts),
-        Opts
-    of
-        Checked -> start(Space, boids_flock:boid_sup(Space), Checked)
+    try boids_boid:to_map(Opts0) of
+        %% The process of the boid checks the options.
+        Opts -> start(Space, boids_flock:boid_sup(Space), maps:merge(Defaults, Opts))
     catch
         error:{bad_option, _} = Reason -> {error, Reason}
     end.
@@ -205,7 +201,7 @@ and its `max_speed`. With `seed`, the boid number N gets the seed
 populate(Flock, Count, Opts0) when is_integer(Count), Count >= 0 ->
     Space = #{defaults := Defaults, bounds := Bounds} = space(Flock),
     try
-        Opts = to_map(Opts0),
+        Opts = boids_boid:to_map(Opts0),
         Area = {Min, _} = area(maps:get(area, Opts, Bounds)),
         Template = maps:without([area, id], maps:merge(Defaults, Opts)),
         {_Server, BoidOpts} = boids_server:options(Template),
@@ -249,15 +245,20 @@ random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}) ->
 
 -doc """
 Remove a boid of `add/2` from its flock: stop its process. For an id
-that is not such a boid, the result is `{error, not_found}`.
+that is not such a boid, the result is `{error, not_found}`: a process
+of yours with `join/2`, or a boid below a supervisor of yours
+(`boids_server:start_link/2`).
 """.
 -spec remove(flock(), term()) -> ok | {error, not_found}.
 remove(Flock, Id) ->
     Space = space(Flock),
     case boids_space:server(Space, Id) of
         {ok, Pid} ->
-            _ = supervisor:terminate_child(boids_flock:boid_sup(Space), Pid),
-            boids_flock:leave(Space, Id, Pid);
+            %% A boid below a supervisor of the user is not a child here.
+            case supervisor:terminate_child(boids_flock:boid_sup(Space), Pid) of
+                ok -> boids_flock:leave(Space, Id, Pid);
+                {error, not_found} -> {error, not_found}
+            end;
         error ->
             {error, not_found}
     end.
@@ -362,14 +363,14 @@ set_time_scale(Flock, Scale) ->
 %% --- The time ---------------------------------------------------------
 
 -doc """
-Make one step of `Dt` seconds for all the boids of `add/2`. First each
-boid calculates its step, and the flock does not change. Then each boid
-moves. The function returns after the two parts.
+Make one step of `Dt` seconds for all the boids that have a process of
+the library: those of `add/2` and of `boids_server:start_link/2`. First
+each boid calculates its step, and the flock does not change. Then each
+boid moves. The function returns after the two parts.
 """.
 -spec step(flock(), number()) -> ok.
 step(Flock, Dt) when is_number(Dt), Dt >= 0 ->
-    Sup = boids_flock:boid_sup(space(Flock)),
-    Pids = [Pid || {_, Pid, _, _} <- supervisor:which_children(Sup), is_pid(Pid)],
+    Pids = boids_space:servers(space(Flock)),
     request(Pids, {plan, Dt}),
     request(Pids, commit).
 
@@ -406,7 +407,7 @@ handle_info(tick, {Space, Boid}) ->
 join(Flock, Opts0) ->
     Space = #{defaults := Defaults} = space(Flock),
     try
-        {_Server, BoidOpts} = boids_server:options(maps:merge(Defaults, to_map(Opts0))),
+        {_Server, BoidOpts} = boids_server:options(maps:merge(Defaults, boids_boid:to_map(Opts0))),
         boids_boid:new(maps:merge(#{id => self()}, BoidOpts))
     of
         Boid ->
@@ -452,12 +453,3 @@ advance(Space, Boid0, Dt) ->
 -spec leave(boids_space:space(), boids_boid:boid()) -> ok.
 leave(Space, #{id := Id}) ->
     boids_flock:leave(Space, Id, self()).
-
-to_map(Opts) when is_map(Opts) -> Opts;
-to_map(Opts) when is_list(Opts) ->
-    try
-        maps:from_list(Opts)
-    catch
-        error:badarg -> error({bad_option, Opts})
-    end;
-to_map(Opts) -> error({bad_option, Opts}).

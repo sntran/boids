@@ -78,7 +78,7 @@ multiplied by its weight, with the length `max_force` at most. With
 `max_force`, and the last rules get what stays. Put `avoid` first there.
 """.
 
--export([new/1, update/2, options/1, entry/1]).
+-export([new/1, update/2, options/1, entry/1, to_map/1]).
 -export([perceive/2, force/3, integrate/4, step/4]).
 
 -export_type([boid/0, rule/0, target/0, env/0]).
@@ -190,6 +190,7 @@ options(Opts) ->
 entry(Boid) ->
     maps:with([id, pos, vel, group, data], Boid).
 
+-doc false.
 to_map(Opts) when is_map(Opts) -> Opts;
 to_map(Opts) when is_list(Opts) ->
     try

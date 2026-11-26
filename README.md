@@ -284,14 +284,28 @@ about 15 neighbors.
 
 ## A boid that stops
 
-- A boid of `boids:add/2` that stops with an error does not start again:
-  the flock removes its row, and its id is free. A boid with an error at
-  each step would start again without end. `boids:whereis/2` gives the
-  process of a boid, for a monitor.
+- The flock is the supervisor of the boids of `boids:add/2`: they stop
+  with it. It does not start a boid again after an error: the flock
+  removes the row of the boid, and its id is free. A boid with an error
+  at each step would start again without end. `boids:whereis/2` gives
+  the process of a boid, for a monitor.
+- For a boid that starts again, put it below a supervisor of yours, with
+  its `id`. The supervisor has the limit of the restarts that you give
+  it:
+
+  ```erlang
+  {ok, {#{strategy => rest_for_one}, [
+      boids:child_spec(#{name => my_flock}),
+      boids_server:child_spec({my_flock, #{id => hawk, pos => {0, 0}}})
+  ]}}
+  ```
+
 - A process of yours that is a boid has the supervisor that you gave it.
   When it starts again and calls `boids:join/2` with the same id, it
   gets its row again, also before the flock saw the end of the old
   process.
+- Each process of a flock and of a boid has a label (`proc_lib`), so
+  the observer and a crash report show which boid a process is.
 - When the process of a flock stops with an error, all the flock stops.
   A flock below a supervisor of yours starts again, with no boid.
 - Each number of an option is 1.0e100 at most.

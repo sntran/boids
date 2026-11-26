@@ -23,9 +23,9 @@ or as a child of your supervisor with `boids:child_spec/1`.
 start_link(Sup, Opts0) ->
     Opts = options(Opts0),
     case maps:take(name, Opts) of
-        {Name, Rest} when is_atom(Name) -> gen_server:start_link({local, Name}, ?MODULE, {Sup, Rest}, []);
-        {Name, Rest} -> gen_server:start_link(Name, ?MODULE, {Sup, Rest}, []);
-        error -> gen_server:start_link(?MODULE, {Sup, Opts}, [])
+        {Name, Rest} when is_atom(Name) -> gen_server:start_link({local, Name}, ?MODULE, {Sup, Rest, Name}, []);
+        {Name, Rest} -> gen_server:start_link(Name, ?MODULE, {Sup, Rest, Name}, []);
+        error -> gen_server:start_link(?MODULE, {Sup, Opts, undefined}, [])
     end.
 
 -doc """
@@ -89,7 +89,9 @@ leave(#{owner := Flock}, Id, Pid) ->
 %% --- gen_server -------------------------------------------------------
 
 -doc false.
-init({Sup, Opts}) ->
+init({Sup, Opts, Name}) ->
+    %% The tools that show processes show that this process is a flock.
+    proc_lib:set_label({boids, flock, Name}),
     %% The boids of a flock that has too much work run all the time. The
     %% flock must answer then too.
     process_flag(priority, high),

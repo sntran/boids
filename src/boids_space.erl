@@ -19,7 +19,7 @@ can be out of the box.
 
 -export([new/1, options/1, delete/1]).
 -export([insert_new/2, put/2, remove/2]).
--export([lookup/2, server/2, near/3, all/1, count/1, dim/1, offset/3]).
+-export([lookup/2, server/2, servers/1, near/3, all/1, count/1, dim/1, offset/3]).
 -export([env/1, obstacles/1, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
 
 -export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0]).
@@ -197,6 +197,11 @@ server(#{rows := Rows}, Id) ->
         [{_, _, _, _, _, _, Pid, true, _}] -> {ok, Pid};
         _ -> error
     end.
+
+-doc "The processes of the boids whose process is a `boids_server`.".
+-spec servers(space()) -> [pid()].
+servers(#{rows := Rows}) ->
+    ets:select(Rows, [{{'_', '_', '_', '_', '_', '_', '$1', true, '_'}, [], ['$1']}]).
 
 -doc "All the rows. The order is not specified.".
 -spec all(space()) -> [entry()].

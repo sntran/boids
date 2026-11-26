@@ -26,3 +26,6 @@ The first version.
   `specs/Flock.tla`.
 - A boid of `boids:add/2` that stops with an error does not start again,
   so a boid with an error at each step cannot stop its flock.
+- A boid can be a child of a supervisor of yours, which starts it again
+  with its id (`boids_server:start_link/2`, `boids_server:child_spec/1`).
+- The processes of a flock and of a boid have a label.

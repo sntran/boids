@@ -7,8 +7,12 @@ neighbors from the space of its flock, calculates the force of its
 rules, moves, and writes its new row. It does this without a message to
 another process.
 
-`boids:add/2` starts such a process. Its options are the options of a
-boid (see `boids_boid`), and these:
+`boids:add/2` starts such a process below the supervisor of the flock.
+That supervisor does not start a boid again after an error. For a boid
+that starts again, use `start_link/2` or `child_spec/1` below a
+supervisor of yours.
+
+The options are the options of a boid (see `boids_boid`), and these:
 
 | Option | Default | Description |
 |---|---|---|
@@ -43,16 +47,44 @@ about 10 % faster.
 """.
 -behavior(gen_server).
 
--export([start_link/2, options/1]).
+-export([start_link/2, child_spec/1, options/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -define(KEYS, [tick, max_dt, seed, priority, hibernate]).
 
--doc false.
-start_link(Space, Opts) ->
+-doc """
+Start the process of a boid in a flock, with a link to the caller. The
+options are those of `boids:add/2`, on top of the `defaults` of the
+flock. Give an `id`, so that a process that starts again is the same
+boid.
+
+A bad option gives `{error, {shutdown, {bad_option, {Key, Value}}}}`,
+and an id that is in the flock `{error, {shutdown, {exists, Id}}}`.
+""".
+-spec start_link(boids:flock(), boids:options()) -> {ok, pid()} | {error, term()}.
+start_link(Flock, Opts) ->
     %% The start has a high priority: a flock with too much work must not
     %% make its caller wait.
-    gen_server:start_link(?MODULE, {Space, Opts}, [{spawn_opt, [{priority, high}]}]).
+    gen_server:start_link(?MODULE, {Flock, Opts}, [{spawn_opt, [{priority, high}]}]).
+
+-doc """
+The specification of a boid as a child of a supervisor of yours, from
+`{Flock, Options}`. Give the name of the flock, and not its pid, so that
+the boid finds a flock that started again.
+
+```erlang
+{ok, {#{strategy => rest_for_one}, [
+    boids:child_spec(#{name => my_flock}),
+    boids_server:child_spec({my_flock, #{id => hawk, pos => {0, 0}}})
+]}}
+```
+
+In Elixir, the child is `{:boids_server, {:my_flock, id: :hawk, pos: {0, 0}}}`.
+""".
+-spec child_spec({boids:flock(), boids:options()}) -> supervisor:child_spec().
+child_spec({Flock, Opts}) ->
+    Id = proplists:get_value(id, maps:to_list(boids_boid:to_map(Opts)), make_ref()),
+    #{id => {?MODULE, Id}, start => {?MODULE, start_link, [Flock, Opts]}}.
 
 -doc """
 Divide the options into those of the process and those of the boid.
@@ -81,13 +113,24 @@ check(Key, Value) -> error({bad_option, {Key, Value}}).
 %% --- gen_server -------------------------------------------------------
 
 -doc false.
-init({Space, Opts}) ->
-    {Server = #{tick := Tick, priority := Priority}, BoidOpts} = options(Opts),
+init({Flock, Opts}) ->
+    try
+        Space = #{defaults := Defaults} = boids:space(Flock),
+        {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
+        {Space, Server, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
+    of
+        {Space, Server, Boid} -> join(Space, Server, Boid)
+    catch
+        error:{bad_option, _} = Reason -> {stop, {shutdown, Reason}}
+    end.
+
+join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) ->
     case Server of
         #{seed := Seed} -> rand:seed(exsss, Seed);
         _ -> ok
     end,
-    Boid = boids_boid:new(maps:merge(#{id => self()}, BoidOpts)),
+    %% The tools that show processes show which boid this process is.
+    proc_lib:set_label({boids, boid, Id}),
     case boids_flock:join(Space, self(), (boids_boid:entry(Boid))#{server => true}) of
         ok ->
             %% The first tick comes after a random part of the period, so

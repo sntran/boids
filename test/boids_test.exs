@@ -55,6 +55,14 @@ defmodule BoidsTest do
       assert Process.info(id, :priority) == {:priority, :normal}
     end
 
+    test "the processes of a flock and of a boid have a label" do
+      flock = flock(name: :boids_test_label)
+      {:ok, :a} = :boids.add(flock, still(id: :a))
+      assert :proc_lib.get_label(flock) == {:boids, :flock, :boids_test_label}
+      assert :proc_lib.get_label(:boids.whereis(flock, :a)) == {:boids, :boid, :a}
+      assert :proc_lib.get_label(flock()) == {:boids, :flock, :undefined}
+    end
+
     test "accepts a list of options" do
       flock = flock(bounds: @box, wrap: true, cell_size: 5, defaults: %{max_speed: 3})
       assert %{bounds: @box, wrap: true, cell_size: 5, defaults: %{max_speed: 3}} = :boids.space(flock)
@@ -400,6 +408,86 @@ defmodule BoidsTest do
       GenServer.cast(flock, :hello)
       assert {:ok, %{pos: {0, 0}}} = :boids.boid(flock, id)
       assert :boids.count(flock) == 1
+    end
+  end
+
+  describe "a boid below a supervisor of yours" do
+    @describetag :capture_log
+
+    setup do
+      name = :"boids_test_own_#{System.unique_integer([:positive])}"
+
+      children = [
+        {:boids, name: name, defaults: %{tick: :manual, rules: []}},
+        {:boids_server, {name, id: :hawk, pos: {1, 1}, vel: {1, 0}}}
+      ]
+
+      start = {Supervisor, :start_link, [children, [strategy: :rest_for_one]]}
+      sup = start_supervised!(%{id: :own, start: start, type: :supervisor})
+      %{flock: name, sup: sup}
+    end
+
+    test "is a boid of the flock, with the defaults of the flock", %{flock: flock} do
+      assert {:ok, %{id: :hawk, pos: {1, 1}, rules: []}} = :boids.boid(flock, :hawk)
+      assert :boids.update(flock, :hawk, %{max_speed: 3}) == :ok
+      :boids.step(flock, 1)
+      assert pos(flock, :hawk) == {2.0, 1.0}
+    end
+
+    test "starts again with its id after an error", %{flock: flock} do
+      first = :boids.whereis(flock, :hawk)
+      :boids.step(flock, 1)
+      Process.exit(first, :kill)
+      assert eventually(fn -> :boids.whereis(flock, :hawk) not in [:undefined, first] end)
+      assert pos(flock, :hawk) == {1, 1}
+      assert :boids.count(flock) == 1
+    end
+
+    test "finds its flock again when the flock starts again", %{flock: flock} do
+      first = :boids.whereis(flock, :hawk)
+      Process.exit(Process.whereis(flock), :kill)
+
+      # The supervisor starts the flock again, then the boid.
+      again = fn ->
+        try do
+          :boids.whereis(flock, :hawk) not in [:undefined, first]
+        catch
+          :exit, _ -> false
+        end
+      end
+
+      assert eventually(again)
+    end
+
+    test "boids:remove/2 does not stop it", %{flock: flock} do
+      assert :boids.remove(flock, :hawk) == {:error, :not_found}
+      assert Process.alive?(:boids.whereis(flock, :hawk))
+      {:ok, other} = :boids.add(flock, pos: {5, 5})
+      assert :boids.remove(flock, other) == :ok
+      assert :boids.count(flock) == 1
+    end
+
+    test "the specification of the child has the id of the boid" do
+      assert %{id: {:boids_server, :hawk}, start: {:boids_server, :start_link, [:f, %{id: :hawk}]}} =
+               :boids_server.child_spec({:f, %{id: :hawk}})
+
+      assert %{id: {:boids_server, ref}} = :boids_server.child_spec({:f, pos: {0, 0}})
+      assert is_reference(ref)
+    end
+
+    test "start_link/2 refuses a bad option and an id of the flock", %{flock: flock} do
+      Process.flag(:trap_exit, true)
+
+      assert :boids_server.start_link(flock, pos: {0, 0}, mass: 0) ==
+               {:error, {:shutdown, {:bad_option, {:mass, 0}}}}
+
+      assert :boids_server.start_link(flock, :bird) == {:error, {:shutdown, {:bad_option, :bird}}}
+
+      assert :boids_server.start_link(flock, id: :hawk, pos: {0, 0}) ==
+               {:error, {:shutdown, {:exists, :hawk}}}
+
+      assert {:ok, pid} = :boids_server.start_link(flock, pos: {0, 0})
+      assert :boids.whereis(flock, pid) == pid
     end
   end
 
