@@ -331,7 +331,14 @@ mix format --check-formatted
 
 The tests must cover all the lines of the code. A change of a flow that
 has a specification changes the specification in the same commit
-(`docs/specs.md`). rebar3 builds the library too (`rebar3 compile`).
+(`docs/specs.md`).
+
+CI (`.github/workflows/ci.yml`) runs for each push:
+
+- the tests on Erlang/OTP 27, 28 and 29;
+- `rebar3 compile`, `rebar3 xref` and `rebar3 dialyzer`;
+- the tests with [beam.com](https://github.com/sntran/BEAM.com) as the
+  only tool.
 
 ## License
 
