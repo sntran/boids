@@ -7,12 +7,14 @@ near it. Many boids together move as a flock of birds, a school of fish
 or a crowd of people. Craig Reynolds described the model in 1987, and
 the steering rules in 1999.
 
-In this library, each boid is an Erlang process:
+In this library, each boid is an Erlang process with the behavior
+`gen_boid`:
 
 - A boid moves on its own clock. It reads its neighbors, calculates its
   force, moves, and writes its position. It sends no message to do this.
-- A process of your own can be a boid: a person, a vehicle or an animal
-  of your program gets the rules of a boid with two function calls.
+- A module of yours tells what a boid is, as a module tells what a
+  `gen_server` is: a person, a vehicle or an animal of your program
+  decides at each step, answers messages, and has its own state.
 - A boid that stops with an error goes from its flock. The other boids
   continue.
 - The library is Erlang code with no dependency. It uses only `kernel`
@@ -88,6 +90,80 @@ the terminal:
 ```sh
 mix run examples/terminal.exs
 ```
+
+## A boid with a behavior
+
+`gen_boid` is the behavior of a process that is a boid. Your module
+gives the options of the boid when it starts, decides at each step, and
+answers messages. The library does the other work.
+
+```erlang
+-module(hawk).
+-behavior(gen_boid).
+-export([init/1, handle_step/3, handle_call/4]).
+
+%% The boid starts: its options, and the state of this module.
+init(Pos) ->
+    {ok, #{pos => Pos, group => hawks, perception => 25, rules => [{wander, 1.0}]}, #{meals => 0}}.
+
+%% At each step, before the forces: the hawk hunts a bird that it sees.
+handle_step(_Boid, Neighbors, State = #{meals := Meals}) ->
+    case [N || N = #{group := birds} <- Neighbors] of
+        [] -> {ok, #{rules => [{wander, 1.0}]}, State};
+        [#{dist := Dist} | _] when Dist < 1 -> {ok, State#{meals := Meals + 1}};
+        [_ | _] -> {ok, #{rules => [{pursue, 1.0, #{target => {group, birds}}}]}, State}
+    end.
+
+handle_call(meals, _From, _Boid, State = #{meals := Meals}) ->
+    {reply, Meals, State}.
+```
+
+```erlang
+{ok, Hawk} = gen_boid:start(hawk, {50, 50}, #{flock => Flock}),
+0 = gen_boid:call(Hawk, meals).
+```
+
+The same in Elixir:
+
+```elixir
+defmodule Hawk do
+  @behaviour :gen_boid
+
+  def init(pos) do
+    {:ok, %{pos: pos, group: :hawks, perception: 25, rules: [wander: 1.0]}, %{meals: 0}}
+  end
+
+  def handle_step(_boid, neighbors, %{meals: meals} = state) do
+    case Enum.filter(neighbors, &(&1.group == :birds)) do
+      [] -> {:ok, %{rules: [wander: 1.0]}, state}
+      [%{dist: dist} | _] when dist < 1 -> {:ok, %{state | meals: meals + 1}}
+      [_ | _] -> {:ok, %{rules: [{:pursue, 1.0, %{target: {:group, :birds}}}]}, state}
+    end
+  end
+
+  def handle_call(:meals, _from, _boid, %{meals: meals} = state), do: {:reply, meals, state}
+end
+
+{:ok, hawk} = :gen_boid.start(Hawk, {50, 50}, flock: flock)
+0 = :gen_boid.call(hawk, :meals)
+```
+
+| Callback | When it runs |
+|---|---|
+| `init(Args)` | The boid starts. It gives the options of the boid and the state of the module. Only this callback is necessary. |
+| `handle_step(Boid, Neighbors, State)` | At each step, before the forces of the rules. It can change the options of the boid. |
+| `handle_call(Request, From, Boid, State)` | `gen_boid:call/2` sent a request. |
+| `handle_cast(Request, Boid, State)` | `gen_boid:cast/2` sent a request. |
+| `handle_info(Info, Boid, State)` | Another message came. |
+| `terminate(Reason, Boid, State)` | The process stops. |
+
+- `gen_boid:start/3` starts a boid below the supervisor of its flock.
+  `gen_boid:start_link/3` and `gen_boid:child_spec/1` are for a
+  supervisor of yours (see "A boid that stops").
+- A boid of `boids:add/2` and `boids:populate/3` is a `gen_boid` with no
+  module of yours: it has only its rules.
+- `handle_step/3` is for a decision: which rules the boid has now. A
+  force of your own is a rule (see "A rule of your own").
 
 ## The rules of a boid
 
@@ -170,8 +246,7 @@ In Elixir, the module has `@behaviour :boids_rule`.
 
 ## The time
 
-- A boid of `boids:add/2` makes a step each `tick` milliseconds (the
-  default is 50). The time of a step is the time that passed on the
+- A boid makes a step each `tick` milliseconds (the default is 50). The time of a step is the time that passed on the
   clock.
 - `boids:set_time_scale/2` makes the time of a flock faster or slower.
   With 0, the boids stop.
@@ -181,9 +256,10 @@ In Elixir, the module has `@behaviour :boids_rule`.
   the same result. Use it for a test, or for a simulation that is faster
   than the clock.
 
-## A process of yours as a boid
+## A process with another behavior as a boid
 
-A process of your program can be a boid of a flock. It calls `join/2`
+Use `gen_boid` for a new boid. A process that has another behavior, for
+example a `gen_statem`, can be a boid of a flock too. It calls `join/2`
 one time, and `advance/3` at each step:
 
 ```erlang
@@ -289,21 +365,21 @@ about 15 neighbors.
   removes the row of the boid, and its id is free. A boid with an error
   at each step would start again without end. `boids:whereis/2` gives
   the process of a boid, for a monitor.
-- For a boid that starts again, put it below a supervisor of yours, with
-  its `id`. The supervisor has the limit of the restarts that you give
-  it:
+- For a boid that starts again, put it below a supervisor of yours. Give
+  an `id` in the options of `init/1`, so that the process that starts
+  again is the same boid. The supervisor has the limit of the restarts
+  that you give it:
 
   ```erlang
   {ok, {#{strategy => rest_for_one}, [
       boids:child_spec(#{name => my_flock}),
-      boids_server:child_spec({my_flock, #{id => hawk, pos => {0, 0}}})
+      gen_boid:child_spec({hawk, {50, 50}, #{flock => my_flock}})
   ]}}
   ```
 
-- A process of yours that is a boid has the supervisor that you gave it.
-  When it starts again and calls `boids:join/2` with the same id, it
-  gets its row again, also before the flock saw the end of the old
-  process.
+- A process that starts again with the id of its last process gets its
+  row again, also before the flock saw the end of the old process. That
+  is true for a `gen_boid` and for a process with `boids:join/2`.
 - Each process of a flock and of a boid has a label (`proc_lib`), so
   the observer and a crash report show which boid a process is.
 - When the process of a flock stops with an error, all the flock stops.

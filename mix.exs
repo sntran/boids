@@ -22,7 +22,10 @@ defmodule Boids.MixProject do
       erlc_options: [:debug_info, :warnings_as_errors],
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
-      test_coverage: [summary: [threshold: 100], ignore_modules: [Boids.FlockSpec, ~r/TestRules/]],
+      test_coverage: [
+        summary: [threshold: 100],
+        ignore_modules: [Boids.FlockSpec, ~r/TestRules/, ~r/TestBoids/]
+      ],
       description: "Boids: flocks of Erlang processes with steering rules",
       package: package(),
       docs: [

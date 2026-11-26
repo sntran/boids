@@ -27,7 +27,7 @@ flock to the design.
 |---|---|---|
 | `specs/Flock.tla` | The members of a flock: a process asks for the row of an id, the flock watches it, and the row goes when the process stops, leaves, or is removed. | `boids_flock`, `boids:add/2`, `boids:remove/2`, `boids:join/2`, `boids:leave/2` |
 | `specs/Space.tla` | A write of a row against a read of the grid. | `boids_space:put/2`, `boids_space:near/3` |
-| `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `boids_server` |
+| `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 
 ### `specs/Flock.tla`
 
@@ -37,7 +37,7 @@ message at a time. The messages of two processes come in each order.
 
 | Action | When it can occur | In the code |
 |---|---|---|
-| `Start(p, i)` | `p` is new: it asks the flock for the row of `i`. | `boids:add/2`, or `boids:join/2` in a process of yours, also one that its supervisor starts again |
+| `Start(p, i)` | `p` is new: it asks the flock for the row of `i`. | The start of a `gen_boid`, or `boids:join/2` in another process, also one that its supervisor starts again |
 | `Stop(p)` | `p` runs: an error, a kill, or the end of its work. The flock gets `'DOWN'` when it watches `p`. | |
 | `Find(p)` | `p` has the row of its id: a caller reads the table. | the start of `boids:remove/2` |
 | `Remove(p)` | A caller found `p`: it stops `p`, then sends a leave. | the end of `boids:remove/2` |
@@ -121,7 +121,7 @@ number: a boid that reads the positions `s` goes to `See(s)`.
 | Action | When it can occur | In the code |
 |---|---|---|
 | `Begin` | No step runs: the caller asks each boid for its plan. | `boids:step/2` |
-| `Plan(b)` | `b` runs and did not answer: it calculates its new position, and does not move. | `{plan, Dt}` |
+| `Plan(b)` | `b` runs and did not answer: it calculates its new position, and does not move. | `{plan, Dt}`: `handle_step/3` of the module, then the forces |
 | `Turn` | Each boid that runs answered: the caller asks each boid to move. | |
 | `Commit(b)` | `b` runs and did not answer: it moves to the position of its plan. | `commit` |
 | `End` | Each boid that runs moved. | |
@@ -188,7 +188,7 @@ join, the process of the row stopped, or not. The result is `:ok`,
 - A model is small: three processes, two boids, two cells. A fault that
   needs more is not found.
 - `Space.tla` and `Step.tla` have no replay. Their tie to the code is
-  the comments in `boids_space` and `boids_server`, and the tests of the
+  the comments in `boids_space` and `gen_boid`, and the tests of the
   behavior (`test/boids_space_test.exs`, `test/boids_test.exs`).
 - The replay sees one flock process on one node. It follows the orders
   that the tests make.

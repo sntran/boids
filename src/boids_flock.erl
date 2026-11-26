@@ -43,7 +43,7 @@ options(Opts) when is_map(Opts) ->
     Space = boids_space:options(maps:remove(name, Opts)),
     %% Each default is good alone. The check of a boid sees them together,
     %% with its own options.
-    {_Server, Boid} = boids_server:options(maps:get(defaults, Space)),
+    {_Server, Boid} = gen_boid:options(maps:get(defaults, Space)),
     _ = boids_boid:options(Boid),
     case Opts of
         #{name := Name} when is_atom(Name) -> Opts;

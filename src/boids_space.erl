@@ -62,7 +62,7 @@ can be out of the box.
 }.
 
 %% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Server, Last}. Server is
-%% true when the process of the boid is a boids_server.
+%% true when the process of the boid is a gen_boid.
 %%
 %% The grid has a copy of the row in the cell of its position:
 %% {Cell, Id, Pos, Vel, Group, Data}. One read of a cell gives all its
@@ -189,7 +189,7 @@ lookup(#{rows := Rows}, Id) ->
     end.
 
 -doc """
-The process of a boid, when that process is a `boids_server`.
+The process of a boid, when that process is a `gen_boid`.
 """.
 -spec server(space(), term()) -> {ok, pid()} | error.
 server(#{rows := Rows}, Id) ->
@@ -198,7 +198,7 @@ server(#{rows := Rows}, Id) ->
         _ -> error
     end.
 
--doc "The processes of the boids whose process is a `boids_server`.".
+-doc "The processes of the boids whose process is a `gen_boid`.".
 -spec servers(space()) -> [pid()].
 servers(#{rows := Rows}) ->
     ets:select(Rows, [{{'_', '_', '_', '_', '_', '_', '$1', true, '_'}, [], ['$1']}]).

@@ -15,5 +15,5 @@ start_link() ->
 init([]) ->
     %% See boids_flock:init/1.
     process_flag(priority, high),
-    Boid = #{id => boids_server, start => {boids_server, start_link, []}, restart => temporary},
+    Boid = #{id => gen_boid, start => {gen_boid, start_link, []}, restart => temporary},
     {ok, {#{strategy => simple_one_for_one}, [Boid]}}.

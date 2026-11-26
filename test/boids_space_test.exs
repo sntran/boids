@@ -88,7 +88,7 @@ defmodule BoidsSpaceTest do
       assert :boids_space.lookup(space, :nobody) == :error
     end
 
-    test "server/2 gives the process of a boids_server only", %{space: space} do
+    test "server/2 gives the process of a gen_boid only", %{space: space} do
       :boids_space.insert_new(space, entry(:a, {1, 2}, %{pid: self(), server: true}))
       :boids_space.insert_new(space, entry(:b, {1, 2}, %{pid: self()}))
       assert :boids_space.server(space, :a) == {:ok, self()}

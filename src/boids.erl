@@ -27,12 +27,15 @@ In Elixir, the module is `:boids`:
 - A flock (`start_flock/1`, or `child_spec/1` for your supervisor) owns
   the space: ETS tables with one row for each boid, and a grid of cells
   as the index.
-- A boid of `add/2` or `populate/3` is a process (`boids_server`) below
-  the supervisor of the flock. At each tick it reads its neighbors,
-  calculates its force, moves and writes its row. It sends no message.
-- A process of your own can be a boid: `join/2` adds its row, and
-  `advance/3` makes one step. The flock removes the row when the process
-  stops.
+- A boid is a process with the behavior `gen_boid`. At each tick it
+  reads its neighbors, calculates its force, moves and writes its row.
+  It sends no message. A module of yours tells what the boid decides at
+  each step, and how it answers messages.
+- A boid of `add/2` or `populate/3` is a `gen_boid` with no module of
+  yours, below the supervisor of the flock.
+- A process with another behavior can be a boid too: `join/2` adds its
+  row, and `advance/3` makes one step. The flock removes the row when
+  the process stops.
 - Each process reads the flock with `snapshot/1`, `lookup/2` and
   `near/3`, with no message to a boid.
 
@@ -59,7 +62,7 @@ and a force is in units for each second for each second.
 -export([snapshot/1, lookup/2, near/3, count/1]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
 -export([step/2]).
--export([join/2, plan/3, commit/2, advance/3, leave/2]).
+-export([join/2, sense/2, plan/3, plan/4, commit/2, advance/3, leave/2]).
 
 -export_type([flock/0, options/0]).
 
@@ -161,7 +164,7 @@ Add a boid to a flock: start its process. The result has the id of the
 boid. The id is the option `id`, or the pid of the process.
 
 The options are those of a boid (`boids_boid`) and of its process
-(`boids_server`), on top of the `defaults` of the flock. `pos` is
+(`gen_boid`), on top of the `defaults` of the flock. `pos` is
 necessary.
 
 All the boids of a flock have positions of the same size: two numbers,
@@ -174,18 +177,19 @@ monitor.
 """.
 -spec add(flock(), options()) -> {ok, term()} | {error, term()}.
 add(Flock, Opts0) ->
-    Space = #{defaults := Defaults} = space(Flock),
+    Space = space(Flock),
     try boids_boid:to_map(Opts0) of
-        %% The process of the boid checks the options.
-        Opts -> start(Space, boids_flock:boid_sup(Space), maps:merge(Defaults, Opts))
+        Opts -> start(Space, boids_flock:boid_sup(Space), Opts)
     catch
         error:{bad_option, _} = Reason -> {error, Reason}
     end.
 
-start(Space, Sup, Opts) ->
-    case supervisor:start_child(Sup, [Space, Opts]) of
-        {ok, Pid} -> {ok, maps:get(id, Opts, Pid)};
-        {error, {shutdown, Reason}} -> {error, Reason}
+%% A boid with no module of the user: a gen_boid with the module
+%% boids_boid. Its process checks the options.
+start(Space = #{defaults := Defaults}, Sup, Opts) ->
+    case gen_boid:start_child(Sup, boids_boid, Opts, #{flock => Space}) of
+        {ok, Pid} -> {ok, maps:get(id, maps:merge(Defaults, Opts), Pid)};
+        {error, Reason} -> {error, Reason}
     end.
 
 -doc """
@@ -204,7 +208,7 @@ populate(Flock, Count, Opts0) when is_integer(Count), Count >= 0 ->
         Opts = boids_boid:to_map(Opts0),
         Area = {Min, _} = area(maps:get(area, Opts, Bounds)),
         Template = maps:without([area, id], maps:merge(Defaults, Opts)),
-        {_Server, BoidOpts} = boids_server:options(Template),
+        {_Server, BoidOpts} = gen_boid:options(Template),
         {Area, Template, boids_boid:new(BoidOpts#{pos => Min})}
     of
         {{Min1, Max1}, Template1, Sample} ->
@@ -247,7 +251,7 @@ random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}) ->
 Remove a boid of `add/2` from its flock: stop its process. For an id
 that is not such a boid, the result is `{error, not_found}`: a process
 of yours with `join/2`, or a boid below a supervisor of yours
-(`boids_server:start_link/2`).
+(`gen_boid:start_link/3`).
 """.
 -spec remove(flock(), term()) -> ok | {error, not_found}.
 remove(Flock, Id) ->
@@ -364,7 +368,7 @@ set_time_scale(Flock, Scale) ->
 
 -doc """
 Make one step of `Dt` seconds for all the boids that have a process of
-the library: those of `add/2` and of `boids_server:start_link/2`. First
+the library: those of `add/2` and each `gen_boid`. First
 each boid calculates its step, and the flock does not change. Then each
 boid moves. The function returns after the two parts.
 """.
@@ -407,7 +411,7 @@ handle_info(tick, {Space, Boid}) ->
 join(Flock, Opts0) ->
     Space = #{defaults := Defaults} = space(Flock),
     try
-        {_Server, BoidOpts} = boids_server:options(maps:merge(Defaults, boids_boid:to_map(Opts0))),
+        {_Server, BoidOpts} = gen_boid:options(maps:merge(Defaults, boids_boid:to_map(Opts0))),
         boids_boid:new(maps:merge(#{id => self()}, BoidOpts))
     of
         Boid ->
@@ -426,9 +430,21 @@ The flock does not change before `commit/2`. The scale of the time of
 the flock applies to `Dt`.
 """.
 -spec plan(boids_space:space(), boids_boid:boid(), number()) -> boids_boid:boid().
-plan(Space, Boid = #{pos := Pos, perception := Perception}, Dt) ->
+plan(Space, Boid, Dt) ->
+    plan(Space, Boid, sense(Space, Boid), Dt).
+
+-doc "The neighbors that a boid sees now in its flock, the nearest first.".
+-spec sense(boids_space:space(), boids_boid:boid()) -> [boids_space:neighbor()].
+sense(Space, Boid = #{pos := Pos, perception := Perception}) ->
+    boids_boid:perceive(Boid, boids_space:near(Space, Pos, Perception)).
+
+-doc """
+As `plan/3`, with the neighbors of `sense/2`: for a process that looks
+at its neighbors before the step.
+""".
+-spec plan(boids_space:space(), boids_boid:boid(), [boids_space:neighbor()], number()) -> boids_boid:boid().
+plan(Space, Boid, Neighbors, Dt) ->
     Env = #{time_scale := Scale} = boids_space:env(Space),
-    Neighbors = boids_boid:perceive(Boid, boids_space:near(Space, Pos, Perception)),
     Lookup = fun(Id) -> boids_space:lookup(Space, Id) end,
     boids_boid:step(Boid, Neighbors, Env#{lookup => Lookup}, Dt * Scale).
 

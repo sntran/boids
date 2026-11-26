@@ -419,7 +419,7 @@ defmodule BoidsTest do
 
       children = [
         {:boids, name: name, defaults: %{tick: :manual, rules: []}},
-        {:boids_server, {name, id: :hawk, pos: {1, 1}, vel: {1, 0}}}
+        {:gen_boid, {:boids_boid, [id: :hawk, pos: {1, 1}, vel: {1, 0}], [flock: name]}}
       ]
 
       start = {Supervisor, :start_link, [children, [strategy: :rest_for_one]]}
@@ -467,26 +467,20 @@ defmodule BoidsTest do
       assert :boids.count(flock) == 1
     end
 
-    test "the specification of the child has the id of the boid" do
-      assert %{id: {:boids_server, :hawk}, start: {:boids_server, :start_link, [:f, %{id: :hawk}]}} =
-               :boids_server.child_spec({:f, %{id: :hawk}})
-
-      assert %{id: {:boids_server, ref}} = :boids_server.child_spec({:f, pos: {0, 0}})
-      assert is_reference(ref)
+    test "the specification of the child has the module and its arguments" do
+      assert :gen_boid.child_spec({:boids_boid, %{id: :hawk}, %{flock: :f}}) == %{
+               id: {:gen_boid, :boids_boid, %{id: :hawk}},
+               start: {:gen_boid, :start_link, [:boids_boid, %{id: :hawk}, %{flock: :f}]}
+             }
     end
 
-    test "start_link/2 refuses a bad option and an id of the flock", %{flock: flock} do
+    test "start_link/3 refuses a bad option and an id of the flock", %{flock: flock} do
       Process.flag(:trap_exit, true)
-
-      assert :boids_server.start_link(flock, pos: {0, 0}, mass: 0) ==
-               {:error, {:shutdown, {:bad_option, {:mass, 0}}}}
-
-      assert :boids_server.start_link(flock, :bird) == {:error, {:shutdown, {:bad_option, :bird}}}
-
-      assert :boids_server.start_link(flock, id: :hawk, pos: {0, 0}) ==
-               {:error, {:shutdown, {:exists, :hawk}}}
-
-      assert {:ok, pid} = :boids_server.start_link(flock, pos: {0, 0})
+      start = fn options -> :gen_boid.start_link(:boids_boid, options, flock: flock) end
+      assert start.(pos: {0, 0}, mass: 0) == {:error, {:shutdown, {:bad_option, {:mass, 0}}}}
+      assert start.(:bird) == {:error, {:shutdown, {:bad_option, :bird}}}
+      assert start.(id: :hawk, pos: {0, 0}) == {:error, {:shutdown, {:exists, :hawk}}}
+      assert {:ok, pid} = start.(pos: {0, 0})
       assert :boids.whereis(flock, pid) == pid
     end
   end
@@ -582,11 +576,11 @@ defmodule BoidsTest do
     end
 
     test "the maximum time of a step is 0.25 second, or 4 ticks" do
-      assert {%{tick: 50, max_dt: 0.25, priority: :low, hibernate: true}, %{}} = :boids_server.options(%{})
-      assert {%{max_dt: 0.25}, _} = :boids_server.options(%{tick: :manual})
-      assert {%{max_dt: 0.25}, _} = :boids_server.options(%{tick: 20})
-      assert {%{max_dt: 4.0}, %{pos: {0, 0}}} = :boids_server.options(%{tick: 1000, pos: {0, 0}})
-      assert {%{max_dt: 0.1}, _} = :boids_server.options(%{tick: 1000, max_dt: 0.1})
+      assert {%{tick: 50, max_dt: 0.25, priority: :low, hibernate: true}, %{}} = :gen_boid.options(%{})
+      assert {%{max_dt: 0.25}, _} = :gen_boid.options(%{tick: :manual})
+      assert {%{max_dt: 0.25}, _} = :gen_boid.options(%{tick: 20})
+      assert {%{max_dt: 4.0}, %{pos: {0, 0}}} = :gen_boid.options(%{tick: 1000, pos: {0, 0}})
+      assert {%{max_dt: 0.1}, _} = :gen_boid.options(%{tick: 1000, max_dt: 0.1})
     end
 
     test "a seed gives the same random numbers" do

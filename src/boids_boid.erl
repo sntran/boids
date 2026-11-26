@@ -5,8 +5,11 @@ rules.
 
 This module has no process and no table. A process holds a boid, and
 calls `step/4` with the neighbors that it sees and the time that passed.
-`boids_server` is such a process. `boids:join/2` and `boids:advance/3`
-do the same for a process of your own.
+`gen_boid` is such a process. `boids:join/2` and `boids:advance/3` do
+the same for a process that has another behavior.
+
+This module is also the module of a `gen_boid` with no module of yours:
+`boids:add/2` starts a boid with it.
 
 ## The options of a boid
 
@@ -78,7 +81,10 @@ multiplied by its weight, with the length `max_force` at most. With
 `max_force`, and the last rules get what stays. Put `avoid` first there.
 """.
 
+-behavior(gen_boid).
+
 -export([new/1, update/2, options/1, entry/1, to_map/1]).
+-export([init/1]).
 -export([perceive/2, force/3, integrate/4, step/4]).
 
 -export_type([boid/0, rule/0, target/0, env/0]).
@@ -133,6 +139,10 @@ multiplied by its weight, with the length `max_force` at most. With
 }.
 
 -define(FULL_CIRCLE, 6.283185307179586).
+
+-doc false.
+init(Opts) ->
+    {ok, Opts, undefined}.
 
 -doc """
 Make a boid from its options. A bad option gives the error

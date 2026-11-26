@@ -6,7 +6,7 @@ The first version.
 
 - A flock: a supervisor, a process that owns the space, and one process
   for each boid (`boids:start_flock/1`, `boids:child_spec/1`,
-  `boids:add/2`, `boids:populate/3`).
+  `boids:add/2`, `boids:populate/3`, `gen_boid`).
 - The space of a flock in ETS tables, with a grid of cells as the index
   (`boids_space`). A box, sides that continue at the opposite sides
   (`wrap`), obstacles, and a scale of the time.
@@ -26,6 +26,9 @@ The first version.
   `specs/Flock.tla`.
 - A boid of `boids:add/2` that stops with an error does not start again,
   so a boid with an error at each step cannot stop its flock.
+- The behavior `gen_boid`: the process of a boid, with a module of yours
+  that gives its options, decides at each step (`handle_step/3`), and
+  answers messages (`handle_call/4`, `handle_cast/3`, `handle_info/3`).
 - A boid can be a child of a supervisor of yours, which starts it again
-  with its id (`boids_server:start_link/2`, `boids_server:child_spec/1`).
+  with its id (`gen_boid:start_link/3`, `gen_boid:child_spec/1`).
 - The processes of a flock and of a boid have a label.
