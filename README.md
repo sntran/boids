@@ -1,23 +1,26 @@
 # boids
 
-Flocks of boids for Erlang and Elixir, with one process for each boid.
+Flocks of boids for Erlang and Elixir.
 
 A boid is an object that moves by simple rules, and sees only the boids
 near it. Many boids together move as a flock of birds, a school of fish
 or a crowd of people. Craig Reynolds described the model in 1987, and
 the steering rules in 1999.
 
-In this library, each boid is an Erlang process with the behavior
-`gen_boid`:
-
-- A boid moves on its own clock. It reads its neighbors, calculates its
-  force, moves, and writes its position. It sends no message to do this.
-- A module of yours tells what a boid is, as a module tells what a
-  `gen_server` is: a person, a vehicle or an animal of your program
-  decides at each step, answers messages, and has its own state.
-- A boid that stops with an error goes from its flock. The other boids
-  continue.
-- The library is Erlang code with no dependency. It uses only `kernel`
+- **Simple.** Start a flock, add boids with their rules, and read their
+  positions. A rule of your own is a function.
+- **Fast.** A boid is a value, not a process. A flock has one clock and
+  a small number of worker processes, which make the steps of the boids
+  on all the processors. See "The speed".
+- **Exact.** In a step, all the boids calculate from the same state of
+  the flock, then they all move. With a seed, a run gives the same
+  result each time.
+- **A process when you need one.** A boid that decides, answers
+  messages and has its own state is a module of yours with the behavior
+  `gen_boid`. It is in the same flock as the other boids.
+- **Safe.** A boid whose rule has an error goes from its flock. The
+  other boids continue.
+- **No dependency.** The library is Erlang code. It uses only `kernel`
   and `stdlib`, from Erlang/OTP 27.
 
 ## The rules
@@ -38,7 +41,7 @@ In this library, each boid is an Erlang process with the behavior
 | `leader` | stays behind a leader, and moves out of its way |
 | `dodge` | moves away from a neighbor that will come too near |
 | `flow` | moves in the direction of a field |
-| a module or a function of yours | gets the force that it gives |
+| a function of yours | gets the force that the function gives |
 
 Each rule has a weight. A boid has two or three dimensions, a maximum
 speed, a maximum force, a distance and an angle that it sees, and a
@@ -69,8 +72,8 @@ In Erlang:
 1> {ok, Flock} = boids:start_flock(#{bounds => {{0, 0}, {100, 100}}, wrap => true}).
 2> {ok, Ids} = boids:populate(Flock, 200, #{}).
 3> boids:snapshot(Flock).
-[#{id => <0.153.0>, pos => {61.2, 8.9}, vel => {-3.1, 7.4},
-   group => default, data => undefined, pid => <0.153.0>} | _]
+[#{id => #Ref<0.1.2.3>, pos => {61.2, 8.9}, vel => {-3.1, 7.4},
+   group => default, data => undefined, pid => undefined} | _]
 ```
 
 In Elixir, the module is `:boids`, and the options can be a keyword
@@ -82,20 +85,94 @@ list:
 :boids.snapshot(flock)
 ```
 
-The 200 boids now move in real time: each is a process that makes a step
-each 50 ms. `snapshot/1` reads their positions, for example to draw
-them. `examples/terminal.exs` draws a flock, a hawk and two obstacles in
-the terminal:
+The 200 boids now move in real time: the flock makes a step each 50 ms.
+`snapshot/1` reads their positions, for example to draw them.
+`boids:subscribe/1` sends a message to your process after each step.
+`examples/terminal.exs` draws a flock, a hawk and two obstacles in the
+terminal:
 
 ```sh
 mix run examples/terminal.exs
 ```
 
+## The rules of a boid
+
+The option `rules` is a list. Each rule is `{Name, Weight}` or `{Name,
+Weight, Options}`:
+
+```erlang
+Birds = [
+    {avoid, 4.0},
+    {evade, 3.0, #{target => {group, hawks}, radius => 12}},
+    {separation, 1.5, #{radius => 3}},
+    {alignment, 1.0},
+    {cohesion, 1.0}
+],
+{ok, _} = boids:populate(Flock, 70, #{group => birds, rules => Birds, combine => priority}),
+
+Hawk = [{avoid, 4.0}, {pursue, 1.0, #{target => {group, birds}}}, {wander, 0.5}],
+{ok, HawkId} = boids:add(Flock, #{pos => {50, 50}, group => hawks, rules => Hawk, perception => 25}),
+
+ok = boids:set_obstacle(Flock, rock, {30, 30}, 5).
+```
+
+- `boids:update/3` changes the rules and the other options of a boid:
+  `boids:update(Flock, HawkId, #{rules => [{arrive, 1.0, #{target =>
+  {10, 10}}}]})`.
+- `boids:add_rule/3` adds one rule to a boid, and `boids:delete_rule/3`
+  removes one. `boids:which_rules/2` gives the names of its rules.
+- A boid can have a rule two times, with a name for each one:
+  `{{seek, home}, 1.0, #{target => {0, 0}}}` and `{{seek, food}, 2.0,
+  #{target => {40, 10}}}`. `boids:delete_rule(Flock, Id, {seek, food})`
+  removes the second one.
+- With `combine => sum` (the default), the force of a boid is the sum of
+  the forces of its rules. With `combine => priority`, the first rules
+  of the list use the force first.
+- `separation` sees all the groups. `alignment` and `cohesion` see only
+  the group of the boid. The option `groups` of a rule changes this.
+
+## A rule of your own
+
+A rule of your own is a function. It gets the boid, the neighbors that
+the boid sees (the nearest first) and the environment of the flock, and
+it gives a force:
+
+```erlang
+%% A force down, and a force away from the nearest boid of the group cats.
+Gravity = fun(_Boid, _Neighbors, _Env) -> {0, -9.81} end,
+Fear = fun(Boid, Neighbors, _Env) ->
+    case [Cat || Cat = #{group := cats} <- Neighbors] of
+        [#{pos := Pos} | _] -> boids_steer:flee(Boid, Pos);
+        [] -> {0, 0}
+    end
+end,
+boids:add(Flock, #{pos => {0, 50}, rules => [{Gravity, 1.0}, {Fear, 3.0}, {wander, 0.5}]}).
+```
+
+```elixir
+gravity = fn _boid, _neighbors, _env -> {0, -9.81} end
+:boids.add(flock, pos: {0, 50}, rules: [{gravity, 1.0}, {:wander, 0.5}])
+```
+
+- The boid and each neighbor are maps: `maps:get(pos, Boid)`,
+  `maps:get(dist, Neighbor)`. `Env` has `dt` (the seconds of the step),
+  `obstacles`, `bounds` and `wrap`.
+- The functions of `boids_steer` and `boids_vec` are the parts of a new
+  rule: for example `boids_steer:seek/2` to a point that the rule
+  calculates.
+- Use `fun Module:Function/3` for a rule that stays when the code of
+  its module changes.
+- A function that has an error stops its boid: the flock writes the
+  error to the log, and removes the boid.
+
 ## A boid with a behavior
 
-`gen_boid` is the behavior of a process that is a boid. Your module
-gives the options of the boid when it starts, decides at each step, and
-answers messages. The library does the other work.
+A boid of `boids:add/2` has only its rules. A boid that decides, that
+answers messages and that has its own state is a process: a module of
+yours with the behavior `gen_boid`, as a module with the behavior
+`gen_server`. Your module gives the options of the boid when it starts,
+decides at each step, and answers messages. The library does the other
+work.
 
 ```erlang
 -module(hawk).
@@ -160,77 +237,15 @@ end
 - `gen_boid:start/3` starts a boid below the supervisor of its flock.
   `gen_boid:start_link/3` and `gen_boid:child_spec/1` are for a
   supervisor of yours (see "A boid that stops").
-- A boid of `boids:add/2` and `boids:populate/3` is a `gen_boid` with no
-  module of yours: it has only its rules.
+- The clock of the flock moves a `gen_boid` with the other boids, in the
+  same step. The functions of `boids` with an id work for it too:
+  `boids:update/3`, `boids:add_rule/3`, `boids:boid/2`.
 - `handle_step/3` is for a decision: which rules the boid has now. A
   force of your own is a rule (see "A rule of your own").
-
-## The rules of a boid
-
-The option `rules` is a list. Each rule is `{Name, Weight}` or `{Name,
-Weight, Options}`:
-
-```erlang
-Birds = [
-    {avoid, 4.0},
-    {evade, 3.0, #{target => {group, hawks}, radius => 12}},
-    {separation, 1.5, #{radius => 3}},
-    {alignment, 1.0},
-    {cohesion, 1.0}
-],
-{ok, _} = boids:populate(Flock, 70, #{group => birds, rules => Birds, combine => priority}),
-
-Hawk = [{avoid, 4.0}, {pursue, 1.0, #{target => {group, birds}}}, {wander, 0.5}],
-{ok, HawkId} = boids:add(Flock, #{pos => {50, 50}, group => hawks, rules => Hawk, perception => 25}),
-
-ok = boids:set_obstacle(Flock, rock, {30, 30}, 5).
-```
-
-- `boids:update/3` changes the rules and the other options of a boid
-  that runs: `boids:update(Flock, HawkId, #{rules => [{arrive, 1.0,
-  #{target => {10, 10}}}]})`.
-- With `combine => sum` (the default), the force of a boid is the sum of
-  the forces of its rules. With `combine => priority`, the first rules
-  of the list use the force first.
-- `separation` sees all the groups. `alignment` and `cohesion` see only
-  the group of the boid. The option `groups` of a rule changes this.
-- A rule of your own is a module with the behavior `boids_rule`, or a
-  function. See "A rule of your own".
-
-## A rule of your own
-
-A rule is a module with the behavior `boids_rule`. The module checks its
-options, and gives the force of the rule for one boid at one step:
-
-```erlang
--module(my_gravity).
--behavior(boids_rule).
--export([options/1, force/4]).
-
-options(Options) ->
-    #{g := G} = maps:merge(#{g => 9.81}, Options),
-    true = is_number(G),
-    #{g => G}.
-
-force(_Boid, _Neighbors, _Env, #{g := G}) ->
-    {0, -G}.
-```
-
-```erlang
-boids:add(Flock, #{pos => {0, 50}, rules => [{my_gravity, 1.0, #{g => 3.7}}, {wander, 0.5}]}).
-```
-
-In Elixir, the module has `@behaviour :boids_rule`.
-
-- A bad option gives an error when the boid gets its rules, and not at
-  each step of the boid.
-- A rule can keep a memory between the steps of a boid: `force/4` gives
-  `{Force, Memory}`, and gets the memory in `Env` at the next step.
-- For a rule with no option, a function is sufficient:
-  `{fun(Boid, Neighbors, Env) -> Force end, Weight}`.
-- The functions of `boids_steer` and `boids_vec` are the parts of a new
-  rule: for example `boids_steer:seek/2` to a point that the rule
-  calculates.
+- A process costs more than a value: the step of a `gen_boid` takes
+  about two times that of a boid of `boids:add/2`, and its process
+  holds about 5 KB. Use `boids:add/2` for the many boids that only
+  follow their rules.
 
 ## The space of a flock
 
@@ -246,21 +261,26 @@ In Elixir, the module has `@behaviour :boids_rule`.
 
 ## The time
 
-- A boid makes a step each `tick` milliseconds (the default is 50). The time of a step is the time that passed on the
-  clock.
+- The clock of a flock makes a step each `tick` milliseconds (the
+  default is 50): `boids:start_flock(#{tick => 20})`. The time of a step
+  is the time that passed on the clock.
+- In a step, first each boid calculates its movement from the same state
+  of the flock, then they all move. Thus a read between two steps
+  (`boids:snapshot/1`) gives one moment of the flock.
+- `boids:subscribe/1` sends `{boids, Flock, {step, Count, Dt}}` to your
+  process after each step: draw or read the flock then.
 - `boids:set_time_scale/2` makes the time of a flock faster or slower.
   With 0, the boids stop.
-- With `tick => manual`, the boids move only with `boids:step/2`. First
-  each boid calculates its step from the same state of the flock, then
-  they all move. With a `seed` for each boid, such a run always gives
-  the same result. Use it for a test, or for a simulation that is faster
-  than the clock.
+- With `tick => manual`, the boids move only with `boids:step/2`. With a
+  `seed` for each boid, such a run always gives the same result, with
+  each number of workers. Use it for a test, or for a simulation that is
+  faster than the clock.
 
 ## A process with another behavior as a boid
 
-Use `gen_boid` for a new boid. A process that has another behavior, for
-example a `gen_statem`, can be a boid of a flock too. It calls `join/2`
-one time, and `advance/3` at each step:
+A process that has another behavior, for example a `gen_statem`, can be
+a boid of a flock too. It calls `join/2` one time, and `advance/3` when
+it wants a step: this boid has its own clock, and not that of the flock.
 
 ```erlang
 init(Flock) ->
@@ -316,15 +336,21 @@ children = [{:boids, name: :my_flock, bounds: {{0, 0}, {100, 100}}}]
 ## How it works
 
 A flock has ETS tables with one row for each boid, and a grid of cells
-as the index of the rows. A boid reads the cells around it: it sends no
-message, and it does not read all the flock. Only the process of a boid
-writes its row, so there is no lock in the library. The process of the
-flock only adds a row when a boid starts, and removes it when the
-process of the boid stops.
+as the index of the rows. A boid finds its neighbors in the cells around
+it: it does not read all the flock.
 
-A boid reads the rows while the other boids write them. Thus the
-neighbors that it sees are not all of the same moment, as for a bird.
-`boids:step/2` gives one moment for all the boids.
+The boids of `boids:add/2` are values in the workers of the flock: a
+small number of processes, one for each scheduler of the node. The
+clock of the flock asks for a step in two parts:
+
+1. Each worker calculates the step of each of its boids. It reads each
+   cell of the grid one time, and it writes nothing.
+2. Each worker writes its boids to the tables.
+
+A `gen_boid` does the same two parts for its one boid, at the request of
+the same clock. Each row has one writer, so there is no lock in the
+library. Each process reads the tables with no message: a read of the
+flock does not wait for a step.
 
 ## The specifications
 
@@ -338,37 +364,20 @@ replay the messages of a real flock process as a behavior of
 
 ## The speed
 
-These numbers are from a computer with 4 processors (x86_64, Erlang/OTP
-29 with the JIT). Each boid has the three rules of a flock, and sees
-about 15 neighbors.
-
-| Boids | Tick | Steps of each boid in a second | Processors in use |
-|---|---|---|---|
-| 1,000 | 50 ms | 19.6 | 22 % |
-| 6,000 | 50 ms | 15.1 | 85 % |
-| 12,000 | 50 ms | 7.7 | 93 % |
-
-- One step of one boid takes about 13 µs of calculation. A real step
-  also has the cost of a timer and of a process that starts to run.
-- A boid process holds about 5 KB to 7 KB.
-- With too many boids for the processors, the boids make fewer steps in
-  a second, and each step is longer. The node continues to answer:
-  `boids:populate/3` of the 12,000 boids took 1.1 seconds, and
-  `boids:snapshot/1` 10 ms.
-- Make `cell_size` near the `perception` of the boids. Keep the `data`
-  of a boid small, because each neighbor gets a copy of it.
-
+SPEED_SECTION
 ## A boid that stops
 
-- The flock is the supervisor of the boids of `boids:add/2`: they stop
-  with it. It does not start a boid again after an error: the flock
-  removes the row of the boid, and its id is free. A boid with an error
-  at each step would start again without end. `boids:whereis/2` gives
-  the process of a boid, for a monitor.
-- For a boid that starts again, put it below a supervisor of yours. Give
-  an `id` in the options of `init/1`, so that the process that starts
-  again is the same boid. The supervisor has the limit of the restarts
-  that you give it:
+- A boid of `boids:add/2` whose rule has an error goes from the flock,
+  and the flock writes the error to the log. The other boids continue.
+- A `gen_boid` of `gen_boid:start/3` stops with its flock. The flock
+  does not start it again after an error: it removes the row of the
+  boid, and the id is free. A boid with an error at each step would
+  start again without end. `boids:whereis/2` gives the process of such a
+  boid, for a monitor.
+- For a `gen_boid` that starts again, put it below a supervisor of
+  yours. Give an `id` in the options of `init/1`, so that the process
+  that starts again is the same boid. The supervisor has the limit of
+  the restarts that you give it:
 
   ```erlang
   {ok, {#{strategy => rest_for_one}, [
@@ -380,10 +389,12 @@ about 15 neighbors.
 - A process that starts again with the id of its last process gets its
   row again, also before the flock saw the end of the old process. That
   is true for a `gen_boid` and for a process with `boids:join/2`.
-- Each process of a flock and of a boid has a label (`proc_lib`), so
-  the observer and a crash report show which boid a process is.
-- When the process of a flock stops with an error, all the flock stops.
-  A flock below a supervisor of yours starts again, with no boid.
+- Each process of a flock has a label (`proc_lib`), so the observer and
+  a crash report show what a process is: the flock, its clock, a worker
+  or a boid.
+- When the process of a flock, its clock or a worker stops with an
+  error, all the flock stops. A flock below a supervisor of yours starts
+  again, with no boid.
 - Each number of an option is 1.0e100 at most.
 
 ## The limits
@@ -392,8 +403,10 @@ about 15 neighbors.
 - An obstacle is a circle or a sphere. There are no walls and no
   polygons. A rule of your own can add them.
 - The rule `follow` does not use `wrap`.
-- The steps of the boids are not at the same moment, except with
-  `boids:step/2`.
+- All the boids of a flock have the same clock. A boid of
+  `boids:join/2` has the clock of its process.
+- The size of the vectors of the first boid (two numbers, or three)
+  stays for the life of the flock.
 
 ## Development
 

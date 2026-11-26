@@ -100,22 +100,52 @@ Move away from the neighbors. A near neighbor counts more than a far
 neighbor. For a neighbor at the same point, the direction is random.
 """.
 -spec separation(body(), [neighbor()]) -> vec().
-separation(#{vel := Vel, max_speed := Max}, Neighbors) ->
-    Zero = boids_vec:zero(boids_vec:dim(Vel)),
-    Sum = lists:foldl(fun(N, Acc) -> boids_vec:add(Acc, away(N, Vel)) end, Zero, Neighbors),
-    wanted(Sum, Vel, Max).
+separation(#{vel := Vel = {_, _}, max_speed := Max}, Neighbors) ->
+    wanted(away2(Neighbors, 0.0, 0.0), Vel, Max);
+separation(#{vel := Vel = {_, _, _}, max_speed := Max}, Neighbors) ->
+    wanted(away3(Neighbors, 0.0, 0.0, 0.0), Vel, Max).
 
-away(#{dist := Dist}, Vel) when Dist == 0 ->
-    boids_vec:random_unit(boids_vec:dim(Vel));
-away(#{offset := Offset, dist := Dist}, _Vel) ->
-    boids_vec:scale(Offset, -1 / (Dist * Dist)).
+%% The sums have a function for each size of vector, with no tuple for
+%% each neighbor: these rules are the largest part of a step.
+away2([#{offset := {Ox, Oy}, dist := Dist} | Rest], X, Y) when Dist > 0, is_float(X), is_float(Y) ->
+    K = -1 / (Dist * Dist),
+    away2(Rest, X + Ox * K, Y + Oy * K);
+away2([_ | Rest], X, Y) ->
+    %% A neighbor at the position of the boid: move in a random direction.
+    {Rx, Ry} = boids_vec:random_unit(2),
+    away2(Rest, X + Rx, Y + Ry);
+away2([], X, Y) ->
+    {X, Y}.
+
+away3([#{offset := {Ox, Oy, Oz}, dist := Dist} | Rest], X, Y, Z) when Dist > 0, is_float(X), is_float(Y), is_float(Z) ->
+    K = -1 / (Dist * Dist),
+    away3(Rest, X + Ox * K, Y + Oy * K, Z + Oz * K);
+away3([_ | Rest], X, Y, Z) ->
+    {Rx, Ry, Rz} = boids_vec:random_unit(3),
+    away3(Rest, X + Rx, Y + Ry, Z + Rz);
+away3([], X, Y, Z) ->
+    {X, Y, Z}.
 
 -doc "Move in the mean direction of the neighbors.".
 -spec alignment(body(), [neighbor()]) -> vec().
 alignment(#{vel := Vel, max_speed := Max}, Neighbors) ->
-    Zero = boids_vec:zero(boids_vec:dim(Vel)),
-    Sum = lists:foldl(fun(#{vel := V}, Acc) -> boids_vec:add(Acc, V) end, Zero, Neighbors),
-    wanted(Sum, Vel, Max).
+    wanted(sum(vel, Neighbors, Vel), Vel, Max).
+
+%% The sum of the vectors of a key of the neighbors: vel or offset.
+sum(Key, Neighbors, {_, _}) -> sum2(Key, Neighbors, 0.0, 0.0);
+sum(Key, Neighbors, {_, _, _}) -> sum3(Key, Neighbors, 0.0, 0.0, 0.0).
+
+sum2(Key, [N | Rest], X, Y) when is_float(X), is_float(Y) ->
+    #{Key := {Vx, Vy}} = N,
+    sum2(Key, Rest, X + Vx, Y + Vy);
+sum2(_Key, [], X, Y) ->
+    {X, Y}.
+
+sum3(Key, [N | Rest], X, Y, Z) when is_float(X), is_float(Y), is_float(Z) ->
+    #{Key := {Vx, Vy, Vz}} = N,
+    sum3(Key, Rest, X + Vx, Y + Vy, Z + Vz);
+sum3(_Key, [], X, Y, Z) ->
+    {X, Y, Z}.
 
 %% The force for a wanted direction. No direction gives no force.
 wanted(Direction, Vel, Max) ->
@@ -129,8 +159,7 @@ wanted(Direction, Vel, Max) ->
 cohesion(#{vel := Vel}, []) ->
     boids_vec:zero(boids_vec:dim(Vel));
 cohesion(Boid = #{pos := Pos}, Neighbors) ->
-    Zero = boids_vec:zero(boids_vec:dim(Pos)),
-    Sum = lists:foldl(fun(#{offset := O}, Acc) -> boids_vec:add(Acc, O) end, Zero, Neighbors),
+    Sum = sum(offset, Neighbors, Pos),
     Center = boids_vec:add(Pos, boids_vec:scale(Sum, 1 / length(Neighbors))),
     seek(Boid, Center).
 

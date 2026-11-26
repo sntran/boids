@@ -2,11 +2,11 @@
 -moduledoc """
 The behavior of a process that is a boid.
 
-A boid of a flock is a process. This module is that process, and your
-module tells what the boid is: where it starts, what it decides at each
-step, and how it answers messages. The library does the other work: the
-ticks, the neighbors, the forces of the rules, the movement, and the row
-of the boid in its flock.
+This module is the process of a boid, and your module tells what the
+boid is: where it starts, what it decides at each step, and how it
+answers messages. The library does the other work: the steps, the
+neighbors, the forces of the rules, the movement, and the row of the
+boid in its flock.
 
 ```erlang
 -module(hawk).
@@ -41,8 +41,7 @@ In Elixir, the module has `@behaviour :gen_boid`.
 Only `init/1` is necessary.
 
 - `init(Args)` gives `{ok, Options, State}`. `Options` are the options
-  of the boid (`boids_boid`) and of its process (below), on top of the
-  `defaults` of the flock. It can also give `ignore` or `{stop, Reason}`.
+  of the boid (`boids_boid`), on top of the `defaults` of the flock. It can also give `ignore` or `{stop, Reason}`.
 - `handle_step(Boid, Neighbors, State)` runs at each step, before the
   forces of the rules. `Neighbors` are the boids that the boid sees, the
   nearest first. It gives `{ok, State}`, or `{ok, Changes, State}` to
@@ -58,23 +57,15 @@ Only `init/1` is necessary.
 Boid)` is its position. `Changes` are options of a boid, as for
 `boids:update/3`. Each callback can give `{stop, Reason, State}`.
 
-A boid with no module of yours is a `gen_boid` with the module
-`boids_boid`: `boids:add/2` starts one.
+## The steps
 
-## The options of the process
+The clock of the flock makes the steps: a `gen_boid` moves with the
+other boids of its flock, each `tick` of the flock, or with
+`boids:step/2`. First all the boids calculate their step from the same
+state of the flock, then they all move.
 
-| Option | Default | Description |
-|---|---|---|
-| `tick` | `50` | The milliseconds between two steps, or `manual`: the boid moves only with `boids:step/2`. |
-| `max_dt` | `0.25`, or 4 ticks | The maximum of the seconds of one step. A late tick does not make a long step. The default is the larger of 0.25 second and 4 ticks. |
-| `seed` | (none) | An integer: the seed of the random numbers of the process. |
-| `priority` | `low` | The priority of the process: `low` or `normal`. |
-| `hibernate` | `true` | The process hibernates between two steps. |
-
-The time of a step is the time that passed on the monotonic clock,
-multiplied by the scale of the time of the flock. The process waits
-`tick` milliseconds after each step, so the time between two steps is a
-little more than `tick`.
+With the option `seed` (an integer) in the options of `init/1`, the
+random numbers of the process start from that seed.
 
 ## The supervisor of a boid
 
@@ -84,35 +75,36 @@ and `child_spec/1` are for a supervisor of yours, which starts the boid
 again as you tell it. Give an `id` in the options of `init/1`, so that
 the process that starts again is the same boid.
 
-## A flock with too much work
+## A process or a value
 
-When the boids need more time than the computer has, each tick comes
-late. A boid whose tick comes late waits longer before its next tick, so
-that the node continues to answer. Its steps are then longer: `max_dt`
-at most. With longer waits, the boids move more slowly than the clock.
-
-With the priority `low`, the other processes of the node run before the
-boids, so the node answers when the boids use all the processors. With
-`normal`, the boids have the priority of the other processes.
+A boid of `boids:add/2` is a value in a worker of the flock: it has no
+process, and its step costs less. Use a `gen_boid` for a boid that
+decides, that answers messages, or that has a supervisor of yours. The
+two kinds are neighbors in the same flock.
 
 ## The memory
 
-A step makes garbage: the copies of the rows of the neighbors. With
-`hibernate`, the process drops its heap after each step, and it holds
-about 4 KB. Without it, the process holds about 80 KB, and a step is
-about 10 % faster.
+A step makes garbage: the copies of the rows of the neighbors. The
+process hibernates after each step: it drops its heap, and it holds
+about 4 KB. With `hibernate => false` in the options of the start, the
+process holds about 80 KB, and a step is about 10 % faster.
 """.
 -behavior(gen_server).
 
 -export([start/3, start_link/3, child_spec/1, stop/1]).
 -export([call/2, call/3, cast/2, reply/2]).
--export([options/1, start_child/4]).
+-export([add_rule/2, delete_rule/2, which_rules/1]).
+-export([start_child/4]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -export_type([boid/0, start_options/0]).
 
 -type boid() :: pid() | atom() | {global, term()} | {via, module(), term()}.
--type start_options() :: #{flock := boids:flock(), name => atom() | {global, term()} | {via, module(), term()}}.
+-type start_options() :: #{
+    flock := boids:flock(),
+    name => atom() | {global, term()} | {via, module(), term()},
+    hibernate => boolean()
+}.
 -type changes() :: boids:options().
 
 -callback init(Args :: term()) ->
@@ -140,19 +132,14 @@ about 10 % faster.
 
 -optional_callbacks([handle_step/3, handle_call/4, handle_cast/3, handle_info/3, terminate/3]).
 
--define(KEYS, [tick, max_dt, seed, priority, hibernate]).
-
-%% The start has a high priority: a flock with too much work must not
-%% make its caller wait.
--define(GEN, [{spawn_opt, [{priority, high}]}]).
-
 -doc """
 Start a boid below the supervisor of its flock. The boid stops with its
 flock, and it does not start again after an error.
 
 `Options` is a map, or a list of `{Key, Value}`: `flock` (necessary: the
-flock or its space), and `name` (a name for the process: an atom,
-`{global, Term}` or `{via, Module, Term}`).
+flock or its space), `name` (a name for the process: an atom, `{global,
+Term}` or `{via, Module, Term}`), and `hibernate` (default: `true`, see
+the module).
 
 A bad option of `init/1` gives `{error, {bad_option, {Key, Value}}}`,
 and an id that is in the flock `{error, {exists, Id}}`.
@@ -185,17 +172,18 @@ Id}}}`.
 start_link(Module, Args, Options0) ->
     case start_options(Options0) of
         Options = #{name := Name} when is_atom(Name) ->
-            gen_server:start_link({local, Name}, ?MODULE, {Module, Args, Options}, ?GEN);
+            gen_server:start_link({local, Name}, ?MODULE, {Module, Args, Options}, []);
         Options = #{name := Name} ->
-            gen_server:start_link(Name, ?MODULE, {Module, Args, Options}, ?GEN);
+            gen_server:start_link(Name, ?MODULE, {Module, Args, Options}, []);
         Options ->
-            gen_server:start_link(?MODULE, {Module, Args, Options}, ?GEN)
+            gen_server:start_link(?MODULE, {Module, Args, Options}, [])
     end.
 
 start_options(Options0) ->
     Options = boids_boid:to_map(Options0),
     is_map_key(flock, Options) orelse error({bad_option, {flock, undefined}}),
-    [error({bad_option, {Key, maps:get(Key, Options)}}) || Key <- maps:keys(Options), Key =/= flock, Key =/= name],
+    [error({bad_option, {Key, Value}}) || Key := Value <- Options, not lists:member(Key, [flock, name, hibernate])],
+    is_boolean(maps:get(hibernate, Options, true)) orelse error({bad_option, {hibernate, maps:get(hibernate, Options)}}),
     Options.
 
 -doc """
@@ -244,41 +232,38 @@ reply(From, Reply) ->
     gen_server:reply(From, Reply).
 
 -doc """
-Divide the options into those of the process and those of the boid.
-A bad option of the process gives the error `{bad_option, {Key, Value}}`.
+Add a rule at the end of the rules of a boid: `{Name, Weight}` or
+`{Name, Weight, Options}`. The boid has the rule from its next step.
 """.
--spec options(map()) -> {map(), map()}.
-options(Opts) ->
-    Given = maps:with(?KEYS, Opts),
-    MaxDt =
-        case Given of
-            #{tick := Tick} when is_integer(Tick) -> max(0.25, 4 * Tick / 1000);
-            _ -> 0.25
-        end,
-    Server = maps:merge(#{tick => 50, max_dt => MaxDt, priority => low, hibernate => true}, Given),
-    maps:foreach(fun check/2, Server),
-    {Server, maps:without(?KEYS, Opts)}.
+-spec add_rule(boid(), boids_boid:rule()) -> ok | {error, term()}.
+add_rule(Boid, Rule) ->
+    gen_server:call(Boid, {change, add_rule, Rule}).
 
-check(tick, manual) -> ok;
-check(tick, Tick) when is_integer(Tick), Tick > 0 -> ok;
-check(max_dt, Max) when is_number(Max), Max > 0 -> ok;
-check(seed, Seed) when is_integer(Seed) -> ok;
-check(priority, Priority) when Priority =:= low; Priority =:= normal -> ok;
-check(hibernate, Hibernate) when is_boolean(Hibernate) -> ok;
-check(Key, Value) -> error({bad_option, {Key, Value}}).
+-doc "Remove the first rule with the name `Name` from a boid.".
+-spec delete_rule(boid(), boids_boid:name()) -> ok.
+delete_rule(Boid, Name) ->
+    gen_server:call(Boid, {change, delete_rule, Name}).
+
+-doc "The names of the rules of a boid, in their order.".
+-spec which_rules(boid()) -> [boids_boid:name()].
+which_rules(Boid) ->
+    boids_boid:which_rules(gen_server:call(Boid, get)).
 
 %% --- gen_server -------------------------------------------------------
 
 -doc false.
-init({Module, Args, #{flock := Flock}}) ->
+init({Module, Args, Start = #{flock := Flock}}) ->
     case Module:init(Args) of
         {ok, Opts, User} ->
             try
                 Space = #{defaults := Defaults} = boids:space(Flock),
-                {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
-                {Space, Server, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
+                {Seed, BoidOpts} = seed(maps:merge(Defaults, boids_boid:to_map(Opts))),
+                {Space, Seed, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
             of
-                {Space, Server, Boid} -> join(Space, Server#{mod => Module, state => User}, Boid)
+                {Space, Seed, Boid} ->
+                    Seed =:= undefined orelse rand:seed(exsss, Seed),
+                    Server = #{mod => Module, state => User, hibernate => maps:get(hibernate, Start, true)},
+                    join(Space, Server, Boid)
             catch
                 error:{bad_option, _} = Reason -> {stop, {shutdown, Reason}}
             end;
@@ -288,24 +273,18 @@ init({Module, Args, #{flock := Flock}}) ->
             {stop, Reason}
     end.
 
-join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) ->
-    case Server of
-        #{seed := Seed} -> rand:seed(exsss, Seed);
-        _ -> ok
-    end,
+%% The seed of a gen_boid is that of its process: the callbacks of the
+%% module get its random numbers too.
+seed(Opts = #{seed := Seed}) when is_integer(Seed) -> {Seed, maps:remove(seed, Opts)};
+seed(Opts) -> {undefined, Opts}.
+
+join(Space, Server, Boid = #{id := Id}) ->
     %% The tools that show processes show which boid this process is.
     proc_lib:set_label({boids, boid, Id}),
-    case boids_flock:join(Space, self(), (boids_boid:entry(Boid))#{server => true}) of
+    case boids_flock:join(Space, self(), (boids_boid:entry(Boid))#{kind => server}) of
         ok ->
-            %% The first tick comes after a random part of the period, so
-            %% the boids of a flock do not all move at the same time.
-            Due =
-                case Tick of
-                    manual -> undefined;
-                    _ -> wait(rand:uniform(Tick))
-                end,
-            process_flag(priority, Priority),
-            {ok, Server#{space => Space, boid => Boid, last => now_us(), due => Due, pending => undefined}};
+            ok = boids_clock:attach(Space),
+            {ok, Server#{space => Space, boid => Boid, pending => undefined}};
         {error, Reason} ->
             {stop, {shutdown, Reason}}
     end.
@@ -313,9 +292,11 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
 -doc false.
 handle_call(get, _From, State = #{boid := Boid}) ->
     {reply, Boid, State};
-handle_call({update, Changes}, _From, State) ->
-    try change(Changes, State) of
-        Changed -> {reply, ok, Changed}
+handle_call({change, Function, Arg}, _From, State = #{space := Space, boid := Boid0}) ->
+    try boids_boid:Function(Boid0, Arg) of
+        Boid ->
+            boids:commit(Space, Boid),
+            {reply, ok, State#{boid := Boid, pending := undefined}}
     catch
         error:{bad_option, _} = Reason -> {reply, {error, Reason}, State}
     end;
@@ -345,17 +326,6 @@ handle_cast(_Message, State) ->
     {noreply, State}.
 
 -doc false.
-handle_info(tick, State0 = #{space := Space, tick := Tick, last := Last, max_dt := MaxDt}) ->
-    Now = now_us(),
-    case plan(State0, min((Now - Last) / 1.0e6, MaxDt)) of
-        {ok, Boid, State} ->
-            boids:commit(Space, Boid),
-            %% The wait starts after the step, so a boid always has a rest.
-            Due = wait(Tick + extra(Now - maps:get(due, State))),
-            rest({noreply, State#{boid := Boid, last := Now, due := Due}});
-        {stop, Reason, State} ->
-            {stop, Reason, State}
-    end;
 handle_info(Info, State = #{mod := Module, boid := Boid, state := User}) ->
     case erlang:function_exported(Module, handle_info, 3) of
         true -> result(Module:handle_info(Info, Boid, User), State);
@@ -400,24 +370,9 @@ change(Changes, State = #{space := Space, boid := Boid0}) ->
     boids:commit(Space, Boid),
     State#{boid := Boid, pending := undefined}.
 
-%% Send the next tick after Ms milliseconds. The result is its time.
-wait(Ms) ->
-    erlang:send_after(Ms, self(), tick),
-    now_us() + Ms * 1000.
-
-%% A tick that comes late shows that the processors have too much work.
-%% The boid then waits 8 times that delay more, 1 second at most, so
-%% that few boids wait for a processor at the same time. A delay of
-%% 2 ms or less is the precision of the timer.
-extra(Late) when Late > 2000 -> min((Late - 2000) div 125, 1000);
-extra(_Late) -> 0.
-
 %% After a step, the heap has only garbage.
 rest(Return) ->
     case element(tuple_size(Return), Return) of
         #{hibernate := true} -> erlang:append_element(Return, hibernate);
         _ -> Return
     end.
-
-now_us() ->
-    erlang:monotonic_time(microsecond).

@@ -32,7 +32,8 @@ defmodule BoidsBoidTest do
                max_neighbors: :infinity,
                rules: [{:separation, 1.5, %{}}, {:alignment, 1.0, %{}}, {:cohesion, 1.0, %{}}],
                combine: :sum,
-               memory: %{}
+               memory: %{},
+               rand: :undefined
              } = boid
 
       assert min_speed == 0
@@ -62,7 +63,14 @@ defmodule BoidsBoidTest do
         rules: []
       }
 
-      assert Map.delete(:boids_boid.new(opts), :memory) == opts
+      assert Map.drop(:boids_boid.new(opts), [:memory, :rand]) == opts
+    end
+
+    test "a seed gives random numbers to the boid" do
+      assert %{rand: {:exsss, _} = rand} = boid = boid(seed: 5)
+      refute Map.has_key?(boid, :seed)
+      assert boid(seed: 5).rand == rand
+      assert boid(seed: 6).rand != rand
     end
 
     test "refuses a bad option" do
@@ -92,6 +100,10 @@ defmodule BoidsBoidTest do
             combine: :mean,
             rules: :none,
             memory: [],
+            seed: :random,
+            seed: 1.5,
+            tick: 5,
+            priority: :low,
             speed: 5
           ] do
         assert catch_error(:boids_boid.new(%{:pos => {0, 0}, key => value})) == {:bad_option, {key, value}}
@@ -139,9 +151,9 @@ defmodule BoidsBoidTest do
         {:dodge, 1, radius: 1, horizon: 3, groups: :all},
         {:flow, 1, field: {1, 0}},
         {:flow, 1, field: fn pos -> pos end, predict: 1},
-        {Boids.TestRules.Push, 1},
-        {Boids.TestRules.Push, 1, force: {2, 2}},
-        {Boids.TestRules.Turn, 1, anything: :goes}
+        {{:seek, :home}, 1, target: {1, 2}},
+        {{:wander, 2}, 1},
+        {{:cohesion, {:of, "friends"}}, 1, groups: [:a]}
       ]
 
       assert length(boid(rules: rules).rules) == length(rules)
@@ -188,8 +200,11 @@ defmodule BoidsBoidTest do
             {{:boids_vec, :zero, []}, 1},
             {:lists, 1},
             {:no_such_module_of_rules, 1},
-            {Boids.TestRules.Push, 1, force: :up},
-            {Boids.TestRules.NoMap, 1},
+            {{:fly, :home}, 1},
+            {{:seek, :home}, 1},
+            {{:seek, :home}, 1, target: {1, 2, 3}},
+            {{:seek, :home, :again}, 1, target: {1, 2}},
+            {{fn _, _, _ -> {0, 0} end, :mine}, 1},
             {:cruise, 1, speed: -1},
             {:leader, 1},
             {:leader, 1, target: {:boid, 1}, distance: :far},
@@ -230,14 +245,26 @@ defmodule BoidsBoidTest do
     test "keeps the memory of the rules" do
       boid = boid(rules: [wander: 1])
       {_, moved} = :boids_boid.force(boid, [], %{dt: 0.1})
-      assert %{1 => point} = moved.memory
-      assert :boids_boid.update(moved, %{max_speed: 2}).memory == %{1 => point}
+      assert %{wander: point} = moved.memory
+      assert :boids_boid.update(moved, %{max_speed: 2}).memory == %{wander: point}
     end
 
-    test "a change of the rules removes the memory of the rules" do
-      {_, moved} = :boids_boid.force(boid(rules: [wander: 1]), [], %{dt: 0.1})
-      assert map_size(moved.memory) == 1
-      assert :boids_boid.update(moved, %{rules: [wander: 1]}).memory == %{}
+    test "a rule keeps its memory while the boid has a rule with its name" do
+      rules = [{:wander, 1}, {{:wander, :slow}, 1, jitter: 0.5}]
+      {_, moved} = :boids_boid.force(boid(rules: rules), [], %{dt: 0.1})
+      assert %{:wander => point, {:wander, :slow} => slow} = moved.memory
+      # A change of the weight or of the options keeps the memory.
+      assert :boids_boid.update(moved, %{rules: [wander: 3]}).memory == %{wander: point}
+      assert :boids_boid.update(moved, %{rules: [{{:wander, :slow}, 1}]}).memory == %{{:wander, :slow} => slow}
+      assert :boids_boid.update(moved, %{rules: [cruise: 1]}).memory == %{}
+    end
+
+    test "a new seed gives new random numbers" do
+      boid = boid(seed: 1)
+      assert :boids_boid.update(boid, %{max_speed: 2}).rand == boid.rand
+      changed = :boids_boid.update(boid, %{seed: 2})
+      assert changed.rand == boid(seed: 2).rand
+      refute Map.has_key?(changed, :seed)
     end
 
     test "refuses a rule with a vector of another size" do
@@ -256,7 +283,42 @@ defmodule BoidsBoidTest do
       assert catch_error(:boids_boid.update(boid, %{vel: {1, 2, 3}})) == {:bad_option, {:vel, {1, 2, 3}}}
       assert catch_error(:boids_boid.update(boid, %{id: :b})) == {:bad_option, {:id, :b}}
       assert catch_error(:boids_boid.update(boid, %{memory: %{}})) == {:bad_option, {:memory, %{}}}
+      assert catch_error(:boids_boid.update(boid, %{rand: :none})) == {:bad_option, {:rand, :none}}
+      assert catch_error(:boids_boid.update(boid, %{seed: :none})) == {:bad_option, {:seed, :none}}
       assert catch_error(:boids_boid.update(boid, :faster)) == {:bad_option, :faster}
+    end
+  end
+
+  describe "add_rule/2, delete_rule/2 and which_rules/1" do
+    test "the names of the rules, in their order" do
+      rule = fn _, _, _ -> {0, 0} end
+      boid = boid(rules: [{:avoid, 2}, {{:seek, :home}, 1, target: {1, 2}}, {rule, 1}])
+      assert :boids_boid.which_rules(boid) == [:avoid, {:seek, :home}, rule]
+      assert :boids_boid.which_rules(boid()) == []
+    end
+
+    test "add_rule/2 adds a rule at the end" do
+      boid = boid(rules: [avoid: 2])
+      added = :boids_boid.add_rule(boid, {{:seek, :home}, 1, target: {1, 2}})
+      assert added.rules == [{:avoid, 2, %{}}, {{:seek, :home}, 1, %{target: {1, 2}}}]
+      assert :boids_boid.add_rule(added, {:wander, 0.5}).rules |> length() == 3
+
+      assert catch_error(:boids_boid.add_rule(boid, {:seek, 1})) == {:bad_option, {:rules, {:seek, 1, %{}}}}
+      assert catch_error(:boids_boid.add_rule(boid, :seek)) == {:bad_option, {:rules, :seek}}
+    end
+
+    test "delete_rule/2 removes the first rule with the name, and its memory" do
+      rules = [{:wander, 1}, {{:seek, :home}, 1, target: {1, 2}}, {:wander, 2}]
+      {_, boid} = :boids_boid.force(boid(rules: rules), [], %{dt: 0.1})
+      less = :boids_boid.delete_rule(boid, {:seek, :home})
+      assert :boids_boid.which_rules(less) == [:wander, :wander]
+      assert less.memory == boid.memory
+      assert :boids_boid.which_rules(:boids_boid.delete_rule(less, :wander)) == [:wander]
+      none = :boids_boid.delete_rule(:boids_boid.delete_rule(less, :wander), :wander)
+      assert none.rules == []
+      assert none.memory == %{}
+      # A boid with no such rule does not change.
+      assert :boids_boid.delete_rule(boid, :seek) == boid
     end
   end
 
@@ -451,20 +513,20 @@ defmodule BoidsBoidTest do
       :rand.seed(:exsss, 7)
       boid = boid(rules: [wander: 1], vel: {1, 0})
       {force, moved} = :boids_boid.force(boid, [], %{dt: 0.1})
-      assert %{1 => point} = moved.memory
+      assert %{wander: point} = moved.memory
       assert_in_delta :boids_vec.norm(point), 1.0, 1.0e-9
       assert_vec(force, :boids_vec.limit(:boids_steer.wander(boid, point, 2.0, 1.0), 20.0))
       {_, again} = :boids_boid.force(moved, [], %{dt: 0.1})
-      assert again.memory[1] != point
-      assert :boids_vec.dist(again.memory[1], point) < 1.0
+      assert again.memory.wander != point
+      assert :boids_vec.dist(again.memory.wander, point) < 1.0
     end
 
     test "without time, the point stays" do
       boid = boid(rules: [wander: 1], pos: {0, 0, 0})
       {_, first} = :boids_boid.force(boid, [], %{})
       {_, second} = :boids_boid.force(first, [], %{dt: 0})
-      assert tuple_size(first.memory[1]) == 3
-      assert second.memory[1] == first.memory[1]
+      assert tuple_size(first.memory.wander) == 3
+      assert second.memory.wander == first.memory.wander
     end
 
     test "uses its options" do
@@ -479,8 +541,8 @@ defmodule BoidsBoidTest do
       :rand.seed(:exsss, 3)
       opposite = :boids_vec.neg(:boids_vec.random_unit(2))
       :rand.seed(:exsss, 3)
-      {_, moved} = :boids_boid.force(%{boid | memory: %{1 => opposite}}, [], %{dt: 1})
-      assert moved.memory[1] == opposite
+      {_, moved} = :boids_boid.force(%{boid | memory: %{wander: opposite}}, [], %{dt: 1})
+      assert moved.memory.wander == opposite
     end
   end
 
@@ -591,48 +653,28 @@ defmodule BoidsBoidTest do
       end
 
       assert force({rule, 1}, %{id: :a}, [:n], %{dt: 0.5, more: 1}) == {1, 2}
-      assert_received {:a, [:n], %{dt: 0.5, more: 1, memory: :undefined}}
+      assert_received {:a, [:n], env}
+      assert env == %{dt: 0.5, more: 1}
     end
 
-    test "a function with a memory gets it at the next step" do
-      count = fn _boid, _neighbors, %{memory: memory} ->
-        # The first call has no memory.
-        seen = if memory == :undefined, do: 1, else: memory + 1
-        {{seen, 0}, seen}
-      end
-
-      boid = boid(rules: [{count, 1}, {:wander, 0}, {count, 10}], max_force: 1000)
-      {first, boid} = :boids_boid.force(boid, [], %{dt: 0.1})
-      {second, boid} = :boids_boid.force(boid, [], %{dt: 0.1})
-      assert_vec(first, {11.0, 0.0})
-      assert_vec(second, {22.0, 0.0})
-      # Each rule has its memory, at its position in the list.
-      assert %{1 => 2, 2 => {_, _}, 3 => 2} = boid.memory
+    test "each function is a rule of the boid, with its weight" do
+      up = fn _boid, _neighbors, _env -> {0, 1} end
+      right = fn _boid, _neighbors, _env -> {1, 0} end
+      boid = boid(rules: [{up, 2}, {right, 3}, {up, 0.5}], max_force: 100)
+      {force, same} = :boids_boid.force(boid, [], %{})
+      assert_vec(force, {3.0, 2.5})
+      assert same == boid
+      assert :boids_boid.which_rules(:boids_boid.delete_rule(boid, up)) == [right, up]
     end
 
-    test "a module with the behavior boids_rule checks its options, and gives the force" do
-      boid =
-        boid(rules: [{Boids.TestRules.Push, 2}, {Boids.TestRules.Push, 1, force: {3, 0}}], max_force: 100)
-
-      # The check gives the defaults of the options.
-      assert boid.rules == [
-               {Boids.TestRules.Push, 2, %{force: {0, 1}}},
-               {Boids.TestRules.Push, 1, %{force: {3, 0}}}
-             ]
-
-      assert_vec(elem(:boids_boid.force(boid, [], %{}), 0), {3.0, 2.0})
-      # A second check of the options that the module gave changes nothing.
-      assert :boids_boid.update(boid, %{max_speed: 1}).rules == boid.rules
-    end
-
-    test "a module with a memory gets it at the next step" do
-      boid = boid(rules: [{Boids.TestRules.Turn, 1, start: {0, 2}}], max_force: 100)
-      {first, boid} = :boids_boid.force(boid, [], %{})
-      {second, boid} = :boids_boid.force(boid, [], %{})
-      {third, _} = :boids_boid.force(boid, [], %{})
-      assert {first, second, third} == {{0.0, 2.0}, {-2.0, 0.0}, {0.0, -2.0}}
+    test "a function of a module is a rule" do
+      boid = boid(pos: {0, 0, 0}, rules: [{&__MODULE__.push/3, 2}])
+      assert elem(:boids_boid.force(boid, [], %{}), 0) == {0, 0, 2}
     end
   end
+
+  @doc false
+  def push(_boid, _neighbors, _env), do: {0, 0, 1}
 
   describe "the sum of the forces" do
     test "each force is multiplied by its weight" do
@@ -768,6 +810,21 @@ defmodule BoidsBoidTest do
 
       :boids_boid.step(boid(rules: [{rule, 1}]), [], %{wrap: false}, 0.25)
       assert_received %{dt: 0.25, wrap: false}
+    end
+
+    test "a boid with a seed uses its own random numbers" do
+      run = fn seed ->
+        boid = boid(seed: seed, rules: [wander: 1], vel: {1, 0})
+        Enum.reduce(1..5, boid, fn _, b -> :boids_boid.step(b, [], %{}, 0.1) end)
+      end
+
+      first = run.(1)
+      # The random numbers of the process do not change the result.
+      :rand.seed(:exsss, 99)
+      assert run.(1) == first
+      assert run.(2).pos != first.pos
+      assert first.rand != boid(seed: 1).rand
+      assert {:exsss, _} = first.rand
     end
 
     test "no time changes nothing" do

@@ -19,10 +19,10 @@ can be out of the box.
 
 -export([new/1, options/1, delete/1]).
 -export([insert_new/2, put/2, remove/2]).
--export([lookup/2, server/2, servers/1, near/3, all/1, count/1, dim/1, offset/3]).
+-export([lookup/2, owner/2, near/3, near/4, all/1, count/1, dim/1, fit/2, offset/3, cell/2]).
 -export([env/1, obstacles/1, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
 
--export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0]).
+-export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0, cache/0]).
 
 -type vec() :: boids_vec:vec().
 -type space() :: #{
@@ -33,8 +33,12 @@ can be out of the box.
     cell_size := number(),
     bounds := {vec(), vec()} | undefined,
     wrap := boolean(),
-    defaults := map()
+    defaults := map(),
+    clock => pid(),
+    workers => tuple()
 }.
+-type kind() :: data | server | process.
+-type cache() :: none | #{tuple() => [tuple()]}.
 -type entry() :: #{
     id := term(),
     pos := vec(),
@@ -42,7 +46,7 @@ can be out of the box.
     group => term(),
     data => term(),
     pid => pid() | undefined,
-    server => boolean()
+    kind => kind()
 }.
 -type neighbor() :: #{
     id := term(),
@@ -61,8 +65,9 @@ can be out of the box.
     time_scale := number()
 }.
 
-%% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Server, Last}. Server is
-%% true when the process of the boid is a gen_boid.
+%% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Last}. Kind tells
+%% who has the boid: a worker of the flock (data, with no Pid), a
+%% gen_boid (server), or another process (process).
 %%
 %% The grid has a copy of the row in the cell of its position:
 %% {Cell, Id, Pos, Vel, Group, Data}. One read of a cell gives all its
@@ -94,6 +99,8 @@ new(Opts) ->
     Rows = ets:new(boids_rows, [set, public, {read_concurrency, true}, {write_concurrency, true}]),
     Grid = ets:new(boids_grid, [duplicate_bag, public, {read_concurrency, true}, {write_concurrency, true}]),
     Meta = ets:new(boids_meta, [set, public, {read_concurrency, true}]),
+    %% The table has the scale of the time, the size of the vectors of
+    %% the first boid, and one row for each obstacle.
     ets:insert(Meta, {time_scale, 1.0}),
     Space#{rows => Rows, grid => Grid, meta => Meta, owner => self()}.
 
@@ -129,11 +136,18 @@ delete(#{rows := Rows, grid := Grid, meta := Meta}) ->
     ets:delete(Meta),
     ok.
 
--doc "Add the row of a new boid. The result is `false` when the id is in the space.".
+-doc """
+Add the row of a new boid. The result is `false` when the id is in the
+space, or when the position does not have the size of the vectors of the
+space (`fit/2`).
+""".
 -spec insert_new(space(), entry()) -> boolean().
-insert_new(Space = #{rows := Rows, grid := Grid}, Entry) ->
-    Row = row(Space, Entry),
-    ets:insert_new(Rows, Row) andalso ets:insert(Grid, spot(Row)).
+insert_new(Space = #{rows := Rows, grid := Grid}, Entry = #{pos := Pos}) ->
+    fit(Space, Pos) andalso
+        begin
+            Row = row(Space, Entry),
+            ets:insert_new(Rows, Row) andalso ets:insert(Grid, spot(Row))
+        end.
 
 -doc """
 Write the row of a boid that is in the space: its position, its
@@ -143,7 +157,7 @@ not in the space. Only the process of the boid calls this function.
 -spec put(space(), entry() | boids_boid:boid()) -> boolean().
 put(Space = #{rows := Rows, grid := Grid}, #{id := Id, pos := Pos, vel := Vel, group := Group, data := Data}) ->
     case ets:lookup(Rows, Id) of
-        [Row = {_, _, _, _, _, _, Pid, Server, _}] ->
+        [Row = {_, _, _, _, _, _, Pid, Kind, _}] ->
             Old = spot(Row),
             Cell = cell(Space, Pos),
             case {Cell, Id, Pos, Vel, Group, Data} of
@@ -153,7 +167,7 @@ put(Space = #{rows := Rows, grid := Grid}, #{id := Id, pos := Pos, vel := Vel, g
                     %% The new copy comes before the removal of the old
                     %% copy, so a reader always finds the boid in its cell
                     %% (specs/Space.tla, InsertFirst).
-                    ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Server, Old}),
+                    ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Old}),
                     ets:insert(Grid, New),
                     ets:delete_object(Grid, Old)
             end;
@@ -189,19 +203,16 @@ lookup(#{rows := Rows}, Id) ->
     end.
 
 -doc """
-The process of a boid, when that process is a `gen_boid`.
+Who has a boid: `{data, undefined}` for a boid of a worker of the flock,
+`{server, Pid}` for a `gen_boid`, and `{process, Pid}` for another
+process.
 """.
--spec server(space(), term()) -> {ok, pid()} | error.
-server(#{rows := Rows}, Id) ->
+-spec owner(space(), term()) -> {kind(), pid() | undefined} | error.
+owner(#{rows := Rows}, Id) ->
     case ets:lookup(Rows, Id) of
-        [{_, _, _, _, _, _, Pid, true, _}] -> {ok, Pid};
-        _ -> error
+        [{_, _, _, _, _, _, Pid, Kind, _}] -> {Kind, Pid};
+        [] -> error
     end.
-
--doc "The processes of the boids whose process is a `gen_boid`.".
--spec servers(space()) -> [pid()].
-servers(#{rows := Rows}) ->
-    ets:select(Rows, [{{'_', '_', '_', '_', '_', '_', '$1', true, '_'}, [], ['$1']}]).
 
 -doc "All the rows. The order is not specified.".
 -spec all(space()) -> [entry()].
@@ -215,15 +226,24 @@ count(#{rows := Rows}) ->
 
 -doc """
 The size of the vectors of the space: that of its box, or that of its
-boids. A space with no box and no boid has none.
+first boid. A space with no box that had no boid has none.
 """.
 -spec dim(space()) -> 2 | 3 | undefined.
-dim(#{bounds := {Min, _Max}}) ->
-    tuple_size(Min);
-dim(#{rows := Rows}) ->
-    case ets:first_lookup(Rows) of
-        {_Id, [Row]} -> tuple_size(element(2, Row));
-        '$end_of_table' -> undefined
+dim(#{bounds := {Min, _Max}}) -> tuple_size(Min);
+dim(#{meta := Meta}) -> ets:lookup_element(Meta, dim, 2, undefined).
+
+-doc """
+Tell if a position has the size of the vectors of the space. In a space
+with no size, the position gives its size to the space.
+""".
+-spec fit(space(), vec()) -> boolean().
+fit(Space = #{meta := Meta}, Pos) ->
+    Size = tuple_size(Pos),
+    case dim(Space) of
+        Size -> true;
+        %% Two processes can give the first boid at the same time.
+        undefined -> ets:insert_new(Meta, {dim, Size}) orelse dim(Space) =:= Size;
+        _ -> false
     end.
 
 -doc """
@@ -234,63 +254,123 @@ The boids move during the read. A boid that changes its cell at that
 moment can be absent from the result.
 """.
 -spec near(space(), vec(), number()) -> [neighbor()].
-near(Space = #{rows := Rows, grid := Grid}, Pos, Radius) when is_number(Radius), Radius >= 0 ->
+near(Space, Pos, Radius) ->
+    {Near, none} = near(Space, Pos, Radius, none),
+    Near.
+
+-doc """
+As `near/3`, with a cache of the cells: `#{}` at the start, then the
+cache of the last result. A process that reads the neighbors of many
+boids in one step reads each cell from the table one time. The cache
+does not see the writes after its read of a cell: start again with `#{}`
+at each step. With `none`, there is no cache.
+""".
+-spec near(space(), vec(), number(), cache()) -> {[neighbor()], cache()}.
+near(Space = #{rows := Rows, grid := Grid}, Pos, Radius, Cache0) when is_number(Radius), Radius >= 0 ->
     Widths = widths(Space),
-    %% The squares of the distances find most of the boids that are too
-    %% far, with no square root.
-    Limit = {Radius, Radius * Radius * 1.000001},
-    Found =
+    Query = query(Pos, Widths, Radius),
+    {Found, Cache} =
         case cells(Space, Pos, Radius) of
-            all ->
-                within([spot(Row) || Row <- ets:tab2list(Rows)], Pos, Widths, Limit, []);
-            Cells ->
-                lists:foldl(fun(Cell, Acc) -> within(ets:lookup(Grid, Cell), Pos, Widths, Limit, Acc) end, [], Cells)
+            all -> {within([spot(Row) || Row <- ets:tab2list(Rows)], Query, []), Cache0};
+            Cells -> read(Cells, Grid, Query, [], Cache0)
         end,
     %% A boid that writes its row during the read can have two copies in
     %% the grid: keep one of the two (specs/Space.tla, Dedupe). The keys
     %% of a map are exact, as the keys of the table: 1 and 1.0 are two
     %% ids. Then the nearest comes first.
     One = maps:values(#{element(2, Near) => Near || Near <- Found}),
-    [neighbor(Widths, Pos, Near) || Near <- lists:sort(One)].
+    {[neighbor(Widths, Pos, Near) || Near <- lists:sort(One)], Cache}.
+
+%% The boids of cells in the radius, from the cache or from the table.
+read([Cell | Rest], Grid, Query, Acc, none) ->
+    read(Rest, Grid, Query, within(ets:lookup(Grid, Cell), Query, Acc), none);
+read([Cell | Rest], Grid, Query, Acc, Cache) ->
+    case Cache of
+        #{Cell := Spots} ->
+            read(Rest, Grid, Query, within(Spots, Query, Acc), Cache);
+        _ ->
+            Spots = ets:lookup(Grid, Cell),
+            read(Rest, Grid, Query, within(Spots, Query, Acc), Cache#{Cell => Spots})
+    end;
+read([], _Grid, _Query, Acc, Cache) ->
+    {Acc, Cache}.
 
 %% The sizes of the box when its sides continue, or none.
 widths(#{wrap := true, bounds := {Min, Max}}) -> boids_vec:sub(Max, Min);
 widths(_Space) -> none.
 
+%% The numbers of a read, as floats: the calculation with floats only is
+%% the fastest. The squares of the distances find most of the boids that
+%% are too far, with no square root.
+query({X, Y}, none, Radius) ->
+    {float(X), float(Y), float(Radius), Radius * Radius * 1.000001};
+query({X, Y, Z}, none, Radius) ->
+    {float(X), float(Y), float(Z), float(Radius), Radius * Radius * 1.000001};
+query({X, Y}, {Wx, Wy}, Radius) ->
+    {float(X), float(Y), float(Wx), float(Wy), float(Radius), Radius * Radius * 1.000001};
+query({X, Y, Z}, {Wx, Wy, Wz}, Radius) ->
+    {float(X), float(Y), float(Z), float(Wx), float(Wy), float(Wz), float(Radius), Radius * Radius * 1.000001}.
+
 %% The boids of a list in the radius, as {Dist, Id, Offset, Pos, Vel,
 %% Group, Data}. The offset is that of offset/3.
-within([{_Cell, Id, Other = {Ox, Oy}, Vel, Group, Data} | Rest], Pos = {X, Y}, Widths, Limit, Acc) ->
-    {Wx, Wy} = sizes(Widths, 2),
+within(Spots, {X, Y, Radius, Limit}, Acc) -> within2(Spots, X, Y, Radius, Limit, Acc);
+within(Spots, {X, Y, Z, Radius, Limit}, Acc) -> within3(Spots, X, Y, Z, Radius, Limit, Acc);
+within(Spots, {X, Y, Wx, Wy, Radius, Limit}, Acc) -> wrap2(Spots, X, Y, Wx, Wy, Radius, Limit, Acc);
+within(Spots, {X, Y, Z, Wx, Wy, Wz, Radius, Limit}, Acc) -> wrap3(Spots, X, Y, Z, Wx, Wy, Wz, Radius, Limit, Acc).
+
+within2([{_Cell, Id, Other = {Ox, Oy}, Vel, Group, Data} | Rest], X, Y, Radius, Limit, Acc) when
+    is_float(X), is_float(Y), is_float(Limit)
+->
+    Dx = Ox - X,
+    Dy = Oy - Y,
+    Near = in_radius(Dx * Dx + Dy * Dy, Radius, Limit),
+    within2(Rest, X, Y, Radius, Limit, found(Near, Id, {Dx, Dy}, Other, Vel, Group, Data, Acc));
+within2([], _X, _Y, _Radius, _Limit, Acc) ->
+    Acc.
+
+within3([{_Cell, Id, Other = {Ox, Oy, Oz}, Vel, Group, Data} | Rest], X, Y, Z, Radius, Limit, Acc) when
+    is_float(X), is_float(Y), is_float(Z), is_float(Limit)
+->
+    Dx = Ox - X,
+    Dy = Oy - Y,
+    Dz = Oz - Z,
+    Near = in_radius(Dx * Dx + Dy * Dy + Dz * Dz, Radius, Limit),
+    within3(Rest, X, Y, Z, Radius, Limit, found(Near, Id, {Dx, Dy, Dz}, Other, Vel, Group, Data, Acc));
+within3([], _X, _Y, _Z, _Radius, _Limit, Acc) ->
+    Acc.
+
+wrap2([{_Cell, Id, Other = {Ox, Oy}, Vel, Group, Data} | Rest], X, Y, Wx, Wy, Radius, Limit, Acc) when
+    is_float(X), is_float(Y), is_float(Wx), is_float(Wy), is_float(Limit)
+->
     Dx = short(Ox - X, Wx),
     Dy = short(Oy - Y, Wy),
-    Near = in_radius(Dx * Dx + Dy * Dy, Limit),
-    within(Rest, Pos, Widths, Limit, found(Near, Id, {Dx, Dy}, Other, Vel, Group, Data, Acc));
-within([{_Cell, Id, Other = {Ox, Oy, Oz}, Vel, Group, Data} | Rest], Pos = {X, Y, Z}, Widths, Limit, Acc) ->
-    {Wx, Wy, Wz} = sizes(Widths, 3),
+    Near = in_radius(Dx * Dx + Dy * Dy, Radius, Limit),
+    wrap2(Rest, X, Y, Wx, Wy, Radius, Limit, found(Near, Id, {Dx, Dy}, Other, Vel, Group, Data, Acc));
+wrap2([], _X, _Y, _Wx, _Wy, _Radius, _Limit, Acc) ->
+    Acc.
+
+wrap3([{_Cell, Id, Other = {Ox, Oy, Oz}, Vel, Group, Data} | Rest], X, Y, Z, Wx, Wy, Wz, Radius, Limit, Acc) when
+    is_float(X), is_float(Y), is_float(Z), is_float(Wx), is_float(Wy), is_float(Wz), is_float(Limit)
+->
     Dx = short(Ox - X, Wx),
     Dy = short(Oy - Y, Wy),
     Dz = short(Oz - Z, Wz),
-    Near = in_radius(Dx * Dx + Dy * Dy + Dz * Dz, Limit),
-    within(Rest, Pos, Widths, Limit, found(Near, Id, {Dx, Dy, Dz}, Other, Vel, Group, Data, Acc));
-within([], _Pos, _Widths, _Limit, Acc) ->
+    Near = in_radius(Dx * Dx + Dy * Dy + Dz * Dz, Radius, Limit),
+    wrap3(Rest, X, Y, Z, Wx, Wy, Wz, Radius, Limit, found(Near, Id, {Dx, Dy, Dz}, Other, Vel, Group, Data, Acc));
+wrap3([], _X, _Y, _Z, _Wx, _Wy, _Wz, _Radius, _Limit, Acc) ->
     Acc.
 
-sizes(none, 2) -> {none, none};
-sizes(none, 3) -> {none, none, none};
-sizes(Widths, _Dim) -> Widths.
-
 %% As boids_vec:shortest/3, for one number.
-short(D, none) -> D;
-short(D, Width) when 2 * D =< Width, 2 * D >= -Width -> D;
+short(D, Width) when is_float(D), is_float(Width), 2 * D =< Width, 2 * D >= -Width -> D;
 short(D, Width) -> D - Width * round(D / Width).
 
 %% The distance for a square of a distance, or far.
-in_radius(Dist2, {Radius, Radius2}) when Dist2 =< Radius2 ->
+in_radius(Dist2, Radius, Limit) when Dist2 =< Limit ->
     case math:sqrt(Dist2) of
         Dist when Dist =< Radius -> Dist;
         _ -> far
     end;
-in_radius(_Dist2, _Limit) ->
+in_radius(_Dist2, _Radius, _Limit) ->
     far.
 
 found(far, _Id, _Offset, _Other, _Vel, _Group, _Data, Acc) -> Acc;
@@ -321,13 +401,12 @@ the time. `boids_boid:step/4` uses it.
 """.
 -spec env(space()) -> env().
 env(Space = #{bounds := Bounds, wrap := Wrap, meta := Meta}) ->
-    %% The table has the scale of the time, and one row for each obstacle.
-    Obstacles =
-        case ets:info(Meta, size) of
-            1 -> [];
-            _ -> obstacles(Space)
-        end,
-    #{bounds => Bounds, wrap => Wrap, obstacles => Obstacles, time_scale => ets:lookup_element(Meta, time_scale, 2)}.
+    #{
+        bounds => Bounds,
+        wrap => Wrap,
+        obstacles => obstacles(Space),
+        time_scale => ets:lookup_element(Meta, time_scale, 2)
+    }.
 
 -doc "The obstacles of the space, in the order of their ids.".
 -spec obstacles(space()) -> [obstacle()].
@@ -373,24 +452,30 @@ row(Space, #{id := Id, pos := Pos, vel := Vel} = Entry) ->
     Group = maps:get(group, Entry, default),
     Data = maps:get(data, Entry, undefined),
     Pid = maps:get(pid, Entry, undefined),
-    {Id, Pos, Vel, Group, Data, cell(Space, Pos), Pid, maps:get(server, Entry, false), none}.
+    {Id, Pos, Vel, Group, Data, cell(Space, Pos), Pid, maps:get(kind, Entry, process), none}.
 
-entry({Id, Pos, Vel, Group, Data, _Cell, Pid, _Server, _Last}) ->
+entry({Id, Pos, Vel, Group, Data, _Cell, Pid, _Kind, _Last}) ->
     #{id => Id, pos => Pos, vel => Vel, group => Group, data => Data, pid => Pid}.
 
-spot({Id, Pos, Vel, Group, Data, Cell, _Pid, _Server, _Last}) ->
+spot({Id, Pos, Vel, Group, Data, Cell, _Pid, _Kind, _Last}) ->
     {Cell, Id, Pos, Vel, Group, Data}.
 
 %% The cell of a point. With wrap, the cells start at the minimum of the
 %% box, and a point out of the box is in the cell of its point in the box.
 cell(#{wrap := true, bounds := {Min, Max}, cell_size := Size}, Pos) ->
-    At = tuple_to_list(boids_vec:sub(boids_vec:wrap(Pos, Min, Max), Min)),
-    Box = tuple_to_list(boids_vec:sub(Max, Min)),
-    %% A point very near the maximum can be at the width of the box,
-    %% because of the precision: it is in the last cell.
-    list_to_tuple([min(floor(X / Size), ceil(Width / Size) - 1) || {X, Width} <- lists:zip(At, Box)]);
-cell(#{cell_size := Size}, Pos) ->
-    list_to_tuple([floor(X / Size) || X <- tuple_to_list(Pos)]).
+    case {boids_vec:sub(boids_vec:wrap(Pos, Min, Max), Min), boids_vec:sub(Max, Min)} of
+        {{X, Y}, {Wx, Wy}} -> {index(X, Wx, Size), index(Y, Wy, Size)};
+        {{X, Y, Z}, {Wx, Wy, Wz}} -> {index(X, Wx, Size), index(Y, Wy, Size), index(Z, Wz, Size)}
+    end;
+cell(#{cell_size := Size}, {X, Y}) ->
+    {floor(X / Size), floor(Y / Size)};
+cell(#{cell_size := Size}, {X, Y, Z}) ->
+    {floor(X / Size), floor(Y / Size), floor(Z / Size)}.
+
+%% A point very near the maximum can be at the width of the box, because
+%% of the precision: it is in the last cell.
+index(X, Width, Size) ->
+    min(floor(X / Size), ceil(Width / Size) - 1).
 
 %% The cells that the ball of Radius at Pos touches, or all when a read
 %% of all the rows costs less than a read of these cells.

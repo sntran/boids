@@ -1,21 +1,24 @@
 ---- MODULE Step ----
 (***************************************************************************)
-(* One step of all the boids of a flock (boids:step/2, gen_boid).         *)
-(* The caller asks each boid for its plan: the boid reads the flock and   *)
-(* calculates its new position, but it does not move. When each boid      *)
-(* answered, the caller asks each boid to move (commit). Thus each boid   *)
-(* calculates from the same state of the flock, and the result of a step  *)
-(* does not change with the order of the processes.                       *)
+(* One step of all the boids of a flock (boids_clock, boids_worker,        *)
+(* gen_boid). The clock asks each boid for its plan: the boid reads the    *)
+(* flock and calculates its new position, but it does not move. When each  *)
+(* boid answered, the clock asks each boid to move (commit). Thus each     *)
+(* boid calculates from the same state of the flock, and the result of a   *)
+(* step does not change with the order of the processes.                   *)
 (*                                                                         *)
-(* The position of a boid is a number here. A boid that reads the         *)
-(* positions s goes to See(s).                                            *)
+(* A worker of the flock makes the two parts for all its boids, and a      *)
+(* gen_boid for its one boid. A boid here is one of these processes.       *)
+(*                                                                         *)
+(* The position of a boid is a number here. A boid that reads the          *)
+(* positions s goes to See(s).                                             *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
     Boids,      \* the boids of the flock
-    Clocks,     \* the boids that also move on their own clock (a tick that is not manual)
-    Steps,      \* the steps of the caller (a bound of the model)
+    Clocks,     \* the boids that also move on their own clock (a process of boids:join/2)
+    Steps,      \* the steps of the clock (a bound of the model)
     None,       \* no plan
     TwoParts    \* FALSE: the fault model where a boid moves when it calculates
 

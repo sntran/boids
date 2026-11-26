@@ -88,12 +88,59 @@ defmodule BoidsSpaceTest do
       assert :boids_space.lookup(space, :nobody) == :error
     end
 
-    test "server/2 gives the process of a gen_boid only", %{space: space} do
-      :boids_space.insert_new(space, entry(:a, {1, 2}, %{pid: self(), server: true}))
+    test "owner/2 tells who has a boid", %{space: space} do
+      :boids_space.insert_new(space, entry(:a, {1, 2}, %{pid: self(), kind: :server}))
       :boids_space.insert_new(space, entry(:b, {1, 2}, %{pid: self()}))
-      assert :boids_space.server(space, :a) == {:ok, self()}
-      assert :boids_space.server(space, :b) == :error
-      assert :boids_space.server(space, :nobody) == :error
+      :boids_space.insert_new(space, entry(:c, {1, 2}, %{kind: :data}))
+      assert :boids_space.owner(space, :a) == {:server, self()}
+      assert :boids_space.owner(space, :b) == {:process, self()}
+      assert :boids_space.owner(space, :c) == {:data, :undefined}
+      assert :boids_space.owner(space, :nobody) == :error
+      # A write keeps the owner.
+      assert :boids_space.put(space, %{id: :a, pos: {5, 5}, vel: {0, 0}, group: :g, data: nil})
+      assert :boids_space.owner(space, :a) == {:server, self()}
+    end
+
+    test "the first boid gives the size of the vectors of the space", %{space: space} do
+      assert :boids_space.dim(space) == :undefined
+      assert :boids_space.insert_new(space, entry(:a, {1, 2}))
+      assert :boids_space.dim(space) == 2
+      assert :boids_space.fit(space, {5, 5})
+      refute :boids_space.fit(space, {5, 5, 5})
+      refute :boids_space.insert_new(space, entry(:b, {1, 2, 3}))
+      assert :boids_space.count(space) == 1
+      # The size stays when the space has no boid.
+      :boids_space.remove(space, :a)
+      assert :boids_space.dim(space) == 2
+      refute :boids_space.fit(space, {5, 5, 5})
+    end
+
+    test "fit/2 gives the size of a position to a space with no size", %{space: space} do
+      assert :boids_space.fit(space, {1, 2, 3})
+      assert :boids_space.dim(space) == 3
+      assert :boids_space.fit(space, {4, 5, 6})
+      refute :boids_space.fit(space, {4, 5})
+    end
+
+    test "a space with a box has the size of its box" do
+      space = :boids_space.new(%{bounds: {{0, 0, 0}, {9, 9, 9}}})
+      assert :boids_space.dim(space) == 3
+      assert :boids_space.fit(space, {1, 1, 1})
+      refute :boids_space.fit(space, {1, 1})
+      refute :boids_space.insert_new(space, entry(:a, {1, 1}))
+    end
+
+    test "cell/2 gives the cell of a point" do
+      free = :boids_space.new(%{cell_size: 10})
+      assert :boids_space.cell(free, {25, -1}) == {2, -1}
+      assert :boids_space.cell(free, {25.0, -0.5, 100.0}) == {2, -1, 10}
+      flat = :boids_space.new(%{cell_size: 10, bounds: {{-5, -5}, {20, 20}}, wrap: true})
+      assert :boids_space.cell(flat, {-5, 14.9}) == {0, 1}
+      # A point out of the box is in the cell of its point in the box.
+      assert :boids_space.cell(flat, {21, -6}) == {0, 2}
+      deep = :boids_space.new(%{cell_size: 10, bounds: {{0, 0, 0}, {30, 30, 25}}, wrap: true})
+      assert :boids_space.cell(deep, {29.9, 0, 24.0}) == {2, 0, 2}
+      assert :boids_space.cell(deep, {31, -1, 26}) == {0, 2, 0}
     end
 
     test "put/2 writes the position, the velocity, the group and the data", %{space: space} do
@@ -214,13 +261,16 @@ defmodule BoidsSpaceTest do
       :boids_space.insert_new(space, entry(:a, {1, 1, 29}))
       :boids_space.insert_new(space, entry(:b, {1, 1, 15}))
 
-      assert [%{id: :a, pos: {1, 1, -1}, offset: {0, 0, -3}, dist: 3.0}] =
+      assert [%{id: :a, pos: {1.0, 1.0, -1.0}, offset: {+0.0, +0.0, -3.0}, dist: 3.0}] =
                :boids_space.near(space, {1, 1, 2}, 5)
 
       assert [%{id: :b}, %{id: :a}] = :boids_space.near(space, {1, 1, 14}, 20)
       free = :boids_space.new(%{})
       :boids_space.insert_new(free, entry(:a, {1, 1, 29}))
-      assert [%{id: :a, pos: {1, 1, 29}, offset: {0, 0, 3}}] = :boids_space.near(free, {1, 1, 26}, 5)
+      assert [%{id: :a, pos: {1, 1, 29}, offset: {+0.0, +0.0, 3.0}}] = :boids_space.near(free, {1, 1, 26}, 5)
+      # Numbers of the two kinds give the same result.
+      assert [%{id: :a, pos: {1, 1, 29}, offset: {+0.0, +0.0, 3.0}}] =
+               :boids_space.near(free, {1.0, 1.0, 26.0}, 5.0)
     end
 
     test "the ids 1 and 1.0 are two boids" do
@@ -262,8 +312,10 @@ defmodule BoidsSpaceTest do
       space = :boids_space.new(%{bounds: {{0, 0}, {100, 100}}, wrap: true})
       :boids_space.insert_new(space, entry(:a, {99, 50}))
       :boids_space.insert_new(space, entry(:b, {50, 2}))
-      assert [%{id: :a, pos: {-1, 50}, offset: {-2, 0}, dist: 2.0}] = :boids_space.near(space, {1, 50}, 5)
-      assert [%{id: :b, pos: {50, 102}, dist: 3.0}] = :boids_space.near(space, {50, 99}, 5)
+      assert [%{id: :a, pos: {-1.0, 50.0}, offset: {-2.0, +0.0}, dist: 2.0}] =
+               :boids_space.near(space, {1, 50}, 5)
+
+      assert [%{id: :b, pos: {50.0, 102.0}, dist: 3.0}] = :boids_space.near(space, {50, 99}, 5)
       assert [%{id: :a}] = :boids_space.near(space, {101, 50}, 5)
     end
 
@@ -278,6 +330,27 @@ defmodule BoidsSpaceTest do
       :boids_space.insert_new(space, entry(:a, {99, 50}))
       assert :boids_space.near(space, {1, 50}, 5) == []
       assert :boids_space.offset(space, {1, 50}, {99, 50}) == {98, 0}
+    end
+
+    test "near/4 reads each cell one time, and does not see a later write" do
+      space = :boids_space.new(%{})
+      :boids_space.insert_new(space, entry(:a, {1, 1}))
+      :boids_space.insert_new(space, entry(:b, {25, 1}))
+      assert {[%{id: :a}], cache} = :boids_space.near(space, {0, 0}, 5, %{})
+      assert %{{0, 0} => [{{0, 0}, :a, {1, 1}, _, :default, :undefined}], {-1, -1} => []} = cache
+      assert map_size(cache) == 4
+      # The cache keeps the cells that it has, and reads the others.
+      :boids_space.put(space, %{id: :a, pos: {2, 2}, vel: {0, 0}, group: :default, data: nil})
+      :boids_space.put(space, %{id: :b, pos: {26, 1}, vel: {0, 0}, group: :default, data: nil})
+      assert {[%{id: :a, pos: {1, 1}}], ^cache} = :boids_space.near(space, {0, 0}, 5, cache)
+      assert {[%{id: :b, pos: {26, 1}}], more} = :boids_space.near(space, {25, 0}, 4, cache)
+      assert map_size(more) > map_size(cache)
+      assert [%{id: :a, pos: {2, 2}}] = :boids_space.near(space, {0, 0}, 5)
+      # With none, there is no cache.
+      assert {[%{id: :a, pos: {2, 2}}], :none} = :boids_space.near(space, {0, 0}, 5, :none)
+      # A read of all the rows does not use the cache.
+      assert {[_, _], empty} = :boids_space.near(space, {0, 0}, 1.0e6, %{})
+      assert empty == %{}
     end
 
     property "gives the same boids as a read of each row" do
@@ -332,6 +405,9 @@ defmodule BoidsSpaceTest do
     found = :boids_space.near(space, pos, radius)
     assert Enum.sort(Enum.map(found, & &1.id)) == Enum.sort(brute(space, entries, pos, radius))
     assert found == Enum.sort_by(found, &{&1.dist, &1.id})
+    # A read with a cache gives the same boids, also with a full cache.
+    assert {^found, cache} = :boids_space.near(space, pos, radius, %{})
+    assert {^found, ^cache} = :boids_space.near(space, pos, radius, cache)
     :boids_space.delete(space)
     found
   end

@@ -3,9 +3,14 @@
 The process of a flock: the owner of the space, and the list of the
 processes that have a boid in it.
 
-The process of a boid writes its own row in the space, with no message
-to this process. This process adds the row at the start, and it removes
-the row when the process of the boid stops.
+A flock has a clock and a small number of workers. The workers hold the
+boids of `boids:add/2` as values, and the clock makes the steps of the
+flock. This process starts them, and they stop with it.
+
+A process can be a boid too (`gen_boid`, `boids:join/2`). Such a process
+writes its own row in the space, with no message to this process. This
+process adds the row at the start, and it removes the row when the
+process of the boid stops.
 
 Use the functions of `boids`. A flock starts with `boids:start_flock/1`,
 or as a child of your supervisor with `boids:child_spec/1`.
@@ -40,11 +45,11 @@ options(Opts) when is_list(Opts) ->
         error:badarg -> error({bad_option, Opts})
     end;
 options(Opts) when is_map(Opts) ->
-    Space = boids_space:options(maps:remove(name, Opts)),
+    {_Clock, Rest} = boids_clock:options(maps:remove(name, Opts)),
+    Space = boids_space:options(Rest),
     %% Each default is good alone. The check of a boid sees them together,
     %% with its own options.
-    {_Server, Boid} = gen_boid:options(maps:get(defaults, Space)),
-    _ = boids_boid:options(Boid),
+    _ = boids_boid:options(maps:get(defaults, Space)),
     case Opts of
         #{name := Name} when is_atom(Name) -> Opts;
         #{name := {global, _}} -> Opts;
@@ -95,7 +100,20 @@ init({Sup, Opts, Name}) ->
     %% The boids of a flock that has too much work run all the time. The
     %% flock must answer then too.
     process_flag(priority, high),
-    {ok, #{space => boids_space:new(Opts), sup => Sup, ids => #{}, refs => #{}}}.
+    {Clock = #{workers := Count}, Rest} = boids_clock:options(Opts),
+    Space0 = boids_space:new(Rest),
+    %% The workers and the clock have a link to this process: when one
+    %% of them stops, all the flock stops.
+    Workers = [
+        begin
+            {ok, Worker} = boids_worker:start_link(Space0, Number),
+            Worker
+        end
+     || Number <- lists:seq(1, Count)
+    ],
+    Space1 = Space0#{workers => list_to_tuple(Workers)},
+    {ok, Pid} = boids_clock:start_link(Space1, Clock),
+    {ok, #{space => Space1#{clock => Pid}, sup => Sup, ids => #{}, refs => #{}}}.
 
 -doc false.
 handle_call(space, _From, State = #{space := Space}) ->
@@ -107,8 +125,7 @@ handle_call(boid_sup, _From, State = #{sup := Sup}) ->
     {reply, Pid, State};
 handle_call({join, Pid, Entry = #{id := Id, pos := Pos}}, _From, State0 = #{space := Space}) ->
     State = #{ids := Ids, refs := Refs} = forget_dead(Id, State0),
-    Dim = boids_space:dim(Space),
-    case Dim =:= undefined orelse Dim =:= tuple_size(Pos) of
+    case boids_space:fit(Space, Pos) of
         true ->
             case boids_space:insert_new(Space, Entry#{pid => Pid}) of
                 true ->
