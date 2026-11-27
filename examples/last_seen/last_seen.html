@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Last Seen</title>
+<meta name="description" content="A game of theft and police made with boids: the police know only the sightings of the witnesses.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .panel { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+  .panel .message { margin: 0; flex: 1 1 320px; min-width: 0; }
+  .panel .message b { font-family: var(--display); font-weight: 600; }
+  .panel .rating { font-family: var(--data); font-size: 0.78rem; letter-spacing: 0.07em; text-transform: uppercase; border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; }
+  .panel[data-state="caught"] { border-color: var(--warm); }
+  .panel[data-state="escaped"] { border-color: var(--cool); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; display: inline-block; border-radius: 50%; }
+  .legend i.ring { background: none !important; border: 2px dashed var(--muted); }
+  .legend i.box { border-radius: 2px; width: 14px; height: 10px; }
+  .board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 28px; align-items: start; }
+  @media (max-width: 720px) { .board { grid-template-columns: minmax(0, 1fr); } }
+  .radio { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+  .radio li { display: flex; gap: 10px; align-items: baseline; border-bottom: 1px solid var(--line); padding: 4px 0; }
+  .radio li i { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+  .radio li .age { margin-left: auto; font-family: var(--data); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .radio .none { color: var(--muted); }
+  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+  .keys .pad button, .keys .act { padding: 0; min-width: 0; height: 44px; }
+  .keys .act { width: 80px; }
+  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Last Seen</h1>
+    <p class="lead">You are a thief in a busy market. Steal the purses, then leave through a gate. The police do not see the market: they know only what the witnesses tell them, and that comes late. Walk with the crowd, and change your coat.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A market square with stalls, citizens, officers and a thief"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <div class="legend" aria-label="What the colors show">
+    <span><i style="background: var(--rock)"></i>Citizens</span>
+    <span><i style="background: var(--gold)"></i>A citizen with a purse</span>
+    <span><i style="background: var(--plum)"></i>A witness that calls the police</span>
+    <span><i style="background: var(--cool)"></i>Officers</span>
+    <span><i style="background: var(--warm)"></i>You: the color is your coat</span>
+    <span><i class="ring"></i>A sighting that the police got</span>
+    <span><i class="box" style="background: var(--gold)"></i>A stall with a purse</span>
+  </div>
+
+  <div class="panel" id="panel" data-state="sneaking" aria-live="polite">
+    <p class="message" id="message">Steal the purses, then leave through a gate.</p>
+    <span class="rating" id="rating" hidden></span>
+    <button class="main" id="go" type="button" hidden>Next level</button>
+  </div>
+
+  <div class="board">
+    <div class="keys">
+      <div class="pad">
+        <button type="button" data-key="up" aria-label="Up">Up</button>
+        <button type="button" data-key="left" aria-label="Left">Left</button>
+        <button type="button" data-key="down" aria-label="Down">Down</button>
+        <button type="button" data-key="right" aria-label="Right">Right</button>
+      </div>
+      <button class="act" type="button" data-key="run">Run</button>
+      <button class="act" type="button" id="steal">Steal</button>
+      <button class="act" type="button" id="coat">Coat</button>
+      <p>Walk with the arrow keys or W, A, S and D. Hold Shift to run: it is fast, but each citizen that sees you tells the police. Stop next to a gold purse and press Space to steal it. Press C at the Coats stall for a new coat.</p>
+    </div>
+    <div>
+      <h3>The police radio</h3>
+      <ul class="radio" id="radio" aria-live="polite"><li class="none">No sighting yet.</li></ul>
+    </div>
+  </div>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>Information goes from boid to boid</h3>
+      <p>A citizen that sees a theft becomes a witness. It stands and calls, and after 1 to 4 seconds its sighting goes to the officer that is nearest to it. Each officer shows the newest sighting that it knows in its data, and the officers that see it learn it. No process knows all the market.</p>
+    </div>
+    <div>
+      <h3>Old information</h3>
+      <p>A sighting has the place, the time and the coat of the thief at the moment that the witness saw it. An officer goes to the newest sighting that it knows. When the call is slow, the thief is far from there. At the place, the officer finds nothing, and forgets that sighting.</p>
+    </div>
+    <div>
+      <h3>A crowd as cover</h3>
+      <p>A citizen notices a person that runs near it, or a person in front of it with the coat of the last sighting. After 20 seconds with no new sighting, the citizens forget that coat. A thief that walks at the speed of the crowd is one person of many. A new coat makes the old sightings false: an officer chases only the coats that it knows.</p>
+    </div>
+    <div>
+      <h3>Each person is a process</h3>
+      <p>Each citizen, officer and the thief is a <code>gen_boid</code> process. The force of the thief is a rule of its own, a function that reads your keys. The officers chase with the rule <code>pursue</code> of the library. An officer runs a bit faster than you, but after 6 seconds of a chase it is tired.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/last_seen/last_seen.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var levels = 3;
+  var market = {stalls: [], sightings: []};
+  var stallColors = {Fish: "cool", Fruit: "leaf", Bread: "gold", Coats: "plum", Spices: "warm", Pots: "fur", Cheese: "gold"};
+  var words = {theft: "a theft", running: "a person that runs", coat: "the coat", officer: "an officer saw"};
+
+  // The stalls and the sightings, on the ground under the boids.
+  function beneath(ctx, scale, height, c, now) {
+    market.stalls.forEach(function (stall) {
+      var name = stall[0], x = stall[1] * scale, y = (height - stall[2]) * scale, r = stall[3] * scale, kind = stall[4];
+      var w = r * 2.2, h = r * 1.7, color = c[stallColors[name]] || c.rock;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.fillStyle = c.shade;
+      ctx.fillRect(-w / 2 + r * 0.12, -h / 2 + r * 0.16, w, h);
+      // The awning: stripes of the color of the stall and of wool.
+      var stripes = 6;
+      for (var k = 0; k < stripes; k++) {
+        ctx.fillStyle = k % 2 === 0 ? color : c.wool;
+        ctx.fillRect(-w / 2 + (w / stripes) * k, -h / 2, w / stripes + 0.5, h);
+      }
+      ctx.strokeStyle = c.edge;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(-w / 2, -h / 2, w, h);
+      ctx.fillStyle = c.panel;
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(-w / 2, h / 2 - r * 0.55, w, r * 0.55);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = c.ink;
+      ctx.font = "600 " + Math.round(r * 0.42) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(name, 0, h / 2 - r * 0.27);
+      if (kind === "purse") {
+        // A gold purse on the stall.
+        ctx.fillStyle = c.gold;
+        ctx.beginPath();
+        ctx.arc(w / 2 - r * 0.35, -h / 2 + r * 0.35, r * 0.3, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.strokeStyle = c.edge;
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
+
+    market.sightings.forEach(function (s) {
+      var x = s[0] * scale, y = (height - s[1]) * scale, age = s[2], color = c[s[3]] || c.warm;
+      var alpha = Math.max(0.15, 1 - age / 30);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath();
+      ctx.arc(x, y, 3.2 * scale, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.font = "700 " + Math.round(2.6 * scale) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("?", x, y);
+      ctx.restore();
+    });
+  }
+
+  function radio(sightings) {
+    var list = el("radio");
+    list.textContent = "";
+    if (!sightings.length) {
+      var none = document.createElement("li");
+      none.className = "none";
+      none.textContent = "No sighting yet.";
+      list.appendChild(none);
+      return;
+    }
+    sightings.slice(0, 5).forEach(function (s) {
+      var item = document.createElement("li");
+      var dot = document.createElement("i");
+      dot.style.background = "var(--" + (s[3] === "ink" ? "boid" : s[3]) + ")";
+      item.appendChild(dot);
+      var text = document.createElement("span");
+      text.textContent = (words[s[4]] || s[4]) + ", near " + s[5];
+      item.appendChild(text);
+      var age = document.createElement("span");
+      age.className = "age";
+      age.textContent = Math.round(s[2]) + " s ago";
+      item.appendChild(age);
+      list.appendChild(item);
+    });
+  }
+
+  // Change the message only when its text changes.
+  var said = "";
+  function say(html) {
+    if (html !== said) { said = html; el("message").innerHTML = html; }
+  }
+
+  function show(more) {
+    levels = more.levels || levels;
+    market.stalls = more.stalls || [];
+    market.sightings = more.sightings || [];
+    radio(market.sightings);
+    var panel = el("panel");
+    panel.setAttribute("data-state", more.state);
+    var rating = el("rating");
+    var go = el("go");
+
+    if (more.state === "sneaking") {
+      var left = more.need - more.loot;
+      say(more.note ? "<b>" + more.note + "</b>" : left > 0
+        ? "Level " + more.level + " of " + levels + ". Steal " + left + " more purse" + (left > 1 ? "s" : "") + ". " + (more.wanted ? "The police look for a " + more.wanted + " coat." : "The police know nothing yet.") + (more.changes > 0 ? " New coats for you at the Coats stall: " + more.changes + "." : "")
+        : "You have the loot. Leave through a gate. " + (more.wanted ? "The police look for a " + more.wanted + " coat." : ""));
+      rating.hidden = true;
+      go.hidden = true;
+    } else if (more.state === "caught") {
+      say("<b>An officer caught you.</b> Try level " + more.level + " again: walk with the crowd, and do not run near the witnesses.");
+      rating.hidden = true;
+      go.hidden = false;
+      go.textContent = "Try again";
+    } else {
+      var last = more.level >= levels;
+      say("<b>You left the market with " + more.loot + " purses in " + more.time + " seconds.</b> The police got " + more.count + " sighting" + (more.count === 1 ? "" : "s") + "." + (last ? " That was the last level." : ""));
+      rating.hidden = false;
+      rating.textContent = more.count === 0 ? "Ghost" : (more.count <= 3 ? "Quiet" : "Seen");
+      go.hidden = false;
+      go.textContent = last ? "Start again" : "Next level";
+    }
+  }
+
+  var scene = Boids.scene({
+    name: "last-seen", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+  el("steal").addEventListener("click", function () { scene.send({steal: true}); });
+  el("coat").addEventListener("click", function () { scene.send({coat: true}); });
+
+  // The keys of the person go to the thief: a list of the keys that are down.
+  var down = {};
+  var codes = {
+    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
+    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+    ShiftLeft: "run", ShiftRight: "run"
+  };
+  function send() { scene.send({keys: Object.keys(down)}); }
+  function set(name, on) {
+    if (!name || !!down[name] === on) { return; }
+    if (on) { down[name] = true; } else { delete down[name]; }
+    var button = document.querySelector('[data-key="' + name + '"]');
+    if (button) { button.classList.toggle("down", on); }
+    send();
+  }
+  window.addEventListener("keydown", function (event) {
+    if (event.target.closest("textarea, input, select")) { return; }
+    if (event.code === "Space") { event.preventDefault(); if (!event.repeat) { scene.send({steal: true}); } return; }
+    if (event.code === "KeyC") { if (!event.repeat) { scene.send({coat: true}); } return; }
+    var name = codes[event.code];
+    if (name) { event.preventDefault(); set(name, true); }
+  });
+  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
+  // A window that loses the focus gets no keyup: the thief stops.
+  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+    var name = button.getAttribute("data-key");
+    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+      button.addEventListener(type, function () { set(name, false); });
+    });
+  });
+  // The thief gets the keys again each second, while a key is down.
+  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+</script>
+</body>
+</html>
