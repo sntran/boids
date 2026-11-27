@@ -24,7 +24,7 @@ defmodule BoidsExamples.Games.NightFold do
   of the sheep in the fold and of the lost sheep, and the wolves.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do
@@ -538,7 +538,7 @@ defmodule BoidsExamples.Games.NightFold do
           ["Clock", clock],
           ["Flocks", state.flocks]
         ],
-        h: %{zones: zones(state)},
+        h: %{ground: "grass", zones: zones(state)},
         x: %{
           phase: state.phase,
           field: state.field,
@@ -558,7 +558,7 @@ defmodule BoidsExamples.Games.NightFold do
     # The fold, and a dark field at night.
     defp zones(state) do
       {x0, y0, x1, y1} = Fold.fold()
-      fold = [x0, y0, x1, y1, "cool"]
+      fold = [x0, y0, x1, y1, "cool", "Fold"]
       if state.phase == :night, do: [[0, 0, 160, 90, "rock"], fold], else: [fold]
     end
 
@@ -588,10 +588,10 @@ defmodule BoidsExamples.Games.NightFold do
   @impl true
   def kinds(_scene) do
     [
-      %{name: "sheep", shape: "dot", color: "ink", size: 1.1},
-      %{name: "sheep in the fold", shape: "dot", color: "cool", size: 1.1},
-      %{name: "dog", shape: "ship", color: "warm", size: 2.2},
-      %{name: "wolves", shape: "dart", color: "rock", size: 2.4}
+      %{name: "sheep", shape: "sheep", color: "wool", size: 1.4},
+      %{name: "sheep in the fold", shape: "sheep", color: "gold", size: 1.4},
+      %{name: "dog", shape: "dog", color: "fur", size: 2.2},
+      %{name: "wolves", shape: "wolf", color: "rock", size: 2.5}
     ]
   end
 

@@ -51,7 +51,8 @@ defmodule BoidsExamples.NightFoldTest do
     header = Scene.header(scene)
     assert header.box == [160, 90]
     assert Enum.map(header.kinds, & &1.name) == ["sheep", "sheep in the fold", "dog", "wolves"]
-    assert header.zones == [[128, 30, 152, 60, "cool"]]
+    assert header.zones == [[128, 30, 152, 60, "cool", "Fold"]]
+    assert header.ground == "grass"
     assert length(header.rocks) == length(Fold.posts(20))
 
     assert Enum.frequencies_by(rows(scene), & &1.group) == %{sheep: 14, dog: 1}
