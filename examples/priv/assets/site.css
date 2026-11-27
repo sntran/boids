@@ -63,6 +63,18 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 button[aria-pressed="true"], button.main { background: var(--ink); color: var(--panel); border-color: var(--ink); }
 .keys { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--muted); font-size: 0.9rem; }
 .keys button { min-width: 64px; padding: 10px 12px; user-select: none; }
+/* The keys of a game: a pad of four arrows, and the keys of the actions. */
+.pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+.pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+.pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+.pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+.pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+.pad button, button.key { padding: 0; min-width: 0; height: 44px; user-select: none; -webkit-user-select: none; }
+button.key { width: 80px; }
+button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+/* A phone in portrait (scene.js): the field uses all the width of the screen. */
+.field.phone { margin-left: -16px; margin-right: -16px; border-radius: 0; border-left: 0; border-right: 0; }
 .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px 28px; border-top: 1px solid var(--line); padding-top: 18px; }
 .notes p, .notes li { color: var(--muted); font-size: 0.92rem; }
 code, pre { font-family: var(--data); font-size: 0.85em; }

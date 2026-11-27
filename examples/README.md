@@ -90,7 +90,13 @@ Make a folder `my_game` here, with three files:
    in the list.
 2. `my_game.html`: its page. The page connects to the socket `/ws/SLUG`
    with `Boids.scene` of `/assets/scene.js`. `use BoidsExamples.Game`
-   puts the page in the module.
+   puts the page in the module. A click or a touch on the field gives a
+   point of the world with `scene.toWorld(event)`. The page draws things
+   of its own on the field with the options `beneath` (under the boids)
+   and `above` (over the boids), not with a canvas over the field. The
+   keys of a game use the classes `pad` and `key` of
+   [`site.css`](priv/assets/site.css). On a phone in portrait, the field
+   uses all the width of the screen.
 3. `my_game_test.exs`: its tests.
 
 The site finds the new game with no other change: the list of the

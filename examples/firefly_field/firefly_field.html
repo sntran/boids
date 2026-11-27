@@ -20,15 +20,6 @@
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
-  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
-  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
-  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
-  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
-  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
-  .keys .pad button, .keys .fast { padding: 0; min-width: 0; height: 44px; }
-  .keys .fast { width: 80px; }
-  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -76,7 +67,7 @@
       <button type="button" data-key="down" aria-label="Down">Down</button>
       <button type="button" data-key="right" aria-label="Right">Right</button>
     </div>
-    <button class="fast" type="button" data-key="fast">Fast</button>
+    <button class="key" type="button" data-key="fast">Fast</button>
     <p>Use the arrow keys or W, A, S and D to move the lantern, or click or touch a point of the field: the lantern goes there. The fireflies in its light follow it. Hold Shift (or Fast) to move the lantern faster than the fireflies: it leaves them where they are.</p>
   </div>
   <p class="error" id="error" role="alert"></p>
@@ -178,10 +169,7 @@
 
   // A click or a touch on the field: the lantern goes to that point.
   el("field").addEventListener("pointerdown", function (event) {
-    var rect = el("field").getBoundingClientRect();
-    var x = (event.clientX - rect.left) / rect.width * box[0];
-    var y = box[1] - (event.clientY - rect.top) / rect.height * box[1];
-    scene.send({lantern: [Math.round(x * 10) / 10, Math.round(y * 10) / 10]});
+    scene.send({lantern: scene.toWorld(event)});
   });
 
   // The keys of the person move the lantern: a list of the keys that are down.

@@ -3,12 +3,29 @@
 //
 //   var scene = Boids.scene({name: "game", canvas: element, readings: element, source: element});
 //   scene.send({keys: ["left"]});
+//
+// A page that reads a point of the field (a click, a touch) uses
+// `scene.toWorld(event)`: the point of the world under the event. The
+// options `beneath` and `above` draw things of the page under and over
+// the boids, in the pixels of the canvas.
+//
+// On a phone in portrait (a screen of 700 px wide or less, taller than
+// it is wide), the field has the class `phone`: it uses all the width of
+// the screen (site.css).
 (function () {
   "use strict";
+
+  // A phone in portrait.
+  var phone = window.matchMedia ? window.matchMedia("(max-width: 700px) and (orientation: portrait)") : { matches: false };
 
   function scene(options) {
     var canvas = options.canvas;
     var ctx = canvas.getContext("2d");
+    var field = canvas.closest(".field") || canvas.parentNode;
+
+    function layout() { field.classList.toggle("phone", phone.matches); }
+    if (phone.addEventListener) { phone.addEventListener("change", layout); } else if (phone.addListener) { phone.addListener(layout); }
+    layout();
     var run = null;        // the box, the kinds and the rocks
     var before = {};       // the boids of the moment before the last moment, by their number
     var last = null;       // the last moment
@@ -535,6 +552,18 @@
         }
         ctx.restore();
       });
+
+      // A page can draw things of its own over the boids.
+      if (options.above) { options.above(ctx, scale, height, c, now); }
+    }
+
+    // The point of the world under a pointer event, or null.
+    function toWorld(event) {
+      if (!run) { return null; }
+      var rect = canvas.getBoundingClientRect();
+      var x = (event.clientX - rect.left) / rect.width * run.box[0];
+      var y = run.box[1] - (event.clientY - rect.top) / rect.height * run.box[1];
+      return [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
     }
 
     function send(message) {
@@ -574,7 +603,8 @@
     return {
       send: send,
       pause: function () { paused = !paused; lastAt = performance.now(); return paused; },
-      links: function () { showLinks = !showLinks; return showLinks; }
+      links: function () { showLinks = !showLinks; return showLinks; },
+      toWorld: toWorld
     };
   }
 

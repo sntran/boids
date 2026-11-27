@@ -148,10 +148,7 @@
 
   // A click on the field places the selected bee there.
   el("field").addEventListener("click", function (event) {
-    var rect = el("field").getBoundingClientRect();
-    var x = (event.clientX - rect.left) / rect.width * box[0];
-    var y = box[1] - (event.clientY - rect.top) / rect.height * box[1];
-    scene.send({ place: [Math.round(x * 10) / 10, Math.round(y * 10) / 10], kind: kind });
+    scene.send({ place: scene.toWorld(event), kind: kind });
   });
 })();
 </script>

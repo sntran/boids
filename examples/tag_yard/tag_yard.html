@@ -25,15 +25,6 @@
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend i { width: 11px; height: 11px; display: inline-block; border-radius: 50%; }
-  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
-  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
-  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
-  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
-  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
-  .keys .pad button, .keys .run { padding: 0; min-width: 0; height: 44px; }
-  .keys .run { width: 80px; }
-  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -91,7 +82,7 @@
       <button type="button" data-key="down" aria-label="Down">Down</button>
       <button type="button" data-key="right" aria-label="Right">Right</button>
     </div>
-    <button class="run" type="button" data-key="run">Run</button>
+    <button class="key" type="button" data-key="run">Run</button>
     <p>Use the arrow keys or W, A, S and D to move. Hold Shift to run: running uses stamina, and the stamina comes back when you walk or stand.</p>
   </div>
   <p class="error" id="error" role="alert"></p>

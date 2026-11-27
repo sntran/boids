@@ -10,7 +10,6 @@
 <style>
   .field { touch-action: manipulation; }
   .field.placing { cursor: crosshair; }
-  #marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .levels { display: flex; flex-wrap: wrap; gap: 8px; }
   .levels button { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 64px; padding: 6px 10px; }
   .levels button .stars { font-size: 0.8rem; letter-spacing: 1px; color: var(--warm); min-height: 1.1em; }
@@ -47,7 +46,6 @@
     <div>
       <div class="field" id="box">
         <canvas id="field" width="1600" height="960" role="img" aria-label="A hall with people, doors, pillars and signs"></canvas>
-        <canvas id="marks" width="1600" height="960" aria-hidden="true"></canvas>
         <span class="source" id="source">Connecting</span>
       </div>
       <div class="strip">
@@ -130,7 +128,8 @@
   function save() { try { localStorage.setItem("exit-plan-stars", JSON.stringify(stars)); } catch (e) { /* no storage */ } }
 
   var scene = Boids.scene({
-    name: "exit-plan", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "exit-plan", above: above,
+    canvas: el("field"), readings: el("readings"), source: el("source"),
     onStart: function (header) { box = header.box; },
     onMore: show,
     onError: function (text) { el("error").textContent = text; }
@@ -187,21 +186,16 @@
       // Keep the best stars of each level.
       if (x.result.stars > (stars[x.level] || 0)) { stars[x.level] = x.result.stars; save(); levels(x.levels); }
     }
-    marks(x);
   }
 
-  // The arrows of the signs, over the hall.
-  function marks(x) {
-    var canvas = el("marks");
-    var ctx = canvas.getContext("2d");
-    canvas.width = 1600;
-    canvas.height = Math.round(1600 * box[1] / box[0]);
-    var scale = canvas.width / box[0];
-    var color = getComputedStyle(document.documentElement).getPropertyValue("--warm").trim();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // The walls and the arrows of the signs, over the people (the option
+  // above of Boids.scene).
+  function above(ctx, scale, height, c) {
+    var x = last;
+    if (!x) { return; }
     walls(ctx, x.doors, scale);
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
+    ctx.strokeStyle = c.warm;
+    ctx.fillStyle = c.warm;
     ctx.lineWidth = 4;
     var dirs = {left: [-1, 0], right: [1, 0], up: [0, 1], down: [0, -1]};
     x.signs.forEach(function (sign) {
@@ -274,9 +268,8 @@
   // A click in the hall puts the tool there.
   el("box").addEventListener("click", function (event) {
     if (!last || last.phase !== "planning") { return; }
-    var rect = el("field").getBoundingClientRect();
-    var x = Math.round((event.clientX - rect.left) / rect.width * box[0] * 10) / 10;
-    var y = Math.round((box[1] - (event.clientY - rect.top) / rect.height * box[1]) * 10) / 10;
+    var point = scene.toWorld(event);
+    var x = point[0], y = point[1];
     if (tool === "pillar") { scene.send({pillar: [x, y]}); }
     else if (tool === "remove") { scene.send({remove: [x, y]}); }
     else { scene.send({sign: [x, y, tool]}); }

@@ -237,10 +237,7 @@
   // With "Place rocks" on, a click on the land puts a rock there.
   el("field").addEventListener("click", function (event) {
     if (!placing) { return; }
-    var rect = el("field").getBoundingClientRect();
-    var x = (event.clientX - rect.left) / rect.width * box[0];
-    var y = box[1] - (event.clientY - rect.top) / rect.height * box[1];
-    scene.send({rock: [Math.round(x * 10) / 10, Math.round(y * 10) / 10]});
+    scene.send({rock: scene.toWorld(event)});
   });
 })();
 </script>

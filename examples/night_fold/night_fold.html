@@ -21,15 +21,6 @@
   .legend i.dot { border-radius: 50%; }
   .legend i.dart { clip-path: polygon(0 0, 100% 50%, 0 100%); }
   .legend i.box { width: 14px; height: 10px; opacity: 0.4; }
-  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
-  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
-  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
-  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
-  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
-  .keys .pad button, .keys .run { padding: 0; min-width: 0; height: 44px; }
-  .keys .run { width: 80px; }
-  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -80,7 +71,7 @@
       <button type="button" data-key="down" aria-label="Down">Down</button>
       <button type="button" data-key="right" aria-label="Right">Right</button>
     </div>
-    <button class="run" type="button" data-key="run">Run</button>
+    <button class="key" type="button" data-key="run">Run</button>
     <p>Use the arrow keys or W, A, S and D to move. Hold Shift to run. Collect the sheep into one flock first: one flock is easier to move than many small ones. Then walk behind the flock, away from the opening.</p>
   </div>
   <p class="error" id="error" role="alert"></p>

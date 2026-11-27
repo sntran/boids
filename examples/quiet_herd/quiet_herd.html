@@ -19,15 +19,6 @@
   .legend i { width: 11px; height: 11px; display: inline-block; clip-path: polygon(0 0, 100% 50%, 0 100%); }
   .legend i.box { clip-path: none; width: 14px; height: 10px; opacity: 0.4; }
   .legend i.hex { clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); }
-  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
-  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
-  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
-  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
-  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
-  .keys .pad button, .keys .run { padding: 0; min-width: 0; height: 44px; }
-  .keys .run { width: 80px; }
-  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -79,7 +70,7 @@
       <button type="button" data-key="down" aria-label="Down">Down</button>
       <button type="button" data-key="right" aria-label="Right">Right</button>
     </div>
-    <button class="run" type="button" data-key="run">Run</button>
+    <button class="key" type="button" data-key="run">Run</button>
     <p>Use the arrow keys or W, A, S and D to walk. Hold Shift to run: it is fast, but the deer notice you from far away. In the tall grass, a deer sees you only when you are very near.</p>
   </div>
   <p class="error" id="error" role="alert"></p>

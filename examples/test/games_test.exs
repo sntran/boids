@@ -43,6 +43,19 @@ defmodule BoidsExamples.GamesTest do
     end
   end
 
+  test "each game page reads a point of the field with scene.toWorld, and draws all of the field in the scene" do
+    for game <- @games do
+      %{slug: slug} = game.info()
+      page = game.page()
+      assert page =~ ~s(<meta name="viewport" content="width=device-width, initial-scale=1">), slug
+      # scene.toWorld knows the size of the canvas and the box of the world.
+      refute page =~ "clientX - rect.left", "#{slug}: a point of the field with no scene.toWorld"
+      # A canvas over the field does not follow the canvas of the scene:
+      # the page draws with the options beneath and above.
+      refute page =~ ~r/<canvas[^>]*><\/canvas>\s*<canvas/, "#{slug}: a canvas over the field"
+    end
+  end
+
   test "the server gives the list, the page of each game, and moves the old addresses" do
     assert {200, _, body} = get("/showcases")
     for game <- @games, do: assert(body =~ game.info().title)

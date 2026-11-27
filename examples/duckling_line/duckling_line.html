@@ -21,15 +21,6 @@
   .legend i { width: 12px; height: 12px; display: inline-block; border-radius: 50%; border: 1px solid var(--line); }
   .legend i.box { border-radius: 3px; width: 16px; height: 11px; opacity: 0.55; }
   .keys { align-items: flex-start; }
-  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
-  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
-  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
-  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
-  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
-  .keys .pad button, .keys .hurry { padding: 0; min-width: 0; height: 44px; }
-  .keys .hurry { width: 80px; }
-  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -83,7 +74,7 @@
       <button type="button" data-key="down" aria-label="Down">Down</button>
       <button type="button" data-key="right" aria-label="Right">Right</button>
     </div>
-    <button class="hurry" type="button" data-key="hurry">Hurry</button>
+    <button class="key" type="button" data-key="hurry">Hurry</button>
     <p>Use the arrow keys or W, A, S and D to swim. Hold Shift to hurry: you are fast, but the ducklings cannot follow you. A pike scares the ducklings near it.</p>
   </div>
   <p class="error" id="error" role="alert"></p>

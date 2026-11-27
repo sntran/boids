@@ -26,15 +26,6 @@
   .radio li i { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
   .radio li .age { margin-left: auto; font-family: var(--data); color: var(--muted); font-variant-numeric: tabular-nums; }
   .radio .none { color: var(--muted); }
-  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
-  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
-  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
-  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
-  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
-  .keys .pad button, .keys .act { padding: 0; min-width: 0; height: 44px; }
-  .keys .act { width: 80px; }
-  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
 </style>
 </head>
 <body>
@@ -87,9 +78,9 @@
         <button type="button" data-key="down" aria-label="Down">Down</button>
         <button type="button" data-key="right" aria-label="Right">Right</button>
       </div>
-      <button class="act" type="button" data-key="run">Run</button>
-      <button class="act" type="button" id="steal">Steal</button>
-      <button class="act" type="button" id="coat">Coat</button>
+      <button class="key" type="button" data-key="run">Run</button>
+      <button class="key" type="button" id="steal">Steal</button>
+      <button class="key" type="button" id="coat">Coat</button>
       <p>Walk with the arrow keys or W, A, S and D. Hold Shift to run: it is fast, but each citizen that sees you tells the police. Stop next to a gold purse and press Space to steal it. Press C at the Coats stall for a new coat.</p>
     </div>
     <div>
