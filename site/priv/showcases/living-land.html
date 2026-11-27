@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Living Land</title>
+<meta name="description" content="A showcase made with boids: grazers and hunters eat, have young and die, and their genes change.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  /* The food is on a canvas behind the canvas of the boids. */
+  .field canvas.food { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .field canvas#field { position: relative; z-index: 1; }
+  .field canvas#field.placing { cursor: crosshair; }
+  .field .source { z-index: 2; }
+  .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  .actions button { padding: 9px 12px; }
+  .status { font-size: 1rem; min-height: 1.6em; }
+  .facts { color: var(--muted); font-size: 0.9rem; min-height: 1.5em; }
+  .chart { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
+  .legend { display: flex; gap: 16px; font-size: 0.85rem; color: var(--muted); }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; }
+  .legend .g i { background: var(--boid); }
+  .legend .h i { background: var(--warm); }
+  .genes td, .genes th { font-variant-numeric: tabular-nums; }
+  .genes td.num { font-family: var(--data); }
+  .genes .up { color: var(--cool); }
+  .genes .down { color: var(--warm); }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Living Land</h1>
+    <p class="lead">Grazers eat the green food. Hunters eat the grazers. An animal with enough energy has a young, and the young gets the genes of its parent with small changes. You do not control an animal: change the land, and see what evolves.</p>
+  </div>
+
+  <section class="two">
+    <div>
+      <div class="field">
+        <canvas class="food" id="food" width="800" height="450" aria-hidden="true"></canvas>
+        <canvas id="field" width="1600" height="900" role="img" aria-label="Grazers and hunters that move in a land with food"></canvas>
+        <span class="source" id="source">Connecting</span>
+      </div>
+      <div class="strip">
+        <div class="readings" id="readings"></div>
+      </div>
+      <p class="facts" id="facts"></p>
+    </div>
+    <div>
+      <p class="status" id="status" role="status">The land lives.</p>
+      <div class="actions">
+        <button id="more" type="button">More food</button>
+        <button id="less" type="button">Less food</button>
+        <button id="drought" type="button">Drought</button>
+        <button id="grazers" type="button">Add 5 grazers</button>
+        <button id="hunters" type="button">Add 3 hunters</button>
+        <button id="rock" type="button" aria-pressed="false">Place rocks</button>
+        <button id="reset" type="button">Start again</button>
+      </div>
+      <div>
+        <h2>The animals over time</h2>
+        <canvas class="chart" id="chart" width="600" height="170" role="img" aria-label="The number of grazers and of hunters in each second"></canvas>
+        <div class="legend"><span class="g"><i></i>Grazers</span><span class="h"><i></i>Hunters</span></div>
+      </div>
+      <div>
+        <h2>The genes now</h2>
+        <div class="wide">
+          <table class="genes">
+            <thead><tr><th>Gene</th><th>Grazers</th><th>Hunters</th></tr></thead>
+            <tbody id="genes"></tbody>
+          </table>
+        </div>
+        <p class="facts">The average of each gene of the animals that live now. A number in color changed from the first animals.</p>
+      </div>
+      <p class="error" id="error" role="alert"></p>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div>
+      <h3>Processes are born and die</h3>
+      <p>Each animal is a <code>gen_boid</code> process. A young is a new process that its parent starts. An animal with no energy stops, and the world removes it.</p>
+    </div>
+    <div>
+      <h3>The weights of the rules are genes</h3>
+      <p>The rules of an animal (stay close, flee, seek food, chase) come from its genes at its birth. So do its speed and how far it sees. A fast animal with good eyes uses more energy.</p>
+    </div>
+    <div>
+      <h3>A rule that is a function</h3>
+      <p>A grazer goes to the nearest food that it sees: <code>handle_sense/2</code> adds the food to what the grazer perceives, and a function of the grazer is one of its rules.</p>
+    </div>
+    <div>
+      <h3>A boid calls a boid</h3>
+      <p>A hunter that touches a grazer calls the process of the grazer. The grazer gives its energy and stops. When two hunters touch it, only one gets the meal.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/land.ex">Read the code of the showcase.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+(function () {
+  "use strict";
+  var el = function (id) { return document.getElementById(id); };
+  var box = [160, 90];
+  var first = {grazers: {}, hunters: {}};
+  var genes = null;
+  var points = [];
+  var placing = false;
+  var names = {speed: "Speed", perception: "Sight", separation: "Keep a distance", cohesion: "Stay close", alignment: "Same way", flee: "Flee from hunters", food: "Go to food", chase: "Chase grazers", wander: "Wander"};
+  var order = ["speed", "perception", "separation", "cohesion", "alignment", "flee", "food", "chase", "wander"];
+
+  var scene = Boids.scene({
+    name: "land", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onStart: function (header) {
+      box = header.box;
+      first = header.first || first;
+      points = [];
+    },
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+
+  function color(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function show(more) {
+    drawFood(more.food || []);
+    if (more.history) { points = more.history; drawChart(); }
+    if (more.genes) { genes = more.genes; showGenes(); }
+
+    var text = "Food grows at " + more.rate + " in each second.";
+    if (more.drought > 0) { text = "Drought: no food grows for " + more.drought + " seconds more."; }
+    if (more.full) { text += " The land is full: no young is born."; }
+    el("status").textContent = text;
+    el("facts").textContent = "Since the start: " + more.born + " born, " + more.eaten + " eaten, " + more.starved + " with no energy.";
+  }
+
+  // The food: a small green dot for each food, on the canvas behind the boids.
+  function drawFood(food) {
+    var canvas = el("food");
+    var ctx = canvas.getContext("2d");
+    var scale = canvas.width / box[0];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = color("--cool");
+    ctx.globalAlpha = 0.75;
+    for (var i = 0; i < food.length; i += 2) {
+      ctx.beginPath();
+      ctx.arc(food[i] * scale, (box[1] - food[i + 1]) * scale, 0.55 * scale, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // The numbers of grazers and hunters in each second: one line for each.
+  function drawChart() {
+    var canvas = el("chart");
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width, h = canvas.height, pad = 22;
+    ctx.clearRect(0, 0, w, h);
+    var top = 10;
+    points.forEach(function (p) { top = Math.max(top, p[1], p[2]); });
+    top = Math.ceil(top / 10) * 10;
+
+    ctx.strokeStyle = color("--line");
+    ctx.lineWidth = 1;
+    ctx.fillStyle = color("--muted");
+    ctx.font = "12px sans-serif";
+    [0, top / 2, top].forEach(function (v) {
+      var y = h - pad / 2 - (h - pad) * v / top;
+      ctx.beginPath(); ctx.moveTo(pad + 6, y); ctx.lineTo(w, y); ctx.stroke();
+      ctx.fillText(String(v), 2, y + 4);
+    });
+    if (points.length < 2) { return; }
+
+    var span = Math.max(points[points.length - 1][0] - points[0][0], 1);
+    function line(index, name) {
+      ctx.strokeStyle = color(name);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      points.forEach(function (p, k) {
+        var x = pad + 6 + (w - pad - 8) * (p[0] - points[0][0]) / span;
+        var y = h - pad / 2 - (h - pad) * p[index] / top;
+        if (k === 0) { ctx.moveTo(x, y); } else { ctx.lineTo(x, y); }
+      });
+      ctx.stroke();
+    }
+    line(1, "--boid");
+    line(2, "--warm");
+  }
+
+  function showGenes() {
+    var body = el("genes");
+    body.textContent = "";
+    order.forEach(function (gene) {
+      var g = genes.grazers[gene], hu = genes.hunters[gene];
+      if (g === undefined && hu === undefined) { return; }
+      var row = body.insertRow();
+      row.insertCell().textContent = names[gene];
+      [["grazers", g], ["hunters", hu]].forEach(function (pair) {
+        var cell = row.insertCell();
+        cell.className = "num";
+        var start = first[pair[0]][gene];
+        if (pair[1] === undefined) { cell.textContent = ""; return; }
+        if (pair[1] === null) { cell.textContent = "none"; return; }
+        cell.textContent = pair[1].toFixed(2);
+        // A change of more than 5 % of the first value has a color.
+        if (start !== undefined && Math.abs(pair[1] - start) > 0.05 * Math.max(start, 1)) {
+          cell.className += pair[1] > start ? " up" : " down";
+          cell.title = "At the start: " + start;
+        }
+      });
+    });
+  }
+
+  el("more").addEventListener("click", function () { scene.send({food: "more"}); });
+  el("less").addEventListener("click", function () { scene.send({food: "less"}); });
+  el("drought").addEventListener("click", function () { scene.send({drought: true}); });
+  el("grazers").addEventListener("click", function () { scene.send({add: "grazers"}); });
+  el("hunters").addEventListener("click", function () { scene.send({add: "hunters"}); });
+  el("reset").addEventListener("click", function () { points = []; drawChart(); scene.send({reset: true}); });
+  el("rock").addEventListener("click", function () {
+    placing = !placing;
+    el("rock").setAttribute("aria-pressed", placing ? "true" : "false");
+    el("field").classList.toggle("placing", placing);
+  });
+
+  // With "Place rocks" on, a click on the land puts a rock there.
+  el("field").addEventListener("click", function (event) {
+    if (!placing) { return; }
+    var rect = el("field").getBoundingClientRect();
+    var x = (event.clientX - rect.left) / rect.width * box[0];
+    var y = box[1] - (event.clientY - rect.top) / rect.height * box[1];
+    scene.send({rock: [Math.round(x * 10) / 10, Math.round(y * 10) / 10]});
+  });
+})();
+</script>
+</body>
+</html>
