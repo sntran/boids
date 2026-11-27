@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hive Guard</title>
+<meta name="description" content="A game made with boids: place guard bees, and stop the waves of beetles that walk to the hive.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  #field { cursor: crosshair; }
+  .bees { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
+  .bees button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 10px 14px; min-width: 150px; white-space: normal; }
+  .bees button b { font-family: var(--display); font-size: 0.98rem; font-weight: 600; }
+  .bees button span { font-weight: 400; font-size: 0.84rem; opacity: 0.8; }
+  .bees button:disabled { opacity: 0.45; cursor: default; }
+  .bees .wave { margin-left: auto; align-self: center; }
+  .status { font-size: 1.02rem; min-height: 1.6em; margin: 0; }
+  .facts { color: var(--muted); font-size: 0.9rem; margin: 0; }
+  @media (max-width: 560px) {
+    .bees button { min-width: 0; flex: 1 1 40%; }
+    .bees .wave { margin-left: 0; flex: 1 1 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Hive Guard</h1>
+    <p class="lead">Waves of beetles walk along the path to your hive, on the right side. Select a bee, then click the field to place it. A bee guards its post, chases the beetles that it sees, and stings them. A killed beetle gives nectar.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A field with a path to a hive. Beetles walk along the path, and guard bees chase them."></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <p class="status" id="status" role="status">The hive waits for the first wave.</p>
+  <div class="bees" role="group" aria-label="The bee to place">
+    <button id="scout" type="button" aria-pressed="true"><b>Scout</b><span>25 nectar. Fast. Sees near. Stings for 1.</span></button>
+    <button id="soldier" type="button" aria-pressed="false"><b>Soldier</b><span>50 nectar. Slow. Sees far. Stings for 3.</span></button>
+    <button class="main wave" id="go" type="button">Next wave now</button>
+  </div>
+  <p class="facts" id="facts">Click the field to place a scout. You can place 12 bees.</p>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>The beetles follow a path</h3>
+      <p>Each beetle has the rule <code>follow</code> with the points of the path, and stays with its swarm with <code>separation</code>, <code>alignment</code> and a little <code>cohesion</code>. A large beetle is slower, and the number on it is its health.</p>
+    </div>
+    <div>
+      <h3>A bee pursues a group</h3>
+      <p>A bee at its post has the rule <code>arrive</code> to its post. When it sees a beetle, it changes its rules to <code>pursue</code> with the target <code>{group, beetles}</code>: the nearest beetle that it sees.</p>
+    </div>
+    <div>
+      <h3>A sting is a message</h3>
+      <p>A bee that touches a beetle finds its process, and sends it a sting. The beetle loses health, and stops at 0. Its process tells the game, and the game gives you nectar.</p>
+    </div>
+    <div>
+      <h3>You start boids while the world runs</h3>
+      <p>Each bee that you place is a new <code>gen_boid</code> process in the world. The waves are new processes too: the game starts each beetle at the start of the path.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/hive_guard.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+(function () {
+  "use strict";
+  var el = function (id) { return document.getElementById(id); };
+  var box = [160, 90];
+  var costs = { scout: 25, soldier: 50 };
+  var kind = "scout";
+  var game = { phase: "building", nectar: 0, guards: 0, max_guards: 12 };
+
+  var scene = Boids.scene({
+    name: "hive-guard", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onStart: function (header) { box = header.box; },
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+
+  function select(name) {
+    kind = name;
+    ["scout", "soldier"].forEach(function (one) { el(one).setAttribute("aria-pressed", one === name ? "true" : "false"); });
+    facts();
+  }
+  el("scout").addEventListener("click", function () { select("scout"); });
+  el("soldier").addEventListener("click", function () { select("soldier"); });
+  el("go").addEventListener("click", function () { scene.send({ go: true }); });
+
+  function facts() {
+    var left = game.max_guards - game.guards;
+    var text;
+    if (game.phase === "over") {
+      text = "Press Start again for a new game.";
+    } else if (left <= 0) {
+      text = "You placed all 12 bees.";
+    } else if (game.nectar < costs[kind]) {
+      text = "You need " + costs[kind] + " nectar for a " + kind + ". Kill beetles to get nectar.";
+    } else {
+      text = "Click the field to place a " + kind + ". You can place " + left + " more " + (left === 1 ? "bee." : "bees.");
+    }
+    el("facts").textContent = text;
+  }
+
+  // The state of the game, at each moment.
+  function show(more) {
+    game = more;
+    var text;
+    if (more.phase === "building") {
+      text = more.wave === 0
+        ? "The first wave comes in " + Math.ceil(more.countdown) + " s. Place your bees near the path."
+        : "The hive survived wave " + more.wave + ". Wave " + (more.wave + 1) + " comes in " + Math.ceil(more.countdown) + " s.";
+    } else if (more.phase === "wave") {
+      text = "Wave " + more.wave + ": the beetles walk to the hive.";
+    } else {
+      text = "The hive fell. It survived " + more.done + (more.done === 1 ? " wave" : " waves") + ", and your bees killed " + more.kills + " beetles.";
+    }
+    el("status").textContent = text;
+    el("go").hidden = more.phase === "wave";
+    el("go").textContent = more.phase === "over" ? "Start again" : "Next wave now";
+    el("scout").disabled = more.phase === "over" || more.nectar < costs.scout || more.guards >= more.max_guards;
+    el("soldier").disabled = more.phase === "over" || more.nectar < costs.soldier || more.guards >= more.max_guards;
+    facts();
+  }
+
+  // A click on the field places the selected bee there.
+  el("field").addEventListener("click", function (event) {
+    var rect = el("field").getBoundingClientRect();
+    var x = (event.clientX - rect.left) / rect.width * box[0];
+    var y = box[1] - (event.clientY - rect.top) / rect.height * box[1];
+    scene.send({ place: [Math.round(x * 10) / 10, Math.round(y * 10) / 10], kind: kind });
+  });
+})();
+</script>
+</body>
+</html>
