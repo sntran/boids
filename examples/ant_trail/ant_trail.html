@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ant Trail</title>
+<meta name="description" content="A sandbox made with boids: ants search for food, leave a scent, and make a trail that no ant knows.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  #field { cursor: crosshair; }
+  .tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
+  .tools button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 10px 14px; min-width: 140px; white-space: normal; }
+  .tools button b { font-family: var(--display); font-size: 0.98rem; font-weight: 600; }
+  .tools button span { font-weight: 400; font-size: 0.84rem; opacity: 0.8; }
+  .layouts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .layouts span { color: var(--muted); font-size: 0.9rem; margin-right: 4px; }
+  .status { font-size: 1.02rem; min-height: 1.6em; margin: 0; }
+  .facts { color: var(--muted); font-size: 0.9rem; margin: 0; }
+  @media (max-width: 560px) {
+    .tools button { min-width: 0; flex: 1 1 40%; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Ant Trail</h1>
+    <p class="lead">Ants leave the nest and search for food. An ant that finds food takes a piece home, and leaves a scent on its way. Other ants follow the scent, and a trail grows. Place food and rocks, and see the trail change.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A sandy land with a nest on the left, ants, piles of leaves, and the scent of the trails"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <p class="status" id="status" role="status">The ants come out of the nest.</p>
+  <div class="tools" role="group" aria-label="What a click on the land places">
+    <button id="food" type="button" aria-pressed="true"><b>Food</b><span>A pile of 40 pieces. 8 piles at most.</span></button>
+    <button id="rock" type="button" aria-pressed="false"><b>Rock</b><span>The ants walk around it. 10 rocks at most.</span></button>
+    <button id="rain" type="button"><b>Rain</b><span>Washes all the scent away.</span></button>
+  </div>
+  <div class="layouts" role="group" aria-label="Start a new land">
+    <span>New land:</span>
+    <button id="piles" type="button">Near food and far food</button>
+    <button id="bridge" type="button">A wall of rocks</button>
+    <button id="empty" type="button">Empty land</button>
+  </div>
+  <p class="facts" id="facts">Click the land to place a pile of food.</p>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>The scent is a field</h3>
+      <p>An ant that searches has the rule <code>flow</code> with a field that is a function of a position: the direction to the stronger scent near the ant. Where the ground has no scent, the field gives no force, and the ant wanders.</p>
+    </div>
+    <div>
+      <h3>The ants share a grid</h3>
+      <p>The scent is a grid in an ETS table of the land. An ant with food marks its cell, and an ant that searches reads the cells near it. No message goes from ant to ant. The scent fades with the time.</p>
+    </div>
+    <div>
+      <h3>No ant knows the trail</h3>
+      <p>The mark of an ant with food is stronger near the food than near the nest, so the scent points to the food. A cell keeps its strongest mark. A short way gets new marks more frequently than a long way, and its marks are stronger, so the trail takes the short way.</p>
+    </div>
+    <div>
+      <h3>A state changes the rules</h3>
+      <p>An ant that touches food takes a piece, and changes its rules: it goes home with <code>seek</code>, and leaves scent. At the nest it gives the food, turns back, and searches again. An ant with food is green.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/ant_trail/ant_trail.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+(function () {
+  "use strict";
+  var el = function (id) { return document.getElementById(id); };
+  var box = [160, 90];
+  var grid = { cell: 2, columns: 80 };
+  var nest = [20, 45, 5];
+  var piles = [];
+  var scent = [];
+  var item = "food";
+
+  // The scent, the nest and the piles of food: on the ground, under the ants.
+  function beneath(ctx, scale, height, c, now, sprites) {
+    var size = grid.cell * scale;
+    ctx.fillStyle = c.plum;
+    for (var i = 0; i < scent.length; i += 2) {
+      var index = scent[i];
+      var x = (index % grid.columns + 0.5) * grid.cell * scale;
+      var y = (height - (Math.floor(index / grid.columns) + 0.5) * grid.cell) * scale;
+      ctx.globalAlpha = 0.08 + 0.42 * scent[i + 1] / 9;
+      ctx.beginPath();
+      ctx.arc(x, y, size * 0.85, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // The nest: a mound of earth with a hole.
+    var nx = nest[0] * scale, ny = (height - nest[1]) * scale, nr = nest[2] * scale;
+    ctx.fillStyle = c.fur;
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath(); ctx.arc(nx, ny, nr, 0, 2 * Math.PI); ctx.fill();
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = c.edge;
+    ctx.beginPath(); ctx.arc(nx, ny, nr * 0.28, 0, 2 * Math.PI); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // A pile: a leaf for each piece, 14 at most, in a small spiral.
+    for (var p = 0; p < piles.length; p += 3) {
+      var count = Math.min(piles[p + 2], 14);
+      for (var k = 0; k < count; k++) {
+        var angle = k * 2.39996, r = 0.75 * Math.sqrt(k + 0.5) * scale;
+        ctx.save();
+        ctx.translate(piles[p] * scale + r * Math.cos(angle), (height - piles[p + 1]) * scale + r * Math.sin(angle));
+        sprites.leaf(0.9 * scale, now, angle, c.leaf, c);
+        ctx.restore();
+      }
+    }
+  }
+
+  var scene = Boids.scene({
+    name: "ant-trail", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
+    onStart: function (header) {
+      box = header.box;
+      if (header.grid) { grid = header.grid; }
+      if (header.nest) { nest = header.nest; }
+      piles = [];
+      scent = [];
+    },
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+
+  var layouts = {
+    piles: "Food near the nest and food far from it. The near food gets the stronger trail.",
+    bridge: "A wall of rocks stands between the nest and the food. The way below the wall is short, and the way above it is long.",
+    empty: "An empty land. Place food, and see the ants find it."
+  };
+
+  function show(more) {
+    if (more.piles) { piles = more.piles; }
+    if (more.scent) { scent = more.scent; }
+    if (more.layout) { el("status").textContent = layouts[more.layout] || ""; }
+    var full = piles.length / 3 >= 8;
+    el("food").disabled = full;
+    if (item === "food") { say(full ? "The land has 8 piles of food. That is the most." : "Click the land to place a pile of food."); }
+  }
+
+  function say(text) {
+    if (el("facts").textContent !== text) { el("facts").textContent = text; }
+  }
+
+  function select(name) {
+    item = name;
+    ["food", "rock"].forEach(function (one) { el(one).setAttribute("aria-pressed", one === name ? "true" : "false"); });
+    say(name === "food" ? "Click the land to place a pile of food." : "Click the land to place a rock.");
+  }
+  el("food").addEventListener("click", function () { select("food"); });
+  el("rock").addEventListener("click", function () { select("rock"); });
+  el("rain").addEventListener("click", function () { scene.send({ rain: true }); scent = []; });
+  ["piles", "bridge", "empty"].forEach(function (name) {
+    el(name).addEventListener("click", function () { scene.send({ layout: name }); piles = []; scent = []; });
+  });
+
+  // A click or a touch on the land places the selected thing there.
+  el("field").addEventListener("click", function (event) {
+    var rect = el("field").getBoundingClientRect();
+    var x = (event.clientX - rect.left) / rect.width * box[0];
+    var y = box[1] - (event.clientY - rect.top) / rect.height * box[1];
+    scene.send({ place: [Math.round(x * 10) / 10, Math.round(y * 10) / 10], item: item });
+  });
+})();
+</script>
+</body>
+</html>
