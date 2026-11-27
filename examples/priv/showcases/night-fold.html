@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Night Fold</title>
+<meta name="description" content="A game made with boids: you are a sheepdog, and you bring the sheep into the fold before the night.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .panel { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+  .panel .message { margin: 0; flex: 1 1 320px; min-width: 0; }
+  .panel .message b { font-family: var(--display); font-weight: 600; }
+  .panel .rating { font-family: var(--data); font-size: 0.78rem; letter-spacing: 0.07em; text-transform: uppercase; border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; }
+  .panel[data-phase="night"] { border-color: var(--warm); }
+  .panel[data-phase="done"] { border-color: var(--cool); }
+  .field[data-phase="night"] { border-color: var(--warm); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; display: inline-block; }
+  .legend i.dot { border-radius: 50%; }
+  .legend i.dart { clip-path: polygon(0 0, 100% 50%, 0 100%); }
+  .legend i.box { width: 14px; height: 10px; opacity: 0.4; }
+  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+  .keys .pad button, .keys .run { padding: 0; min-width: 0; height: 44px; }
+  .keys .run { width: 80px; }
+  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Night Fold</h1>
+    <p class="lead">You are a sheepdog. Bring the sheep into the fold, on the right, before the night. A sheep runs away from you, so come from the far side of the flock. At night, wolves come and take the sheep that are outside the fold.</p>
+  </div>
+
+  <div class="field" id="field-box" data-phase="day">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A dog, a flock of sheep, and a fold with an opening at the left"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <div class="legend" aria-label="What the colors show">
+    <span><i class="dot" style="background: var(--boid)"></i>Sheep</span>
+    <span><i class="dot" style="background: var(--cool)"></i>Sheep in the fold</span>
+    <span><i class="dart" style="background: var(--warm)"></i>The dog</span>
+    <span><i class="dart" style="background: var(--rock)"></i>Wolves</span>
+    <span><i class="dot" style="background: var(--rock)"></i>Fence</span>
+    <span><i class="box" style="background: var(--cool)"></i>The fold</span>
+  </div>
+
+  <div class="panel" id="panel" data-phase="day" aria-live="polite">
+    <p class="message" id="message">Bring the sheep into the fold through its opening, on the left side of the fold.</p>
+    <span class="rating" id="rating" hidden></span>
+    <button class="main" id="go" type="button" hidden>Next field</button>
+  </div>
+
+  <div class="keys">
+    <div class="pad">
+      <button type="button" data-key="up" aria-label="Up">Up</button>
+      <button type="button" data-key="left" aria-label="Left">Left</button>
+      <button type="button" data-key="down" aria-label="Down">Down</button>
+      <button type="button" data-key="right" aria-label="Right">Right</button>
+    </div>
+    <button class="run" type="button" data-key="run">Run</button>
+    <p>Use the arrow keys or W, A, S and D to move. Hold Shift to run. Collect the sheep into one flock first: one flock is easier to move than many small ones. Then walk behind the flock, away from the opening.</p>
+  </div>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>One boid moves a flock</h3>
+      <p>The dog does not push a sheep. Each sheep is a <code>gen_boid</code> process that flees from the dog that it sees (the rule <code>flee</code> with the target <code>{group, dog}</code>), and stays near the other sheep. So the flock moves away from the dog.</p>
+    </div>
+    <div>
+      <h3>A flock is not a sheep</h3>
+      <p>No sheep knows the flock. The reading "Flocks" comes from <code>boids:flocks/2</code>: the groups of sheep that see each other. A scattered flock is harder to move.</p>
+    </div>
+    <div>
+      <h3>A boid changes its group</h3>
+      <p>A sheep that comes into the fold has the group <code>penned</code> and other rules: it stays inside. A wolf hunts only the group <code>sheep</code>, so a sheep in the fold is safe.</p>
+    </div>
+    <div>
+      <h3>A wolf sends a message</h3>
+      <p>A wolf that touches a sheep sends <code>taken</code> to the process of the sheep. The sheep tells the director of the field, and stops. The world removes a boid that stops.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/night_fold.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+
+  function show(more) {
+    el("panel").setAttribute("data-phase", more.phase);
+    el("field-box").setAttribute("data-phase", more.phase);
+    var rating = el("rating");
+    var go = el("go");
+    var fields = more.fields || 3;
+
+    if (more.phase === "day") {
+      el("message").textContent = "Field " + more.field + " of " + fields + ". The night comes in " + more.left + " seconds. Bring at least half of the sheep into the fold.";
+      rating.hidden = true;
+      go.hidden = true;
+    } else if (more.phase === "night") {
+      el("message").innerHTML = "<b>The night came.</b> Wolves hunt the sheep that are outside the fold. Chase the wolves away: they run from the dog.";
+      rating.hidden = true;
+      go.hidden = true;
+    } else {
+      var last = more.field >= fields;
+      var text = "<b>" + more.penned + " of " + more.total + " sheep are in the fold.</b>";
+      if (more.lost > 0) { text += " The wolves took " + more.lost + "."; }
+      text += more.pass ? (last ? " That was the last field." : " The next field is harder.") : " Bring at least half of the sheep in. Try again.";
+      el("message").innerHTML = text;
+      rating.hidden = false;
+      rating.textContent = more.penned === more.total ? "All safe" : (more.pass ? "Good dog" : "Too few");
+      go.hidden = false;
+      go.textContent = more.pass ? (last ? "Start again" : "Next field") : "Try again";
+    }
+  }
+
+  var scene = Boids.scene({
+    name: "night-fold", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+
+  // The keys of the person go to the dog: a list of the keys that are down.
+  var down = {};
+  var codes = {
+    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
+    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+    ShiftLeft: "run", ShiftRight: "run"
+  };
+  function send() { scene.send({keys: Object.keys(down)}); }
+  function set(name, on) {
+    if (!name || !!down[name] === on) { return; }
+    if (on) { down[name] = true; } else { delete down[name]; }
+    var button = document.querySelector('[data-key="' + name + '"]');
+    if (button) { button.classList.toggle("down", on); }
+    send();
+  }
+  window.addEventListener("keydown", function (event) {
+    var name = codes[event.code];
+    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
+  });
+  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
+  // A window that loses the focus gets no keyup: the dog stops.
+  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+    var name = button.getAttribute("data-key");
+    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+      button.addEventListener(type, function () { set(name, false); });
+    });
+  });
+  // The dog gets the keys again each second, while a key is down.
+  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+</script>
+</body>
+</html>
