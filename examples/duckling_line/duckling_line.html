@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duckling Line</title>
+<meta name="description" content="A calm game made with boids: lead a line of ducklings to the nest.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .panel { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+  .panel .message { margin: 0; flex: 1 1 320px; min-width: 0; }
+  .panel .message b { font-family: var(--display); font-weight: 600; }
+  .panel[data-state="done"] { border-color: var(--gold); }
+  .stars { display: inline-flex; gap: 4px; font-size: 1.6rem; line-height: 1; }
+  .stars span { color: var(--line); }
+  .stars span.on { color: var(--gold); }
+  .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 12px; height: 12px; display: inline-block; border-radius: 50%; border: 1px solid var(--line); }
+  .legend i.box { border-radius: 3px; width: 16px; height: 11px; opacity: 0.55; }
+  .keys { align-items: flex-start; }
+  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+  .keys .pad button, .keys .hurry { padding: 0; min-width: 0; height: 44px; }
+  .keys .hurry { width: 80px; }
+  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Duckling Line</h1>
+    <p class="lead">You are a mother duck. Swim near a lost duckling, and it joins the end of your line. Lead the line around the rocks, the reeds and the pikes to the nest. Swim slowly: a duckling that cannot follow leaves the line.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A mother duck that leads a line of ducklings on a pond, with rocks, reeds, pikes and a nest"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+      <button id="links" type="button" aria-pressed="true">Relations</button>
+    </div>
+  </div>
+
+  <div class="legend" aria-label="What the colors show">
+    <span><i style="background: var(--fur)"></i>You, the mother</span>
+    <span><i style="background: var(--gold)"></i>Ducklings in the line</span>
+    <span><i style="background: var(--wool)"></i>Lost ducklings</span>
+    <span><i style="background: var(--rock)"></i>Pikes</span>
+    <span><i class="box" style="background: var(--gold)"></i>The nest</span>
+  </div>
+
+  <div class="panel" id="panel" data-state="swimming" aria-live="polite">
+    <p class="message" id="message">Collect the lost ducklings, and lead them to the nest.</p>
+    <div class="stars" id="stars" hidden aria-label="Stars"><span>&#9733;</span><span>&#9733;</span><span>&#9733;</span></div>
+    <div class="buttons">
+      <button class="main" id="go" type="button" hidden>Next pond</button>
+      <button id="again" type="button">Start this pond again</button>
+    </div>
+  </div>
+
+  <div class="keys">
+    <div class="pad">
+      <button type="button" data-key="up" aria-label="Up">Up</button>
+      <button type="button" data-key="left" aria-label="Left">Left</button>
+      <button type="button" data-key="down" aria-label="Down">Down</button>
+      <button type="button" data-key="right" aria-label="Right">Right</button>
+    </div>
+    <button class="hurry" type="button" data-key="hurry">Hurry</button>
+    <p>Use the arrow keys or W, A, S and D to swim. Hold Shift to hurry: you are fast, but the ducklings cannot follow you. A pike scares the ducklings near it.</p>
+  </div>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>The line is a chain of relations</h3>
+      <p>A duckling that joins gets the relation <code>follows</code> to the last boid of the line, with <code>boids:relate/4</code>. Its rule <code>leader</code> has the target <code>{related, follows}</code>: it follows its leader, and does not know the line. The lines on the water show the relations.</p>
+    </div>
+    <div>
+      <h3>A relation that goes</h3>
+      <p>A duckling that is too far from its leader for 2 seconds removes its relation with <code>boids:unrelate/4</code>. The ducklings behind it still follow it: they are a short line that waits for you.</p>
+    </div>
+    <div>
+      <h3>A duckling knows its line</h3>
+      <p>A duckling goes up its chain of leaders with reads of the world, and asks no process. When the chain comes to the mother, the duckling is in the line, and its data tells that to its neighbors.</p>
+    </div>
+    <div>
+      <h3>The mother is a boid that you control</h3>
+      <p>The force of the mother is a rule of her own: a function that reads your keys. A rule <code>avoid</code> of the library moves her around the rocks and the reeds.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/duckling_line/duckling_line.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var reeds = [];
+
+  // The reeds: a bed of green blades with brown heads, under the boids.
+  function beneath(ctx, scale, height, c) {
+    reeds.forEach(function (bed, n) {
+      var x = bed[0] * scale, y = (height - bed[1]) * scale, r = bed[2] * scale;
+      ctx.fillStyle = c.leaf;
+      ctx.globalAlpha = 0.22;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.globalAlpha = 1;
+      for (var k = 0; k < 26; k++) {
+        var a = (k * 2.399 + n) % (2 * Math.PI);
+        var d = r * Math.sqrt(((k * 7 + n * 13) % 26) / 26);
+        var bx = x + Math.cos(a) * d, by = y + Math.sin(a) * d;
+        var lean = ((k * 5 + n) % 9 - 4) * r * 0.04;
+        ctx.strokeStyle = c.leaf;
+        ctx.lineWidth = Math.max(1.5, r * 0.05);
+        ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + lean, by - r * 0.32); ctx.stroke();
+        if (k % 4 === 0) {
+          ctx.fillStyle = c.fur;
+          ctx.beginPath(); ctx.ellipse(bx + lean, by - r * 0.36, r * 0.05, r * 0.1, 0, 0, 2 * Math.PI); ctx.fill();
+        }
+      }
+    });
+  }
+
+  function show(more) {
+    if (more.reeds) { reeds = more.reeds; }
+    var panel = el("panel");
+    panel.setAttribute("data-state", more.state);
+    var stars = el("stars");
+    var go = el("go");
+
+    if (more.state === "swimming") {
+      var text = "Pond " + more.pond + " of " + more.ponds + ", " + more.name + ". ";
+      if (more.lost > 0) {
+        text += more.lost === 1 ? "One duckling is lost: swim near it." : more.lost + " ducklings are lost: swim near them.";
+      } else if (more.line > 0) {
+        text += "All the ducklings are with you. Lead the line to the nest.";
+      }
+      el("message").textContent = text;
+      stars.hidden = true;
+      go.hidden = true;
+    } else {
+      var last = more.pond >= more.ponds;
+      var tips = [];
+      if (more.time > more.par) { tips.push("Try to be in the nest in " + more.par + " seconds."); }
+      if (more.breaks > 0) { tips.push("Swim slowly, so that the line does not break."); }
+      el("message").innerHTML = "<b>All the ducklings are safe in " + more.time + " seconds.</b> " +
+        more.stars + " of 3 stars. " + (tips.length ? tips.join(" ") : "A perfect line!") + (last ? " That was the last pond." : "");
+      stars.hidden = false;
+      Array.prototype.forEach.call(stars.children, function (star, i) { star.classList.toggle("on", i < more.stars); });
+      go.hidden = false;
+      go.textContent = last ? "Start again" : "Next pond";
+    }
+  }
+
+  var scene = Boids.scene({
+    name: "duckling-line", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
+    onStart: function (header) { reeds = header.reeds || []; },
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  Boids.toggle(el("links"), scene.links);
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+  el("again").addEventListener("click", function () { scene.send({again: true}); });
+
+  // The keys of the person go to the mother: a list of the keys that are down.
+  var down = {};
+  var codes = {
+    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
+    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+    ShiftLeft: "hurry", ShiftRight: "hurry"
+  };
+  function send() { scene.send({keys: Object.keys(down)}); }
+  function set(name, on) {
+    if (!name || !!down[name] === on) { return; }
+    if (on) { down[name] = true; } else { delete down[name]; }
+    var button = document.querySelector('[data-key="' + name + '"]');
+    if (button) { button.classList.toggle("down", on); }
+    send();
+  }
+  window.addEventListener("keydown", function (event) {
+    var name = codes[event.code];
+    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
+  });
+  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
+  // A window that loses the focus gets no keyup: the mother stops.
+  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+    var name = button.getAttribute("data-key");
+    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+      button.addEventListener(type, function () { set(name, false); });
+    });
+  });
+  // The mother gets the keys again each second, while a key is down.
+  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+</script>
+</body>
+</html>
