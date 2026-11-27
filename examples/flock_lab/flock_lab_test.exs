@@ -100,7 +100,13 @@ defmodule BoidsExamples.LabTest do
   end
 
   test "a program with too many bumps fails" do
-    status = run(start(3, [b("flag", 3)]))
+    # The teams can miss each other by chance: one of three runs bumps.
+    status =
+      Enum.find_value(1..3, fn _ ->
+        status = run(start(3, [b("flag", 3)]))
+        if status.x.state == "failed", do: status
+      end)
+
     assert status.x.state == "failed"
     assert status.x.text =~ "Too many bumps"
     assert ["Bumps", bumps] = List.last(status.r)

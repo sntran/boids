@@ -113,25 +113,33 @@ defmodule BoidsExamples.ScenesTest do
       assert bad.(%{"box" => [10, 10], "kinds" => [@hawks]}) =~ "sides of the box"
       assert bad.(%{"rocks" => [[1, 2]], "kinds" => [@hawks]}) =~ "rock is"
       # A scene that the site refuses starts no world.
-      assert :counters.get(:persistent_term.get(BoidsExamples.Scene), 1) == 0
+      assert no_scenes()
     end
   end
 
   test "the site has a limit of the scenes at one time, and a scene stops with its visitor" do
     count = :persistent_term.get(BoidsExamples.Scene)
     limit = String.to_integer(System.get_env("BOIDS_SCENES", "8"))
+    # The scenes of earlier tests stop first.
+    assert no_scenes()
     started = for _ <- 1..limit, do: scene(BoidsExamples.Scenes.Playground, %{"kinds" => [@hawks]})
     assert Enum.all?(started, &match?({_pid, {:ok, _}}, &1))
     assert {_pid, {:error, text}} = scene(BoidsExamples.Scenes.Playground, %{"kinds" => [@hawks]})
     assert text =~ "scenes at one time"
 
     for {pid, _} <- started, do: Process.exit(pid, :kill)
-    Process.sleep(300)
-    assert :counters.get(count, 1) == 0
+    assert no_scenes()
     assert {_pid, {:ok, scene}} = scene(BoidsExamples.Scenes.Playground, %{"kinds" => [@hawks]})
     # A visitor can stop a scene, for a new one.
     # The stop waits for the end of the world, so the count is right at once.
     assert Scene.stop(scene) == :ok
     assert :counters.get(count, 1) == 0
+  end
+
+  # True when the site has no scene, in 5 seconds at most. A scene stops a
+  # short time after the process of its visitor.
+  defp no_scenes do
+    count = :persistent_term.get(BoidsExamples.Scene)
+    Enum.any?(1..50, fn _ -> :counters.get(count, 1) == 0 or (Process.sleep(100) && false) end)
   end
 end
