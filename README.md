@@ -99,7 +99,7 @@ gives the process of an id.
 
 The directory [`site`](https://github.com/sntran/boids/tree/main/site)
 is a site for the library, made with the library: a home page with a
-flock, a game, and a playground.
+flock, five games in `/showcases`, and a playground.
 
 ```sh
 cd site
@@ -120,6 +120,23 @@ Then open `http://localhost:4000`.
   rules of the flock in an order: with `combine => priority`, the order
   is the priority. See
   [`site/lib/boids_site/scenes/flight.ex`](https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/flight.ex).
+- **Flock Lab** (`/showcases/flock-lab`) is a set of puzzles for young
+  programmers. A kid builds a program from blocks ("Go to the flag",
+  "Do not bump", "When I see the wolf"), presses Run, and sees if the
+  sheep reach the pen. Each level teaches one idea: steps, numbers,
+  order, conditions, relations. "Show the code" gives the same program
+  as Erlang and Elixir. See
+  [`site/lib/boids_site/scenes/lab.ex`](https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/lab.ex).
+- **Quiet Herd** (`/showcases/quiet-herd`) is a stealth game: move a fox
+  across a field of deer. Each deer has a fear that changes its rules,
+  and fear goes from deer to deer. No code makes the wave of fear: it
+  comes from the rules of each deer. See
+  [`site/lib/boids_site/scenes/herd.ex`](https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/herd.ex).
+- **Living Land** (`/showcases/living-land`) has grazers and hunters
+  whose rule weights, speed and sight are genes. An animal with enough
+  energy starts a young process with changed genes, and an animal with
+  no energy stops. You change the land, and see what evolves. See
+  [`site/lib/boids_site/scenes/land.ex`](https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/land.ex).
 - **The playground** (`/playground`) starts boids from a definition
   that you write: kinds of boids, their rules, what they do when they
   see another kind, and chains of boids that follow each other.

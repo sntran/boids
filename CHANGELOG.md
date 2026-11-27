@@ -60,6 +60,11 @@ The first version. It needs Erlang/OTP 29.
   real world against `specs/Members.tla`.
 - The processes of a world and of a boid have a label.
 - A site for the library, made with the library (`site/`): a home page,
-  two games and a playground. It runs on a computer and on Cloudflare
-  Workers. In the game Long Flight, the rules of a flock are the cards
-  of the person.
+  a playground, and five games in `/showcases`. It runs on a computer
+  and on Cloudflare Workers.
+  - Rock Patrol: a ship in a field of rocks, and drones that hunt it.
+  - Long Flight: the rules of a flock are the cards of the person.
+  - Flock Lab: puzzles that teach programming to kids with rule blocks,
+    and show the same program as Erlang and Elixir code.
+  - Quiet Herd: a stealth game, where fear goes from deer to deer.
+  - Living Land: species whose rule weights are genes.

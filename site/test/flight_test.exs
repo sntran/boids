@@ -163,7 +163,8 @@ defmodule BoidsSite.FlightTest do
     assert Director.take(deck, :eyes).perception == 14
     assert Director.take(deck, :scatter).scatter
     elders = Director.take(deck, :elders)
-    assert elders.elders and List.last(elders.rules) == {:leader, 1.5, %{target: {:related, :follows}}}
+    assert elders.elders == true
+    assert List.last(elders.rules) == {:leader, 1.5, %{target: {:related, :follows}}}
     assert Director.take(elders, :elders) == elders
     assert Director.take(deck, :chicks) == deck
   end

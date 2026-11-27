@@ -92,6 +92,20 @@ then deploys at each push.
   message to the bird that it catches, and a bird that is safe or lost
   stops. One process, the director, has the land, the deck and the
   counts of a run.
+- Flock Lab waits for a program of the page (the callback `waits/0`):
+  [`lab.ex`](lib/boids_site/scenes/lab.ex). A block of the kid is one
+  rule from a fixed list, and the server checks each block. The levels
+  have stars for the goal, the time and the number of blocks.
+- Quiet Herd is the example for a state of each boid:
+  [`herd.ex`](lib/boids_site/scenes/herd.ex). The fear of a deer is its
+  state, and changes its rules. The data of each boid tells its
+  neighbors how fast the fox moves and how afraid a deer is, so fear
+  goes from deer to deer with no message.
+- Living Land is the example for processes that start and stop all the
+  time: [`land.ex`](lib/boids_site/scenes/land.ex). The genes of an
+  animal give the weights of its rules, its speed and its sight. An
+  animal starts its young as a new process, and a hunter calls the
+  process of the grazer that it catches.
 
 ## The playground
 
