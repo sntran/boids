@@ -19,7 +19,11 @@ Use the functions of `boids`. A world starts with
 -behavior(gen_server).
 
 -export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/3]).
--export([relate/4, unrelate/4, relations/1]).
+-export([relate/5, unrelate/4, relations/1]).
+-export([settle/2, find/2, find_local/2, moved/3, adopt/3]).
+
+%% A row of a boid of another node that gets no update in this time goes.
+-define(GHOST_MS, 500).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -export_type([server/0]).
@@ -86,7 +90,7 @@ boid_sup(#{owner := Server}) ->
 
 -doc """
 Add the row of a boid of the process `Pid` to the world. The
-world removes the row when the process stops. All the boids of an
+world removes the row when the process stops. All the boids of a
 world have positions of the same size: two numbers, or three.
 """.
 -spec join(boids_space:space(), pid(), boids_space:entry()) ->
@@ -108,14 +112,78 @@ result is `{error, {not_found, Id}}` for an id that is not in the
 world, and `{error, cycle}` when the world has the option
 `relations => acyclic` and the relation makes a cycle.
 """.
--spec relate(boids_space:space(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
-relate(#{owner := Server}, From, Label, To) ->
-    gen_server:call(Server, {relate, From, Label, To}).
+-spec relate(boids_space:space(), term(), term(), term(), boolean()) -> ok | {error, {not_found, term()} | cycle}.
+relate(#{owner := Server}, From, Label, To, Found) ->
+    gen_server:call(Server, {relate, From, Label, To, Found}).
 
 -doc "Remove the relation `Label` from the boid `From` to the boid `To`.".
 -spec unrelate(boids_space:space(), term(), term(), term()) -> ok.
 unrelate(#{owner := Server}, From, Label, To) ->
     gen_server:call(Server, {unrelate, From, Label, To}).
+
+-doc """
+Show a boid that wrote its row to the other nodes that it is near. The
+result is `{away, Home}` for a boid in a tile of the node `Home`, and
+`home` for a boid in a tile of this node.
+""".
+-spec settle(boids_space:space(), boids_boid:boid()) -> home | {away, node()}.
+settle(Space, Boid = #{pos := Pos}) ->
+    case boids_space:place(Space, Pos, maps:get(perception, Boid, 0)) of
+        home ->
+            home;
+        {border, Nodes} ->
+            show(Space, Nodes, Boid),
+            home;
+        {away, Home, Nodes} ->
+            show(Space, [Home | Nodes], Boid),
+            {away, Home}
+    end.
+
+show(#{name := Name} = Space, Nodes, Boid = #{id := Id}) ->
+    {Kind, Pid} = boids_space:owner(Space, Id),
+    Entry = (boids_boid:entry(Boid))#{pid => Pid, kind => Kind},
+    %% The boid shows its row to the worlds of other nodes. It does not
+    %% wait for a node that has no connection.
+    lists:foreach(fun(Node) -> erlang:send({Name, Node}, {show, Entry}, [noconnect]) end, Nodes).
+
+-doc """
+Find a boid of the world, on this node or on another node: `{Kind, Pid}`
+with the kind `server` (a `gen_boid`) or `process`, or `error`.
+""".
+-spec find(boids_space:space(), term()) -> {server | process, pid()} | error.
+find(Space, Id) ->
+    case boids_space:owner(Space, Id) of
+        {{ghost, Kind}, Pid} ->
+            {Kind, Pid};
+        {Kind, Pid} ->
+            {Kind, Pid};
+        error ->
+            case {Space, boids_space:nodes(Space) -- [node()]} of
+                {#{name := Name}, Nodes = [_ | _]} ->
+                    Found = erpc:multicall(Nodes, ?MODULE, find_local, [Name, Id], 5000),
+                    case [Owner || {ok, Owner = {_Kind, _Pid}} <- Found] of
+                        [Owner | _] -> Owner;
+                        [] -> error
+                    end;
+                _ ->
+                    error
+            end
+    end.
+
+-doc false.
+find_local(Name, Id) ->
+    case boids_space:owner(space(Name), Id) of
+        {Kind, Pid} when is_atom(Kind) -> {Kind, Pid};
+        _ -> error
+    end.
+
+-doc false.
+moved(#{owner := Server}, Id, Pid) ->
+    gen_server:call(Server, {moved, Id, Pid}).
+
+-doc false.
+adopt(#{owner := Server}, Id, Relations) ->
+    gen_server:call(Server, {adopt, Id, Relations}).
 
 -doc """
 The graph of the relations: each boid with a relation is a vertex, and
@@ -129,7 +197,7 @@ relations(#{owner := Server}) ->
 
 -doc false.
 init({Sup, Opts, Name}) ->
-    %% The tools that show processes show that this process is an
+    %% The tools that show processes show that this process is a
     %% world.
     proc_lib:set_label({boids, world, Name}),
     %% The boids of a world that has too much work run all the
@@ -137,7 +205,21 @@ init({Sup, Opts, Name}) ->
     process_flag(priority, high),
     {Relations, Rest} = kind(Opts),
     Links = graph:new([Relations]),
-    {ok, #{space => boids_space:new(Rest), sup => Sup, ids => #{}, refs => #{}, links => Links}}.
+    Space0 = boids_space:new(Rest),
+    State = #{sup => Sup, ids => #{}, refs => #{}, links => Links, ghosts => #{}},
+    case is_atom(Name) andalso Name =/= undefined of
+        true ->
+            %% A world with a name is one world on all the nodes that
+            %% have a world with that name and the same options.
+            Space = Space0#{name => Name},
+            Group = {Name, erlang:phash2(maps:with([cell_size, bounds, wrap, tile], Space))},
+            {_Ref, _Members} = pg:monitor(boids, Group),
+            ok = pg:join(boids, Group, self()),
+            erlang:send_after(?GHOST_MS div 2, self(), sweep),
+            {ok, members(State#{space => Space, group => Group})};
+        false ->
+            {ok, State#{space => Space0, group => undefined}}
+    end.
 
 -doc false.
 handle_call(space, _From, State = #{space := Space}) ->
@@ -161,8 +243,13 @@ handle_call({join, Pid, Entry = #{id := Id, pos := Pos}}, _From, State0 = #{spac
         false ->
             {reply, {error, {bad_option, {pos, Pos}}}, State}
     end;
-handle_call({relate, From, Label, To}, _From, State = #{space := Space, links := Links0}) ->
-    case [Id || Id <- [From, To], boids_space:lookup(Space, Id) =:= error] of
+handle_call({relate, From, Label, To, Found}, _From, State = #{space := Space, links := Links0}) ->
+    %% The relation is on the node of the boid that has it. The caller
+    %% found the other boid, on this node or on another node.
+    Missing =
+        [From || not is_atom(element(1, owner(Space, From)))] ++
+            [To || not Found, boids_space:lookup(Space, To) =:= error],
+    case Missing of
         [] ->
             Links1 = graph:add_vertex(graph:add_vertex(Links0, From), To),
             try graph:add_edge(Links1, From, To, Label) of
@@ -175,6 +262,34 @@ handle_call({relate, From, Label, To}, _From, State = #{space := Space, links :=
             end;
         [Id | _] ->
             {reply, {error, {not_found, Id}}, State}
+    end;
+handle_call({adopt, Id, Relations}, _From, State = #{space := Space, links := Links0}) ->
+    %% The relations of a boid that came from another node.
+    Links = lists:foldl(
+        fun({Label, Others}, Acc0) ->
+            Acc = lists:foldl(
+                fun(To, G) -> graph:add_edge(graph:add_vertex(graph:add_vertex(G, Id), To), Id, To, Label) end,
+                Acc0,
+                Others
+            ),
+            publish(Space, Acc, [Id | Others], Label),
+            Acc
+        end,
+        Links0,
+        Relations
+    ),
+    {reply, ok, State#{links := Links}};
+handle_call({moved, Id, Pid}, _From, State0 = #{space := Space, links := Links0}) ->
+    %% The boid is on another node now. Its relations went with it. The
+    %% relations of the boids of this node to it stay.
+    case boids_space:lookup(Space, Id) of
+        {ok, #{pid := Pid}} ->
+            Out = [Edge || graph:has_vertex(Links0, Id), Edge <- graph:out_edges(Links0, Id)],
+            Links = graph:del_edges(Links0, Out),
+            [publish(Space, Links, [From, To], Label) || {From, To, Label} <- Out],
+            {reply, ok, forget_row(Id, State0#{links := Links})};
+        _ ->
+            {reply, ok, State0}
     end;
 handle_call({unrelate, From, Label, To}, _From, State = #{space := Space, links := Links0}) ->
     Links = graph:del_edge(Links0, {From, To, Label}),
@@ -200,14 +315,47 @@ handle_info({'DOWN', Ref, process, _Pid, _Reason}, State = #{refs := Refs}) ->
         #{Ref := Id} -> {noreply, forget(Id, State)};
         _ -> {noreply, State}
     end;
+handle_info({show, Entry = #{id := Id}}, State = #{space := Space, ghosts := Ghosts}) ->
+    %% A boid of another node shows itself near a border.
+    case boids_space:show(Space, Entry) of
+        true -> {noreply, State#{ghosts := Ghosts#{Id => erlang:monotonic_time(millisecond)}}};
+        false -> {noreply, State}
+    end;
+handle_info(sweep, State = #{space := Space, ghosts := Ghosts}) ->
+    erlang:send_after(?GHOST_MS div 2, self(), sweep),
+    Old = erlang:monotonic_time(millisecond) - ?GHOST_MS,
+    Gone = [Id || Id := Time <- Ghosts, Time < Old],
+    lists:foreach(fun(Id) -> boids_space:remove(Space, Id) end, Gone),
+    {noreply, State#{ghosts := maps:without(Gone, Ghosts)}};
+handle_info({_Ref, Change, _Group, _Pids}, State) when Change =:= join; Change =:= leave ->
+    %% A node has a world with the name of this world now, or has it no
+    %% more.
+    {noreply, members(State)};
 handle_info(_Message, State) ->
     {noreply, State}.
 
+%% The nodes of the world, for the boids of this node. The rows of the
+%% boids of a node that went go at the next sweep.
+members(State = #{space := Space, group := Group}) ->
+    boids_space:set_nodes(Space, [node() | [node(Pid) || Pid <- pg:get_members(boids, Group)]]),
+    State.
+
+owner(Space, Id) ->
+    case boids_space:owner(Space, Id) of
+        error -> {{none, none}, undefined};
+        Owner -> Owner
+    end.
+
 %% A boid that starts again with its id can come before the message
 %% 'DOWN' of its last process (specs/Members.tla, TakeOver).
-forget_dead(Id, State = #{space := Space}) ->
-    case boids_space:lookup(Space, Id) of
-        {ok, #{pid := Pid}} when node(Pid) =:= node() ->
+forget_dead(Id, State = #{space := Space, ghosts := Ghosts}) ->
+    case boids_space:owner(Space, Id) of
+        {{ghost, _}, _Pid} ->
+            %% A boid that shows itself here from another node comes to
+            %% this node: its row becomes the row of its new process.
+            boids_space:remove(Space, Id),
+            State#{ghosts := maps:remove(Id, Ghosts)};
+        {_Kind, Pid} when node(Pid) =:= node() ->
             case is_process_alive(Pid) of
                 true -> State;
                 false -> forget(Id, State)
@@ -216,9 +364,11 @@ forget_dead(Id, State = #{space := Space}) ->
             State
     end.
 
-forget(Id, State0 = #{space := Space}) ->
+forget(Id, State) ->
+    forget_row(Id, unrelate(Id, State)).
+
+forget_row(Id, State = #{space := Space, ids := Ids, refs := Refs}) ->
     boids_space:remove(Space, Id),
-    State = #{ids := Ids, refs := Refs} = unrelate(Id, State0),
     case Ids of
         #{Id := Ref} ->
             demonitor(Ref, [flush]),

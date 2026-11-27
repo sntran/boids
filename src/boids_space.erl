@@ -10,7 +10,7 @@ process writes its own row, and all the processes read all the rows at
 the same time.
 
 A space is a map. Its process (the owner of the tables) makes it with
-`new/1`, and other processes get a copy of it. The process of an
+`new/1`, and other processes get a copy of it. The process of a
 world (`boids_world`) is the owner for
 `boids:start_world/1`, but a space also works alone, in one
 process.
@@ -23,7 +23,8 @@ can be out of the box.
 -export([new/1, options/1, delete/1]).
 -export([insert_new/2, put/2, remove/2]).
 -export([lookup/2, owner/2, servers/1, near/3, seen/4, all/1, count/1, dim/1, fit/2, offset/3]).
--export([relate/4, related/3, related_to/3]).
+-export([relate/4, related/3, related_to/3, relations/2]).
+-export([show/2, nodes/1, set_nodes/2, home/2, place/3]).
 -export([env/1, obstacles/1, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
 
 -export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0]).
@@ -38,9 +39,11 @@ can be out of the box.
     bounds := {vec(), vec()} | undefined,
     wrap := boolean(),
     links := ets:table(),
-    defaults := map()
+    defaults := map(),
+    tile := number(),
+    name => atom()
 }.
--type kind() :: server | process.
+-type kind() :: server | process | {ghost, server | process}.
 -type entry() :: #{
     id := term(),
     pos := vec(),
@@ -104,6 +107,9 @@ new(Opts) ->
     %% The table has the scale of the time, the size of the vectors of
     %% the first boid, and one row for each obstacle.
     ets:insert(Meta, {time_scale, 1.0}),
+    %% The nodes that have a part of the world: one node, until the
+    %% world of this node finds the same world on other nodes.
+    ets:insert(Meta, {nodes, [node()]}),
     %% The relations between the boids, for the reads of the boids:
     %% {{out, From, Label}, [To]} and {{in, To, Label}, [From]}. Only
     %% the owner writes them.
@@ -119,7 +125,8 @@ options(Opts) when is_map(Opts) ->
     maps:foreach(fun check/2, Opts),
     case maps:merge(#{cell_size => 10.0, bounds => undefined, wrap => false, defaults => #{}}, Opts) of
         #{wrap := true, bounds := undefined} -> error({bad_option, {wrap, true}});
-        Space -> Space
+        %% A tile is large, so that few boids are near a border of it.
+        Space = #{cell_size := Size} -> maps:merge(#{tile => 16 * Size}, Space)
     end;
 options(Opts) ->
     error({bad_option, Opts}).
@@ -132,6 +139,7 @@ ok(bounds, undefined) -> true;
 ok(bounds, {Min, Max}) -> boids_vec:is_box(Min, Max);
 ok(wrap, Wrap) -> is_boolean(Wrap);
 ok(defaults, Defaults) -> is_map(Defaults);
+ok(tile, Size) -> boids_vec:is_size(Size) andalso Size > 0;
 ok(_, _) -> false.
 
 -doc "Delete the tables of a space. Only the owner can do this.".
@@ -228,12 +236,14 @@ servers(#{rows := Rows}) ->
 -doc "All the rows. The order is not specified.".
 -spec all(space()) -> [entry()].
 all(#{rows := Rows}) ->
-    [entry(Row) || Row <- ets:tab2list(Rows)].
+    %% A row with a kind that is a tuple is the row of a boid of another
+    %% node, which shows itself near a border.
+    [entry(Row) || Row <- ets:tab2list(Rows), is_atom(element(8, Row))].
 
--doc "The number of rows.".
+-doc "The number of rows of the boids of this node.".
 -spec count(space()) -> non_neg_integer().
 count(#{rows := Rows}) ->
-    ets:info(Rows, size).
+    ets:select_count(Rows, [{{'_', '_', '_', '_', '_', '_', '_', '$1', '_'}, [{is_atom, '$1'}], [true]}]).
 
 -doc """
 The size of the vectors of the space: that of its box, or that of its
@@ -444,6 +454,95 @@ set_time_scale(#{meta := Meta}, Scale) when is_number(Scale), Scale >= 0, Scale 
     ets:insert(Meta, {time_scale, Scale}),
     ok.
 
+%% --- The nodes of a world ---------------------------------------------
+
+-doc "The nodes that have a part of the world of this space.".
+-spec nodes(space()) -> [node()].
+nodes(#{meta := Meta}) ->
+    ets:lookup_element(Meta, nodes, 2).
+
+-doc false.
+set_nodes(#{meta := Meta}, Nodes) ->
+    ets:insert(Meta, {nodes, lists:usort(Nodes)}),
+    ok.
+
+-doc """
+The node that has the tile of a position. A world is cut into tiles (the
+option `tile`), and each tile is on one node: the node with the largest
+hash of the tile and of its name. Thus each node gives the same answer
+with no message, and a new node takes only its part of the tiles.
+""".
+-spec home(space(), vec()) -> node().
+home(Space, Pos) ->
+    case ?MODULE:nodes(Space) of
+        [Node] -> Node;
+        Nodes -> pick(tile(Space, Pos), Nodes)
+    end.
+
+-doc """
+Where a boid at `Pos` that sees the distance `Radius` is, for this node:
+
+- `home`: in a tile of this node, and it sees no tile of another node;
+- `{border, Nodes}`: in a tile of this node, and it sees tiles of these
+  nodes;
+- `{away, Home, Nodes}`: in a tile of the node `Home`. It also sees
+  tiles of these other nodes.
+""".
+-spec place(space(), vec(), number()) -> home | {border, [node()]} | {away, node(), [node()]}.
+place(Space, Pos, Radius) ->
+    case ?MODULE:nodes(Space) of
+        [_One] ->
+            home;
+        Nodes ->
+            Home = pick(tile(Space, Pos), Nodes),
+            Seen = lists:usort([pick(tile(Space, Corner), Nodes) || Corner <- corners(Pos, Radius)]),
+            case {Home =:= node(), Seen -- [node()]} of
+                {true, []} -> home;
+                {true, Others} -> {border, Others};
+                {false, Others} -> {away, Home, Others -- [Home]}
+            end
+    end.
+
+%% The corners of the box around what a boid sees. With a tile that is
+%% larger than that box, they are in all the tiles that the boid sees.
+corners({X, Y}, R) ->
+    [{X - R, Y - R}, {X - R, Y + R}, {X + R, Y - R}, {X + R, Y + R}];
+corners({X, Y, Z}, R) ->
+    [{X + Dx, Y + Dy, Z + Dz} || Dx <- [-R, R], Dy <- [-R, R], Dz <- [-R, R]].
+
+tile(Space = #{tile := Size}, Pos) ->
+    cell(Space#{cell_size := Size}, Pos).
+
+pick(Tile, Nodes) ->
+    {_Hash, Node} = lists:max([{erlang:phash2({Tile, Node}), Node} || Node <- Nodes]),
+    Node.
+
+-doc """
+Write the row of a boid of another node, which shows itself near a
+border. The result is `false` when a boid of this node has the id. Only
+the owner of the space calls this function.
+""".
+-spec show(space(), entry()) -> boolean().
+show(Space = #{rows := Rows, grid := Grid}, Entry = #{id := Id, pos := Pos, vel := Vel, pid := Pid}) ->
+    Kind = {ghost, maps:get(kind, Entry, server)},
+    case ets:lookup(Rows, Id) of
+        [] ->
+            insert_new(Space, Entry#{kind => Kind});
+        [Row = {_, _, _, _, _, _, _, {ghost, _}, _}] ->
+            Old = spot(Row),
+            Cell = cell(Space, Pos),
+            Group = maps:get(group, Entry, default),
+            Data = maps:get(data, Entry, undefined),
+            New = {Cell, Id, Pos, Vel, Group, Data},
+            ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Old}),
+            %% As a write of a boid: the new copy, then the removal of
+            %% the old copy (specs/Space.tla, InsertFirst).
+            New =:= Old orelse (ets:insert(Grid, New) andalso ets:delete_object(Grid, Old)),
+            true;
+        [_Local] ->
+            false
+    end.
+
 %% --- The relations ----------------------------------------------------
 
 -doc """
@@ -459,6 +558,11 @@ relate(#{links := Links}, Direction, {Id, Label}, []) ->
 relate(#{links := Links}, Direction, {Id, Label}, Others) ->
     ets:insert(Links, {{Direction, Id, Label}, Others}),
     ok.
+
+-doc "All the relations of the boid `From`: a list of `{Label, [To]}`.".
+-spec relations(space(), term()) -> [{term(), [term()]}].
+relations(#{links := Links}, From) ->
+    [{Label, Others} || [Label, Others] <- ets:match(Links, {{out, From, '$1'}, '$2'})].
 
 -doc "The boids that the boid `From` has the relation `Label` to.".
 -spec related(space(), term(), term()) -> [term()].

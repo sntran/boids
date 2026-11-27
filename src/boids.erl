@@ -68,7 +68,7 @@ and a force is in units for each second for each second.
 """.
 
 -export([start_world/0, start_world/1, stop_world/1, child_spec/1, space/1]).
--export([add/2, populate/3, remove/2, update/3, boid/2, whereis/2]).
+-export([add/2, populate/3, remove/2, update/3, boid/2, whereis/2, nodes/1]).
 -export([add_rule/3, delete_rule/3, which_rules/2]).
 -export([snapshot/1, lookup/2, near/3, count/1]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
@@ -113,7 +113,7 @@ A bad option gives `{error, {bad_option, {Key, Value}}}`.
 start_world(Opts0) ->
     try boids_world:options(Opts0) of
         Opts ->
-            case supervisor:start_child(boids_sup, [Opts]) of
+            case supervisor:start_child(boids_worlds, [Opts]) of
                 {ok, Sup} -> {ok, server_of(Sup)};
                 {error, {shutdown, {failed_to_start_child, boids_world, Reason}}} -> {error, Reason}
             end
@@ -126,7 +126,7 @@ server_of(Sup) ->
     Server.
 
 -doc """
-Stop a world of `start_world/1`, with its boids. For an
+Stop a world of `start_world/1`, with its boids. For a
 world that is stopped, the result is `{error, not_found}`. It is
 the same for a world below your supervisor: stop it there.
 """.
@@ -134,7 +134,7 @@ the same for a world below your supervisor: stop it there.
 stop_world(World) ->
     try boids_world:sup(maps:get(owner, space(World))) of
         Sup ->
-            case supervisor:terminate_child(boids_sup, Sup) of
+            case supervisor:terminate_child(boids_worlds, Sup) of
                 ok -> ok;
                 {error, _} -> {error, not_found}
             end
@@ -202,8 +202,10 @@ add(World, Opts0) ->
 
 %% A boid with no module of the user. Its process checks the options.
 start(Space = #{defaults := Defaults}, Sup, Opts) ->
-    case gen_boid:start_child(Sup, Space, undefined, Opts, #{}) of
-        {ok, Pid} -> {ok, maps:get(id, maps:merge(Defaults, Opts), Pid)};
+    %% The id is not the process: a boid can move to another node.
+    Id = maps:get(id, maps:merge(Defaults, Opts), make_ref()),
+    case gen_boid:start_child(Sup, Space, undefined, Opts#{id => Id}, #{}) of
+        {ok, _Pid} -> {ok, Id};
         {error, Reason} -> {error, Reason}
     end.
 
@@ -271,13 +273,20 @@ boid below a supervisor of yours (`gen_boid:start_link/3`).
 -spec remove(world(), term()) -> ok | {error, not_found}.
 remove(World, Id) ->
     Space = space(World),
-    case boids_space:owner(Space, Id) of
-        {server, Pid} ->
+    case boids_world:find(Space, Id) of
+        {server, Pid} when node(Pid) =:= node() ->
             %% A boid below a supervisor of the user is not a child
             %% here.
             case supervisor:terminate_child(boids_world:boid_sup(Space), Pid) of
                 ok -> boids_world:leave(Space, Id, Pid);
                 {error, not_found} -> {error, not_found}
+            end;
+        {server, Pid} ->
+            %% The boid is on another node: that node removes it.
+            try
+                erpc:call(node(Pid), ?MODULE, remove, [maps:get(name, Space), Id], 5000)
+            catch
+                _:_ -> {error, not_found}
             end;
         _ ->
             {error, not_found}
@@ -321,7 +330,7 @@ which_rules(World, Id) ->
 
 change(World, Id, Function, Arg) ->
     Space = space(World),
-    case boids_space:owner(Space, Id) of
+    case boids_world:find(Space, Id) of
         {server, Pid} -> call(Pid, {change, Function, Arg});
         _ -> {error, not_found}
     end.
@@ -332,7 +341,7 @@ All the state of a boid, from its process. See `t:boids_boid:boid/0`.
 -spec boid(world(), term()) -> {ok, boids_boid:boid()} | {error, not_found}.
 boid(World, Id) ->
     Space = space(World),
-    case boids_space:owner(Space, Id) of
+    case boids_world:find(Space, Id) of
         {server, Pid} ->
             case call(Pid, get) of
                 {error, not_found} -> {error, not_found};
@@ -357,10 +366,21 @@ world.
 """.
 -spec whereis(world(), term()) -> pid() | undefined.
 whereis(World, Id) ->
-    case boids_space:lookup(space(World), Id) of
-        {ok, #{pid := Pid}} -> Pid;
+    case boids_world:find(space(World), Id) of
+        {_Kind, Pid} -> Pid;
         error -> undefined
     end.
+
+-doc """
+The nodes that have a part of a world. A world with a name (an atom) is
+one world on all the connected nodes that started a world with that
+name and the same options. Each node has a part of the tiles of the
+world, and a boid is a process on the node of its tile: it moves to
+another node when it crosses a border.
+""".
+-spec nodes(world()) -> [node()].
+nodes(World) ->
+    boids_space:nodes(space(World)).
 
 %% --- The view of a world --------------------------------------
 
@@ -533,7 +553,18 @@ hierarchy.
 """.
 -spec relate(world(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
 relate(World, From, Label, To) ->
-    boids_world:relate(space(World), From, Label, To).
+    Space = space(World),
+    case {boids_world:find(Space, From), boids_world:find(Space, To)} of
+        {error, _} ->
+            {error, {not_found, From}};
+        {_, error} ->
+            {error, {not_found, To}};
+        {{_Kind, Pid}, _} when node(Pid) =:= node() ->
+            boids_world:relate(Space, From, Label, To, true);
+        {{_Kind, Pid}, _} ->
+            %% The relation is on the node of the boid that has it.
+            erpc:call(node(Pid), ?MODULE, relate, [maps:get(name, Space), From, Label, To], 5000)
+    end.
 
 -doc "Remove a relation of `relate/4`.".
 -spec unrelate(world(), term(), term(), term()) -> ok.
@@ -650,6 +681,9 @@ position. Call it after `plan/3`, or after a change of the boid with
 -spec commit(boids_space:space(), boids_boid:boid()) -> ok.
 commit(Space, Boid) ->
     _ = boids_space:put(Space, Boid),
+    %% Near a border of this node, the boid shows itself to the other
+    %% node.
+    _ = boids_world:settle(Space, Boid),
     ok.
 
 -doc "One step of a boid: `plan/3`, then `commit/2`. The result is the new boid.".

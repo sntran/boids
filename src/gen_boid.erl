@@ -141,6 +141,7 @@ about 3 KB. Without it, the process holds about 100 KB.
 -export([call/2, call/3, cast/2, reply/2]).
 -export([add_rule/2, delete_rule/2, which_rules/1]).
 -export([options/1, start_child/5]).
+-export([adopt/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -export_type([boid/0, start_options/0, seen/0]).
@@ -317,6 +318,13 @@ delete_rule(Boid, Name) ->
 which_rules(Boid) ->
     boids_boid:which_rules(gen_server:call(Boid, get)).
 
+-doc false.
+%% Start a boid that comes from another node, below the supervisor of
+%% the world of this node.
+adopt(World, Moving) ->
+    Space = boids:space(World),
+    start_child(boids_world:boid_sup(Space), Space, '$adopt', Moving, #{}).
+
 -doc """
 Divide the options into those of the process and those of the boid.
 A bad option of the process gives the error `{bad_option, {Key, Value}}`.
@@ -345,6 +353,16 @@ check(Key, Value) -> error({bad_option, {Key, Value}}).
 %% --- gen_server ------------------------------------------------------
 
 -doc false.
+%% A boid that comes from another node, with all its state.
+init({World, '$adopt', #{boid := Boid = #{id := Id}, mod := Module, server := Server, relations := Relations}}) ->
+    Space = boids:space(World),
+    case join(Space, Server#{mod => Module}, Boid) of
+        {ok, State} ->
+            ok = boids_world:adopt(Space, Id, Relations),
+            {ok, State};
+        Stop ->
+            Stop
+    end;
 init({World, Module, Args}) ->
     %% A boid with no module (boids:add/2) has its options as arguments.
     Given =
@@ -357,7 +375,7 @@ init({World, Module, Args}) ->
             try
                 Space = #{defaults := Defaults} = boids:space(World),
                 {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
-                {Space, Server, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
+                {Space, Server, boids_boid:new(BoidOpts)}
             of
                 {Space, Server, Boid} -> join(Space, Server#{mod => Module}, Boid)
             catch
@@ -508,11 +526,36 @@ act(Moved = #{id := Id}, State = #{space := Space, mod := Module}) ->
         end,
     case Acted of
         {ok, Boid = #{id := Id}} ->
-            boids:commit(Space, Boid),
-            {ok, State#{boid := Boid, pending := undefined}};
+            _ = boids_space:put(Space, Boid),
+            settle(boids_world:settle(Space, Boid), State#{boid := Boid, pending := undefined});
         {stop, Reason, Boid} ->
             {stop, Reason, State#{boid := Boid}}
     end.
+
+%% The boid wrote its row. In a world on several nodes, a boid that is
+%% in a tile of another node moves to that node: its process starts
+%% there with all its state, and this process stops.
+settle({away, Home}, State = #{space := Space = #{name := Name}, boid := Boid = #{id := Id}, mod := Module}) ->
+    Moving = #{
+        boid => Boid,
+        mod => Module,
+        server => maps:without([seed], maps:with(?KEYS, State)),
+        relations => boids_space:relations(Space, Id)
+    },
+    try erpc:call(Home, ?MODULE, adopt, [Name, Moving], 5000) of
+        Result when element(1, Result) =:= ok; Result =:= {error, {exists, Id}} ->
+            %% With the answer exists, the boid is on that node already.
+            boids_world:moved(Space, Id, self()),
+            {stop, {shutdown, {moved, Home}}, State};
+        {error, _Reason} ->
+            {ok, State}
+    catch
+        %% No answer from the node: the boid stays, and tries again at
+        %% its next step.
+        _:_ -> {ok, State}
+    end;
+settle(_Place, State) ->
+    {ok, State}.
 
 %% The neighbors that the boid sees. At one step of `search`, the boid
 %% searches the grid. At the other steps, it reads the rows of the boids
