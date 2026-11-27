@@ -122,24 +122,29 @@ the process that starts again is the same boid.
 
 In a world on several nodes, the process of a boid is on the node of
 its tile (`boids:nodes/1`). After each step, a boid that sees a tile of
-another node shows its row to that node. A boid that is in a tile of
-another node moves: a process for the boid starts on that node, below
-the supervisor of the world of that node, and this process stops with
-the reason `{shutdown, {moved, Node}}`.
+another node shows its row to that node. A boid of `start/3` that is in
+a tile of another node moves: a process for the boid starts on that
+node, below the supervisor of the world of that node, and this process
+stops with the reason `{shutdown, {moved, Node}}`.
 
-- The boid keeps its id, its state, its rules, its relations and the
-  options of its process. The random numbers of the new process do not
-  continue those of the option `seed`.
+- The boid keeps its id, its state, its rules, its relations, the
+  options of its process and its random numbers: a boid with a `seed`
+  continues its sequence on the new node.
 - `terminate/2` of the module runs on the first node. `init/1` does not
   run on the new node. The node needs the code of the module.
 - The id of a boid is not its process. `boids:whereis/2` gives the
   process of an id. In a callback, the function `lookup` of `Seen`
   gives the row of a neighbor, with its process: `{ok, #{pid := Pid}} =
   (maps:get(lookup, Seen))(Id)`.
-- A boid below a supervisor of yours needs `restart => transient`: the
-  end of its process at a move is not an error.
-- When the other node does not answer, the boid stays on its node, and
-  tries again at its next step.
+- A boid of `start_link/3` stays on the node of its supervisor. In a
+  tile of another node, it shows its row to that node.
+- The move waits for the answer of the other node, with no time limit.
+  When the connection to that node ends, the boid stays on its node,
+  and tries again at its next step.
+- After a split of the network, a boid can have a process on two
+  nodes. When the nodes have a connection again, one of the two
+  processes stops with the reason `{shutdown, replaced}`
+  (`boids_world`).
 
 ## A world with too much work
 
@@ -164,7 +169,7 @@ about 3 KB. Without it, the process holds about 100 KB.
 -export([call/2, call/3, cast/2, reply/2]).
 -export([add_rule/2, delete_rule/2, which_rules/1]).
 -export([options/1, start_child/5]).
--export([adopt/2]).
+-export([adopt/2, start_in_world/4]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -export_type([boid/0, start_options/0, seen/0]).
@@ -236,6 +241,12 @@ start(World, Module, Args, Options0) ->
     start_child(boids_world:boid_sup(Space), Space, Module, Args, Options).
 
 -doc false.
+%% The start of a boid below the supervisor of its world
+%% (boids_boid_sup). Only such a boid moves to another node.
+start_in_world(World, Module, Args, Options) ->
+    link(World, Module, Args, Options, true).
+
+-doc false.
 start_child(Sup, Space, Module, Args, Options) ->
     case supervisor:start_child(Sup, [Space, Module, Args, Options]) of
         {ok, undefined} -> ignore;
@@ -259,14 +270,20 @@ start_link(World, Module, Args) ->
 
 -doc "As `start_link/3`, with the options of `start/4`.".
 -spec start_link(boids:world(), module(), term(), start_options()) -> {ok, pid()} | ignore | {error, term()}.
-start_link(World, Module, Args, Options0) ->
+start_link(World, Module, Args, Options) ->
+    link(World, Module, Args, Options, false).
+
+%% Roams: the boid moves to another node when it crosses a border. A
+%% boid below a supervisor of the user stays on the node of that
+%% supervisor.
+link(World, Module, Args, Options0, Roams) ->
     case start_options(Options0) of
         #{name := Name} when is_atom(Name) ->
-            gen_server:start_link({local, Name}, ?MODULE, {World, Module, Args}, ?GEN);
+            gen_server:start_link({local, Name}, ?MODULE, {World, Module, Args, Roams}, ?GEN);
         #{name := Name} ->
-            gen_server:start_link(Name, ?MODULE, {World, Module, Args}, ?GEN);
+            gen_server:start_link(Name, ?MODULE, {World, Module, Args, Roams}, ?GEN);
         _ ->
-            gen_server:start_link(?MODULE, {World, Module, Args}, ?GEN)
+            gen_server:start_link(?MODULE, {World, Module, Args, Roams}, ?GEN)
     end.
 
 start_options(Options0) ->
@@ -377,20 +394,22 @@ check(Key, Value) -> error({bad_option, {Key, Value}}).
 
 -doc false.
 %% A boid that comes from another node, with all its state.
-init({World, '$adopt', Moving = #{boid := Boid = #{id := Id}, mod := Module, server := Server}}) ->
+init({World, '$adopt', Moving = #{boid := Boid = #{id := Id}, mod := Module, server := Server}, Roams}) ->
     #{moves := Moves, relations := Relations} = Moving,
     Space = boids:space(World),
     %% The callbacks of a module run only when the node has the module
     %% in memory. On the first node, init/1 of the module did that.
     _ = Module =:= undefined orelse code:ensure_loaded(Module),
-    case join(Space, Server#{mod => Module, moves => Moves}, Boid) of
+    case join(Space, Server#{mod => Module, moves => Moves, roams => Roams}, Boid) of
         {ok, State} ->
             ok = boids_world:adopt(Space, Id, Relations),
+            %% The random numbers of the boid continue.
+            _ = [rand:seed(Rand) || #{rand := Rand} <- [Moving], Rand =/= undefined],
             {ok, State};
         Stop ->
             Stop
     end;
-init({World, Module, Args}) ->
+init({World, Module, Args, Roams}) ->
     %% A boid with no module (boids:add/2) has its options as arguments.
     Given =
         case Module of
@@ -404,7 +423,7 @@ init({World, Module, Args}) ->
                 {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
                 {Space, Server, boids_boid:new(BoidOpts)}
             of
-                {Space, Server, Boid} -> join(Space, Server#{mod => Module, moves => 0}, Boid)
+                {Space, Server, Boid} -> join(Space, Server#{mod => Module, moves => 0, roams => Roams}, Boid)
             catch
                 error:{bad_option, _} = Reason -> {stop, {shutdown, Reason}}
             end;
@@ -562,23 +581,31 @@ act(Moved = #{id := Id}, State = #{space := Space, mod := Module}) ->
     case Acted of
         {ok, Boid = #{id := Id}} ->
             _ = boids_space:put(Space, Boid),
-            settle(boids_world:settle(Space, Boid), State#{boid := Boid, pending := undefined});
+            Place = boids_world:settle(Space, Boid, maps:get(moves, State)),
+            settle(Place, State#{boid := Boid, pending := undefined});
         {stop, Reason, Boid} ->
             {stop, Reason, State#{boid := Boid}}
     end.
 
 %% The boid wrote its row. In a world on several nodes, a boid that is
 %% in a tile of another node moves to that node: its process starts
-%% there with all its state, and this process stops.
-settle({away, Home}, State = #{space := Space = #{name := Name}, boid := Boid = #{id := Id}, mod := Module}) ->
+%% there with all its state, and this process stops. A boid below a
+%% supervisor of the user stays on its node.
+settle({away, Home}, State = #{roams := true, space := Space = #{name := Name}, boid := Boid = #{id := Id}}) ->
     Moving = #{
         boid => Boid,
-        mod => Module,
+        mod => maps:get(mod, State),
         server => maps:without([seed], maps:with(?KEYS, State)),
         relations => boids_space:relations(Space, Id),
-        moves => maps:get(moves, State) + 1
+        moves => maps:get(moves, State) + 1,
+        %% The state of the random numbers of this process.
+        rand => rand:export_seed()
     },
-    try erpc:call(Home, ?MODULE, adopt, [Name, Moving], 5000) of
+    %% The call has no time limit. The connection between two nodes
+    %% loses no message: the answer comes, or the connection ends and
+    %% the call fails. Thus a slow node does not make two processes of
+    %% one boid.
+    try erpc:call(Home, ?MODULE, adopt, [Name, Moving], infinity) of
         Result when element(1, Result) =:= ok; Result =:= {error, {exists, Id}} ->
             %% With the answer exists, the boid is on that node already.
             boids_world:moved(Space, Id, self()),
@@ -586,8 +613,8 @@ settle({away, Home}, State = #{space := Space = #{name := Name}, boid := Boid = 
         {error, _Reason} ->
             {ok, State}
     catch
-        %% No answer from the node: the boid stays, and tries again at
-        %% its next step.
+        %% The connection to the node ended: the boid stays, and tries
+        %% again at its next step.
         _:_ -> {ok, State}
     end;
 settle(_Place, State) ->
@@ -621,8 +648,9 @@ result({stop, Reason, Boid}, State) -> {stop, Reason, State#{boid := Boid}}.
 %% its row, and a step that the boid calculated before is not good.
 keep(Boid, State = #{boid := Boid}) ->
     State;
-keep(Boid = #{id := Id}, State = #{space := Space, boid := #{id := Id}}) ->
-    boids:commit(Space, Boid),
+keep(Boid = #{id := Id}, State = #{space := Space, boid := #{id := Id}, moves := Moves}) ->
+    _ = boids_space:put(Space, Boid),
+    _ = boids_world:settle(Space, Boid, Moves),
     State#{boid := Boid, pending := undefined}.
 
 %% --- The clock -------------------------------------------------------

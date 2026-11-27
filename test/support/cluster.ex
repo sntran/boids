@@ -27,19 +27,44 @@ defmodule Boids.Cluster do
     end
   end
 
-  @doc "Start `count` nodes that are connected, with the application boids. The result is a list of `{peer, node}`."
-  def start(count) do
-    Enum.reduce(1..count, [], fn _, nodes -> nodes ++ [add(nodes)] end)
+  defmodule Sink do
+    @moduledoc "A handler of the logger of a node, which keeps the texts of the errors of boids for a test."
+
+    def log(%{level: :error, msg: {:string, text}, meta: %{domain: [:boids | _]}}, _config), do: keep(text)
+
+    def log(%{level: :error, msg: {format, args}, meta: %{domain: [:boids | _]}}, _config) when is_list(args),
+      do: keep(:io_lib.format(format, args))
+
+    def log(_event, _config), do: :ok
+
+    @doc "The texts of the errors, the first one first."
+    def texts, do: Enum.reverse(:persistent_term.get(__MODULE__, []))
+
+    defp keep(text),
+      do:
+        :persistent_term.put(__MODULE__, [IO.chardata_to_string(text) | :persistent_term.get(__MODULE__, [])])
+  end
+
+  @doc """
+  Start `count` nodes that are connected, with the application boids.
+  The result is a list of `{peer, node}`. With `split: true`, a node
+  makes no connection by itself, so a test can end the connection of
+  two nodes (`split/2`) and make it again (`heal/2`).
+  """
+  def start(count, options \\ []) do
+    Enum.reduce(1..count, [], fn _, nodes -> nodes ++ [add(nodes, options)] end)
   end
 
   @doc "Start one more node, with a connection to the nodes of the list. The result is `{peer, node}`."
-  def add(nodes) do
+  def add(nodes, options \\ []) do
     paths = Enum.flat_map(:code.get_path(), &[~c"-pa", &1])
     port = free_port()
+    never = if options[:split], do: [~c"-kernel", ~c"dist_auto_connect", ~c"never"], else: []
 
     args =
       [~c"-start_epmd", ~c"false", ~c"-epmd_module", ~c"Elixir.Boids.Cluster.Epmd", ~c"-setcookie", ~c"boids"] ++
-        [~c"-kernel", ~c"inet_dist_listen_min", ~c"#{port}", ~c"inet_dist_listen_max", ~c"#{port}"] ++ paths
+        [~c"-kernel", ~c"inet_dist_listen_min", ~c"#{port}", ~c"inet_dist_listen_max", ~c"#{port}"] ++
+        never ++ paths
 
     options = %{
       name: ~c"b#{port}",
@@ -53,6 +78,7 @@ defmodule Boids.Cluster do
     {:ok, peer, node} = :peer.start(options)
     if cover?(), do: cover(peer)
     {:ok, _} = call(peer, :application, :ensure_all_started, [:boids])
+    :ok = call(peer, :logger, :add_handler, [:boids_sink, Sink, %{}])
     for {_peer, other} <- nodes, do: true = call(peer, :net_kernel, :connect_node, [other])
     {peer, node}
   end
@@ -73,6 +99,15 @@ defmodule Boids.Cluster do
 
     :ok
   end
+
+  @doc "End the connection of two nodes of `start(count, split: true)`."
+  def split({a, _na}, {_b, nb}), do: call(a, :erlang, :disconnect_node, [nb])
+
+  @doc "Make the connection of two nodes again."
+  def heal({a, _na}, {_b, nb}), do: call(a, :net_kernel, :connect_node, [nb])
+
+  @doc "The texts of the errors that boids wrote to the log of a node."
+  def errors(peer), do: call(peer, Sink, :texts, [])
 
   @doc "Call a function on a node."
   def call(peer, module, function, args), do: :peer.call(peer, module, function, args, 20_000)

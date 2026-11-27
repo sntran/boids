@@ -15,5 +15,5 @@ start_link() ->
 init([]) ->
     %% See boids_world:init/1.
     process_flag(priority, high),
-    Boid = #{id => gen_boid, start => {gen_boid, start_link, []}, restart => temporary},
+    Boid = #{id => gen_boid, start => {gen_boid, start_in_world, []}, restart => temporary},
     {ok, {#{strategy => simple_one_for_one}, [Boid]}}.

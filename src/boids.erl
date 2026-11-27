@@ -44,9 +44,9 @@ In Elixir, the module is `:boids`:
 - The boids of a world can have relations (`relate/4`): a boid
   follows a leader, or fears an enemy.
 - A world with a name can be on several nodes (`nodes/1`). Each node
-  has a part of the tiles of the world. A boid is a process on the node
-  of its tile: it shows itself to another node near a border, and it
-  moves to that node across the border.
+  has a part of the world, and a boid is a process on the node of its
+  place: it moves to another node when it crosses a border. The
+  functions of this module are about the boids of all the nodes.
 - A flock is a group of boids that see each other. No process makes a
   flock: it comes from the rules of the boids. `flocks/2` gives the
   flocks of a world, and `graph/2` gives the world as a
@@ -74,10 +74,10 @@ and a force is in units for each second for each second.
 -export([start_world/0, start_world/1, stop_world/1, child_spec/1, space/1]).
 -export([add/2, populate/3, remove/2, update/3, boid/2, whereis/2, nodes/1]).
 -export([add_rule/3, delete_rule/3, which_rules/2]).
--export([snapshot/1, lookup/2, near/3, count/1]).
+-export([snapshot/1, snapshot/2, lookup/2, near/3, count/1, count/2]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
--export([step/2]).
--export([graph/2, flocks/2, relate/4, unrelate/4, relations/1, related/3, related_to/3]).
+-export([step/2, step/3, part/2]).
+-export([graph/2, graph/3, flocks/2, flocks/3, relate/4, unrelate/4, relations/1, related/3, related_to/3]).
 -export([join/2, sense/2, plan/3, plan/4, commit/2, advance/3, leave/2]).
 
 -export_type([world/0, options/0]).
@@ -403,12 +403,37 @@ nodes(World) ->
 All the boids of a world: a list of maps with `id`, `pos`, `vel`,
 `group`, `data` and `pid`. The order is not specified. The boids move
 during the read, so the rows are not all of the same moment.
+
+For a world on several nodes, the result has the boids of all the nodes.
+`snapshot(World, local)` gives the boids of this node only.
 """.
 -spec snapshot(world()) -> [boids_space:entry()].
 snapshot(World) ->
+    Space = space(World),
+    lists:append([boids_space:all(Space) | everywhere(Space, snapshot, [])]).
+
+-doc "The boids of a world that are on this node: see `snapshot/1`.".
+-spec snapshot(world(), local) -> [boids_space:entry()].
+snapshot(World, local) ->
     boids_space:all(space(World)).
 
--doc "One boid of a world: its row, as in `snapshot/1`.".
+%% The results of a function of this module with the last argument local,
+%% on the other nodes of a world. A node that has no connection at that
+%% moment gives no result. With one node, no message goes to a node.
+everywhere(Space, Function, Args) ->
+    case {Space, boids_space:nodes(Space) -- [node()]} of
+        {#{name := Name}, Nodes = [_ | _]} ->
+            [Result || {ok, Result} <- erpc:multicall(Nodes, ?MODULE, Function, [Name | Args] ++ [local], infinity)];
+        _ ->
+            []
+    end.
+
+-doc """
+One boid of a world: its row, as in `snapshot/1`. The read is of this
+node: it gives a boid of this node, and a boid of another node that is
+near a border of this node. `whereis/2` and `boid/2` find a boid on each
+node.
+""".
 -spec lookup(world(), term()) -> {ok, boids_space:entry()} | error.
 lookup(World, Id) ->
     boids_space:lookup(space(World), Id).
@@ -417,14 +442,27 @@ lookup(World, Id) ->
 The boids at the distance `Radius` or less from a point, in the order of
 their distance. Each is a map with `id`, `pos`, `vel`, `group`, `data`,
 `offset` (the vector from the point to the boid) and `dist`.
+
+The read is of this node, as the read of a boid that looks for its
+neighbors: it gives the boids of this node, and the boids of another
+node that are near a border of this node.
 """.
 -spec near(world(), vec(), number()) -> [boids_space:neighbor()].
 near(World, Pos, Radius) ->
     boids_space:near(space(World), Pos, Radius).
 
--doc "The number of boids of a world.".
+-doc """
+The number of boids of a world, on all its nodes. `count(World, local)`
+gives the number of boids of this node.
+""".
 -spec count(world()) -> non_neg_integer().
 count(World) ->
+    Space = space(World),
+    lists:sum([boids_space:count(Space) | everywhere(Space, count, [])]).
+
+-doc "The number of boids of a world that are on this node.".
+-spec count(world(), local) -> non_neg_integer().
+count(World, local) ->
     boids_space:count(space(World)).
 
 %% --- The obstacles and the time of a world --------------------
@@ -468,12 +506,34 @@ after the two parts.
 The scale of the time of the world applies to `Dt`. Use it with
 boids that have `tick => manual`: for a test, or for a simulation that
 is faster than the clock.
+
+For a world on several nodes, the step is for the boids of all the
+nodes: each node makes the first part, then each node makes the second
+part. `step(World, Dt, local)` makes a step for the boids of this node
+only.
 """.
 -spec step(world(), number()) -> ok.
 step(World, Dt) when is_number(Dt), Dt >= 0 ->
-    Pids = boids_space:servers(space(World)),
-    request(Pids, {plan, Dt}),
-    request(Pids, commit).
+    Space = space(World),
+    case {Space, boids_space:nodes(Space)} of
+        {#{name := Name}, Nodes = [_, _ | _]} ->
+            _ = erpc:multicall(Nodes, ?MODULE, part, [Name, {plan, Dt}], infinity),
+            _ = erpc:multicall(Nodes, ?MODULE, part, [Name, commit], infinity),
+            ok;
+        _ ->
+            step(Space, Dt, local)
+    end.
+
+-doc "Make one step for the boids of a world that are on this node: see `step/2`.".
+-spec step(world(), number(), local) -> ok.
+step(World, Dt, local) when is_number(Dt), Dt >= 0 ->
+    part(World, {plan, Dt}),
+    part(World, commit).
+
+-doc false.
+%% One part of a step, for the boids of this node.
+part(World, Request) ->
+    request(boids_space:servers(space(World)), Request).
 
 %% The two parts of a step are in specs/Step.tla. A boid that stops
 %% during the step gives an error, which changes nothing for the other
@@ -507,11 +567,19 @@ Largest = lists:max([length(Flock) || Flock <- Flocks]).
 ```
 
 No process makes a flock: the flocks come from the rules of the boids.
-This function reads all the world, as `graph/2`.
+This function reads all the world, as `graph/2`: for a world on several
+nodes, the flocks are those of all the nodes, and a flock can be on
+more than one node. `flocks(World, Radius, local)` gives the flocks of
+the boids of this node.
 """.
 -spec flocks(world(), number()) -> [[term()]].
 flocks(World, Radius) ->
     graph:components(graph(World, Radius)).
+
+-doc "The flocks of the boids of a world that are on this node: see `flocks/2`.".
+-spec flocks(world(), number(), local) -> [[term()]].
+flocks(World, Radius, local) ->
+    graph:components(graph(World, Radius, local)).
 
 -doc """
 The world as a graph (`graph`) of the boids that see each other.
@@ -530,17 +598,45 @@ Path = graph:get_path(Graph, BoidA, BoidB).
 The build reads all the world: it takes 50 to 200 microseconds for
 each boid. Use it for a view of the world, and not at each step of
 a boid.
+
+For a world on several nodes, the graph has the boids of all the nodes:
+this node gets their rows, and searches them in tables of its own.
+`graph(World, Radius, local)` gives the graph of the boids of this
+node.
 """.
 -spec graph(world(), number()) -> graph:graph().
 graph(World, Radius) ->
     Space = space(World),
-    Rows = snapshot(Space),
+    case everywhere(Space, snapshot, []) of
+        [] ->
+            graph(Space, Radius, local);
+        Others ->
+            %% The rows of all the nodes, in tables of this process.
+            Rows = lists:append([boids_space:all(Space) | Others]),
+            All = boids_space:new(maps:with([cell_size, bounds, wrap, tile], Space)),
+            lists:foreach(fun(Row) -> boids_space:insert_new(All, Row) end, Rows),
+            Graph = edges(All, Rows, Radius),
+            boids_space:delete(All),
+            Graph
+    end.
+
+-doc "The graph of the boids of a world that are on this node: see `graph/2`.".
+-spec graph(world(), number(), local) -> graph:graph().
+graph(World, Radius, local) ->
+    Space = space(World),
+    edges(Space, boids_space:all(Space), Radius).
+
+%% The graph of rows, with an edge from a boid to each boid near it in
+%% the tables of a space.
+edges(Space, Rows, Radius) ->
     Vertices = lists:foldl(fun(Row = #{id := Id}, Graph) -> graph:add_vertex(Graph, Id, Row) end, graph:new(), Rows),
     lists:foldl(
         fun(#{id := Id, pos := Pos}, Graph0) ->
-            %% A boid that came after the read of the rows is not a
-            %% vertex.
-            Others = [Other || #{id := Other} <- near(Space, Pos, Radius), Other =/= Id, graph:has_vertex(Graph0, Other)],
+            %% A boid that is not in the rows is not a vertex: it came
+            %% after the read of the rows, or it is a boid of another
+            %% node near a border.
+            Near = boids_space:near(Space, Pos, Radius),
+            Others = [Other || #{id := Other} <- Near, Other =/= Id, graph:has_vertex(Graph0, Other)],
             lists:foldl(fun(Other, Graph) -> graph:add_edge(Graph, Id, Other) end, Graph0, Others)
         end,
         Vertices,
@@ -569,7 +665,7 @@ hierarchy.
 In a world on several nodes, a relation is on the node of the boid
 `From`, and it moves with that boid. The rule gives a force only while
 the boid perceives the boid `To`: on its node, or near a border. The
-option `acyclic` checks the relations of one node only.
+option `acyclic` checks the relations of the node of the boid `From`.
 """.
 -spec relate(world(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
 relate(World, From, Label, To) ->
@@ -579,8 +675,10 @@ relate(World, From, Label, To) ->
             {error, {not_found, From}};
         {_, error} ->
             {error, {not_found, To}};
-        {{_Kind, Pid}, _} when node(Pid) =:= node() ->
-            boids_world:relate(Space, From, Label, To, true);
+        {{_Kind, Pid}, {_, Other}} when node(Pid) =:= node() ->
+            %% The world of this node checks a boid of this node again:
+            %% that boid can go before the world gets this call.
+            boids_world:relate(Space, From, Label, To, node(Other) =/= node());
         {{_Kind, Pid}, _} ->
             %% The relation is on the node of the boid that has it.
             erpc:call(node(Pid), ?MODULE, relate, [maps:get(name, Space), From, Label, To], 5000)

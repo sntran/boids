@@ -37,8 +37,11 @@ The first version. It needs Erlang/OTP 29.
 - A world on several nodes: a world with a name is one world on the
   connected nodes that start it. Each node has a part of the tiles of
   the world. A boid shows itself to another node near a border, and its
-  process moves to that node across the border, with its state
-  (`boids:nodes/1`, the option `tile`).
+  process moves to that node across the border, with its state and its
+  random numbers (`boids:nodes/1`, the option `tile`). The functions of
+  `boids` are about the boids of all the nodes, or of one node with the
+  argument `local`. After a split of the network, a boid that has a
+  process on two nodes gets one process again.
 - The id of a boid is a reference, and `boids:whereis/2` gives its
   process, on each node.
 - A process with another behavior as a boid (`boids:join/2`,

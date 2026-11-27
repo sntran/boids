@@ -85,13 +85,13 @@ defmodule BoidsSpecTest do
   end
 
   describe "specs/Move.tla: the move of a boid to another node" do
-    test "with no lost answer, the boid has one process after each move, and each move ends" do
+    test "with a connection that does not end, the boid has one process after each move, and each move ends" do
       assert {:ok, %{distinct_states: states}} = Checker.check(@move)
       assert states > 100
     end
 
-    test "with lost calls and answers, the boid keeps a process, and each move ends" do
-      assert {:ok, %{distinct_states: states}} = Checker.check(@move, config(@move, "Lost"))
+    test "with splits of the network, the boid keeps a process, and it has one process after the last heal" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@move, config(@move, "Split"))
       assert states > 1000
     end
 
@@ -105,7 +105,12 @@ defmodule BoidsSpecTest do
                Checker.check(@move, config(@move, "Stays"))
     end
 
-    test "a limit: after a lost answer, the boid can have a process on each node" do
+    test "a node that stops a process of each age when it is told can stop the only process" do
+      assert {:error, %{kind: :invariant, property: "NotLost"}, _} =
+               Checker.check(@move, config(@move, "Any"))
+    end
+
+    test "a limit: during a split, the boid can have a process on each node" do
       assert {:error, %{kind: :invariant, property: "OneProcess"}, _} =
                Checker.check(@move, config(@move, "Two"))
     end

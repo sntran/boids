@@ -26,8 +26,18 @@ and each of them keeps the list of the nodes for the boids of its node
 - A boid that comes from another node joins with the number of its
   moves. It takes the row that showed it. It also takes the row of a
   `gen_boid` of this node with its id that made fewer moves, which
-  stops: after a lost answer of a move, a node can have an old process
-  of the boid (`specs/Move.tla`).
+  stops: when the connection ends during a move, a node can have an old
+  process of the boid (`specs/Move.tla`).
+- After a split of the network, a boid can have a process on two nodes.
+  When the nodes join again, each world tells the other its boids. For
+  a boid with two processes, the world of the node with the smaller
+  name decides which process stays: the one with more moves, then the
+  one in a tile of its node, then the one of the node with the larger
+  name. Only one world decides, so the two processes cannot stop for
+  each other.
+- A world with the same name and other options on another node does
+  not join this world. This process writes one error to the log for
+  such a node.
 - `find/2` finds a boid on this node or on the other nodes.
 
 Use the functions of `boids`. A world starts with
@@ -38,10 +48,15 @@ Use the functions of `boids`. A world starts with
 
 -export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/3]).
 -export([relate/5, unrelate/4, relations/1]).
--export([settle/2, find/2, find_local/2, moved/3, adopt/3]).
+-export([settle/2, settle/3, find/2, find_local/2, moved/3, adopt/3]).
 
 %% A row of a boid of another node that gets no update in this time goes.
 -define(GHOST_MS, 500).
+
+%% The time after a world with the name of this world came, before the
+%% check of its options: the two groups of that world come one after the
+%% other.
+-define(OPTIONS_MS, 500).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -export_type([server/0]).
@@ -153,22 +168,30 @@ result is `{away, Home}` for a boid in a tile of the node `Home`, and
 `home` for a boid in a tile of this node.
 """.
 -spec settle(boids_space:space(), boids_boid:boid()) -> home | {away, node()}.
-settle(Space, Boid = #{pos := Pos}) ->
+settle(Space, Boid) ->
+    settle(Space, Boid, 0).
+
+-doc """
+As `settle/2`, for a `gen_boid` that made `Moves` moves from node to
+node before this process.
+""".
+-spec settle(boids_space:space(), boids_boid:boid(), non_neg_integer()) -> home | {away, node()}.
+settle(Space, Boid = #{pos := Pos}, Moves) ->
     case boids_space:place(Space, Pos, maps:get(perception, Boid, 0)) of
         home ->
             home;
         {border, Nodes} ->
-            show(Space, Nodes, Boid),
+            show(Space, Nodes, Boid, Moves),
             home;
         {away, Home, Nodes} ->
-            show(Space, [Home | Nodes], Boid),
+            show(Space, [Home | Nodes], Boid, Moves),
             {away, Home}
     end.
 
-show(#{name := Name} = Space, Nodes, Boid = #{id := Id}) ->
+show(#{name := Name} = Space, Nodes, Boid = #{id := Id}, Moves) ->
     case boids_space:owner(Space, Id) of
         {Kind, Pid} when is_atom(Kind) ->
-            Entry = (boids_boid:entry(Boid))#{pid => Pid, kind => Kind},
+            Entry = (boids_boid:entry(Boid))#{pid => Pid, kind => Kind, moves => Moves},
             %% The boid shows its row to the worlds of other nodes. It
             %% does not wait for a node that has no connection.
             lists:foreach(fun(Node) -> erlang:send({Name, Node}, {show, Entry}, [noconnect]) end, Nodes);
@@ -237,7 +260,7 @@ init({Sup, Opts, Name}) ->
     {Relations, Rest} = kind(Opts),
     Links = graph:new([Relations]),
     Space0 = boids_space:new(Rest),
-    State = #{sup => Sup, ids => #{}, refs => #{}, ages => #{}, links => Links, ghosts => #{}},
+    State = #{sup => Sup, ids => #{}, refs => #{}, ages => #{}, links => Links, ghosts => #{}, warned => []},
     case is_atom(Name) andalso Name =/= undefined of
         true ->
             %% A world with a name is one world on all the nodes that
@@ -246,10 +269,17 @@ init({Sup, Opts, Name}) ->
             Group = {Name, erlang:phash2(maps:with([cell_size, bounds, wrap, tile], Space))},
             {_Ref, _Members} = pg:monitor(boids, Group),
             ok = pg:join(boids, Group, self()),
+            %% The group of all the worlds with the name, with each
+            %% options: a world of that group that is not in the first
+            %% group has other options.
+            Names = {names, Name},
+            {_Other, _All} = pg:monitor(boids, Names),
+            ok = pg:join(boids, Names, self()),
+            erlang:send_after(?OPTIONS_MS, self(), options),
             erlang:send_after(?GHOST_MS div 2, self(), sweep),
-            {ok, members(State#{space => Space, group => Group})};
+            {ok, members(State#{space => Space, group => Group, names => Names})};
         false ->
-            {ok, State#{space => Space0, group => undefined}}
+            {ok, State#{space => Space0, group => undefined, names => undefined}}
     end.
 
 -doc false.
@@ -312,17 +342,11 @@ handle_call({adopt, Id, Relations}, _From, State = #{space := Space, links := Li
         Relations
     ),
     {reply, ok, State#{links := Links}};
-handle_call({moved, Id, Pid}, _From, State0 = #{space := Space, links := Links0}) ->
-    %% The boid is on another node now. Its relations went with it. The
-    %% relations of the boids of this node to it stay.
+handle_call({moved, Id, Pid}, _From, State = #{space := Space}) ->
+    %% The boid is on another node now.
     case boids_space:lookup(Space, Id) of
-        {ok, #{pid := Pid}} ->
-            Out = [Edge || graph:has_vertex(Links0, Id), Edge <- graph:out_edges(Links0, Id)],
-            Links = graph:del_edges(Links0, Out),
-            [publish(Space, Links, [From, To], Label) || {From, To, Label} <- Out],
-            {reply, ok, forget_row(Id, State0#{links := Links})};
-        _ ->
-            {reply, ok, State0}
+        {ok, #{pid := Pid}} -> {reply, ok, depart(Id, State)};
+        _ -> {reply, ok, State}
     end;
 handle_call({unrelate, From, Label, To}, _From, State = #{space := Space, links := Links0}) ->
     Links = graph:del_edge(Links0, {From, To, Label}),
@@ -350,19 +374,69 @@ handle_info({'DOWN', Ref, process, _Pid, _Reason}, State = #{refs := Refs}) ->
     end;
 handle_info({show, Entry = #{id := Id}}, State = #{space := Space, ghosts := Ghosts}) ->
     %% A boid of another node shows itself near a border.
-    case boids_space:show(Space, Entry) of
-        true -> {noreply, State#{ghosts := Ghosts#{Id => erlang:monotonic_time(millisecond)}}};
-        false -> {noreply, State}
+    case {boids_space:show(Space, Entry), Entry} of
+        {true, _} ->
+            {noreply, State#{ghosts := Ghosts#{Id => erlang:monotonic_time(millisecond)}}};
+        {false, #{kind := server, pid := Pid, pos := Pos, moves := Moves}} ->
+            %% This node has a boid with that id: the boid can have two
+            %% processes.
+            {noreply, claim(Id, node(Pid), Moves, Pos, State)};
+        {false, _} ->
+            {noreply, State}
     end;
+handle_info({census, Node, Claims}, State0) ->
+    %% The boids of a node that joined the world, after a split of the
+    %% network or at its start.
+    {noreply, lists:foldl(fun({Id, Moves, Pos}, State) -> claim(Id, Node, Moves, Pos, State) end, State0, Claims)};
+handle_info({claim, Id, Node, Moves, Pos}, State) ->
+    {noreply, claim(Id, Node, Moves, Pos, State)};
+handle_info({yield, Id, Moves}, State = #{space := Space, ages := Ages}) ->
+    %% The world that decides tells that the process of this node, with
+    %% this number of moves, stops. A process that came after the
+    %% decision has another number of moves, and stays (specs/Move.tla,
+    %% Yield).
+    case {boids_space:owner(Space, Id), Ages} of
+        {{server, Pid}, #{Id := Moves}} ->
+            exit(Pid, {shutdown, replaced}),
+            {noreply, depart(Id, State)};
+        _ ->
+            {noreply, State}
+    end;
+handle_info(options, State = #{space := #{name := Name}, group := Group, names := Names, warned := Warned}) ->
+    %% The worlds with the name of this world and other options.
+    Same = [node(Pid) || Pid <- pg:get_members(boids, Group)],
+    Others = lists:usort([node(Pid) || Pid <- pg:get_members(boids, Names)]) -- Same,
+    lists:foreach(
+        fun(Node) ->
+            logger:error(
+                "The world ~0tp of the node ~0tp has other options than the world ~0tp of this node: "
+                "the two worlds do not join",
+                [Name, Node, Name],
+                #{domain => [boids]}
+            )
+        end,
+        Others -- Warned
+    ),
+    {noreply, State#{warned := Others}};
 handle_info(sweep, State = #{space := Space, ghosts := Ghosts}) ->
     erlang:send_after(?GHOST_MS div 2, self(), sweep),
     Old = erlang:monotonic_time(millisecond) - ?GHOST_MS,
     Gone = [Id || Id := Time <- Ghosts, Time < Old],
     lists:foreach(fun(Id) -> boids_space:remove(Space, Id) end, Gone),
     {noreply, State#{ghosts := maps:without(Gone, Ghosts)}};
-handle_info({_Ref, Change, _Group, _Pids}, State) when Change =:= join; Change =:= leave ->
-    %% A node has a world with the name of this world now, or has it no
-    %% more.
+handle_info({_Ref, join, Group, Pids}, State = #{group := Group}) ->
+    %% A node has a world with the name and the options of this world
+    %% now: a new node, or a node that had no connection for some time.
+    %% That world gets the boids of this node, to find the boids that
+    %% have a process on the two nodes.
+    Claims = claims(State),
+    [Pid ! {census, node(), Claims} || Pid <- Pids, node(Pid) =/= node(), Claims =/= []],
+    {noreply, members(State)};
+handle_info({_Ref, join, Names, _Pids}, State = #{names := Names}) ->
+    erlang:send_after(?OPTIONS_MS, self(), options),
+    {noreply, State};
+handle_info({_Ref, leave, _Group, _Pids}, State) ->
+    %% A node has the world no more.
     {noreply, members(State)};
 handle_info(_Message, State) ->
     {noreply, State}.
@@ -378,6 +452,56 @@ owner(Space, Id) ->
         error -> {{none, none}, undefined};
         Owner -> Owner
     end.
+
+%% The boids of this node that are a gen_boid, each with its moves and
+%% its position.
+claims(#{space := Space, ages := Ages}) ->
+    [
+        {Id, Moves, Pos}
+     || Id := Moves <- Ages, {server, _Pid} <- [boids_space:owner(Space, Id)], {ok, #{pos := Pos}} <- [boids_space:lookup(Space, Id)]
+    ].
+
+%% The node `Node` has a gen_boid with the id `Id`. When this node has
+%% one too, the boid has two processes, and one of them stops. The world
+%% of the node with the smaller name decides: with one world that
+%% decides, the two processes cannot stop for each other.
+claim(Id, Node, Moves, Pos, State = #{space := Space = #{name := Name}, ages := Ages}) ->
+    case boids_space:owner(Space, Id) of
+        {server, Pid} when Node =/= node() ->
+            {ok, #{pos := Mine}} = boids_space:lookup(Space, Id),
+            Own = map_get(Id, Ages),
+            %% The other node is a node of the world, also when this
+            %% world did not get the message of its join yet.
+            Nodes = lists:usort([Node | boids_space:nodes(Space)]),
+            Here = rank(Space, Nodes, node(), Own, Mine),
+            There = rank(Space, Nodes, Node, Moves, Pos),
+            case {node() < Node, Here < There} of
+                {true, true} ->
+                    exit(Pid, {shutdown, replaced}),
+                    depart(Id, State);
+                {true, false} ->
+                    erlang:send({Name, Node}, {yield, Id, Moves}, [noconnect]),
+                    State;
+                {false, _} ->
+                    erlang:send({Name, Node}, {claim, Id, node(), Own, Mine}, [noconnect]),
+                    State
+            end;
+        _ ->
+            State
+    end.
+
+%% The process with the larger rank stays: more moves, then in a tile of
+%% its node, then the larger name of node.
+rank(Space, Nodes, Node, Moves, Pos) ->
+    {Moves, boids_space:home(Space, Pos, Nodes) =:= Node, Node}.
+
+%% A boid of this node is on another node now. Its relations are with
+%% it. The relations of the boids of this node to it stay.
+depart(Id, State = #{space := Space, links := Links0}) ->
+    Out = [Edge || graph:has_vertex(Links0, Id), Edge <- graph:out_edges(Links0, Id)],
+    Links = graph:del_edges(Links0, Out),
+    [publish(Space, Links, [From, To], Label) || {From, To, Label} <- Out],
+    forget_row(Id, State#{links := Links}).
 
 %% A boid that starts again with its id can come before the message
 %% 'DOWN' of its last process (specs/Members.tla, TakeOver).

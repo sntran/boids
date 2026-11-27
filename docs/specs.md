@@ -147,54 +147,71 @@ A world with a name is on several nodes, and each tile of the world is
 on one node. The process of a boid is on the node of its tile. A boid
 that goes into a tile of another node moves: a new process starts on
 that node, and the first process stops. The two nodes talk with a call
-that can fail, and a node can stop at each moment.
+that has no time limit. The connection between the nodes can end at
+each moment (a split), and it can come again (a heal). A node can stop
+at each moment.
 
 The constants: the two nodes (`Nodes`), the times that a process crosses
-the border (`Crossings`), the calls and the answers that can be lost
-(`Losses`), the nodes that can stop (`Stops`), and two guards for the
+the border (`Crossings`), the times that the connection can end
+(`Splits`), the nodes that can stop (`Stops`), and three guards for the
 fault models. The model has one boid.
 
 Each process has an age: the number of moves of the boid before it. A
 node that has a process for the boid keeps it only when it is not older
 than the process that calls.
 
+After a split, the boid can have a process on each node. After the
+heal, the world of the first node (the node with the smaller name)
+decides which process stays: the one with more moves, then the one in a
+tile of its node, then the one of the second node. It stops its own
+process, or it tells the second node to stop the process of the age
+that it saw.
+
 | Action | When it can occur | In the code |
 |---|---|---|
-| `Cross(n)` | The process of `n` is in a tile of its node: its boid goes across the border. | A step of the boid |
-| `Show(n)` | The process of `n` runs: the other node gets a row of the boid. | `boids_world:settle/2`, the message `{show, Entry}` |
+| `Cross(n)` | The process of `n` is in a tile of its node, and the nodes have a connection: its boid goes across the border. | A step of the boid |
+| `Show(n)` | The process of `n` runs: the other node gets a row of the boid. | `boids_world:settle/3`, the message `{show, Entry}` |
 | `Expire(n)` | `n` has a row of a boid of the other node: the row goes. | The sweep of `boids_world` |
-| `Call(n)` | The process of `n` is in a tile of the other node: it calls that node, with its age plus 1. | `erpc:call(Home, gen_boid, adopt, ...)` |
+| `Call(n)` | The process of `n` is in a tile of the other node: it calls that node, with its age plus 1. | `erpc:call(Home, gen_boid, adopt, ..., infinity)` |
 | `Adopt(n)` | The call of `n` comes to the other node. With no process, or with an older process, that node starts a process for the boid, which takes the row: `ok`. If not: `exists`. | `gen_boid:adopt/2`, the join in `boids_world` |
-| `LoseCall(n)`, `LoseAnswer(n)` | The call or its answer does not come. | A time limit, or the end of a connection |
+| `Split`, `Heal` | The connection between the nodes ends, or comes again. Without a connection, each node has all the tiles. | The end of a connection of Erlang, and the `join` of `pg` |
+| `LoseCall(n)`, `LoseAnswer(n)`, `LoseYield(n)` | A call, an answer or a decision that was on its way at a split does not come. | `erpc` gives an error to the process that calls |
 | `Moved(n)` | The answer is `ok` or `exists`: `n` removes its row. | `boids_world:moved/3` |
 | `Stay(n)` | No answer: the process stays, and calls again at its next step. | |
 | `Stop(n)` | The process whose boid moved stops. | The reason `{shutdown, {moved, Node}}` |
+| `Judge` | Each node has a process for the boid, and the nodes have a connection: the world of the first node stops its own process, or sends the decision to the second node. | `claim` in `boids_world`, after the messages `{census, ...}`, `{claim, ...}` and `{show, Entry}` |
+| `Yield(n)` | The decision comes to the node `n`: it stops its process when that process has the age of the decision. | The message `{yield, Id, Moves}` |
 | `Down(n)` | The node `n` stops, with its process and its rows. Its tiles go to the other node. | |
 
 | Invariant or property | What it says | The fault that it stops |
 |---|---|---|
 | `RowOwner` | A node has its own row of the boid when it has a process of the boid, and only then. | A row with no process, and a process with no row. |
-| `NotLost` | While the two nodes run, the boid has a process. | Two processes that stop for each other. |
-| `OneProcess` | With no lost answer: after each move, the boid has a process on one node. | Two boids from one boid. |
-| `Lands` | Each move ends. | A process that calls a node without end. |
+| `NotLost` | While the two nodes run, the boid has a process. | Two processes that stop for each other, and a decision that stops the only process. |
+| `OneProcess` | With no split: after each move, the boid has a process on one node. | Two boids from one boid. |
+| `Lands` | Each move ends, and then the nodes have a connection and the boid has one process. | A process that calls a node without end, and two processes that stay after a heal. |
 
-The small model (`specs/MCMove.tla`): `MCMove.cfg` has no lost answer,
-six crossings and a node that can stop. `MCMoveLost.cfg` also loses
-three calls or answers: `RowOwner`, `NotLost` and `Lands` hold.
+The small model (`specs/MCMove.tla`): `MCMove.cfg` has no split, six
+crossings and a node that can stop. `MCMoveSplit.cfg` has two splits
+and five crossings: `RowOwner`, `NotLost` and `Lands` hold. Thus the
+boid keeps a process in each order of the acts, and it has one process
+after the last heal.
 
 - `MCMoveOlder.cfg` lets a node always keep its process: `NotLost`
-  violated. This was the first design of the move. After a lost answer,
-  the world has an old process and a new process for the boid. When the
+  violated. This was the first design of the move. After a split, the
+  world has an old process and a new process for the boid. When the
   new process comes back to the first node at that moment, each of the
   two processes gets `exists`, and the two stop. The age of a process
   stops that: the old process loses its row to the new process.
 - `MCMoveStays.cfg` lets a process stay when the other node has the
   boid: `Lands` violated.
+- `MCMoveAny.cfg` lets a node stop its process of each age when the
+  decision comes: `NotLost` violated. The process that lost the
+  decision can go before the decision comes, and a new process of the
+  boid can come to that node. The decision then stops the new process,
+  which is the only one. The age in the decision stops that.
 - `MCMoveTwo.cfg` is not a fault model. It shows a limit of the move:
-  with a lost answer, `OneProcess` is violated. The old process can go
-  back into a tile of its node before it calls again, or its call can
-  come late to a node that the new process left. Then the world has two
-  boids with one id, until one of them comes to the node of the other.
+  with a split, `OneProcess` is violated. During the split, the world
+  has two boids with one id.
 
 ## The replay: the code against the specification
 
@@ -251,6 +268,12 @@ join, the process of the row stopped, or not. The result is `:ok`,
   `test/boids_nodes_test.exs`).
 - `Move.tla` has two nodes and one call of a node on its way at one
   time. It does not have the relations of a boid, which move with it.
+  With three nodes, each pair of nodes decides for its two processes.
+  The model does not check that.
+- In `Move.tla`, the world that decides sees the two processes at one
+  moment. In the code, it sees its own process now, and the other
+  process as a message told it. The age in the decision keeps a
+  decision that comes late from a process that it did not see.
 - A boid that comes from another node, after more moves, takes the row
   of a process of its id that runs (`Move.tla`, `Adopt`). `Members.tla`
   does not have this: there, a process that runs keeps its row.
