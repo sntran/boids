@@ -53,9 +53,11 @@ npx wrangler deploy
 
 From GitHub: the workflow "Deploy the site"
 ([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)) does
-the same. Start it by hand in the tab "Actions". It needs two secrets of
+the same at each push to `main` that changes the site or the library.
+A person can also start it in the tab "Actions". It needs two secrets of
 the repository: `CLOUDFLARE_API_TOKEN` (a token that can edit Workers)
-and `CLOUDFLARE_ACCOUNT_ID` (the id of the account).
+and `CLOUDFLARE_ACCOUNT_ID` (the id of the account). Without them, the
+workflow does nothing.
 
 From Cloudflare: connect the repository to a Worker in the dashboard
 (Workers Builds), with the root directory `site`, the build command

@@ -1,13 +1,22 @@
 name: Deploy the site
 
-# Deploy the site (site/) to Cloudflare Workers. Start it by hand. It
-# needs the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+# Deploy the site (site/) to Cloudflare Workers at each push to main that
+# changes the site or the library, and when a person starts the workflow.
+# It needs the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of
+# the repository. Without them, the workflow does nothing.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "src/**"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One deploy at a time. A new push waits for the deploy that runs.
 concurrency:
   group: deploy-site
   cancel-in-progress: false
@@ -20,16 +29,30 @@ jobs:
     defaults:
       run:
         working-directory: site
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
+      - name: Check the secrets
+        id: secrets
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not set: no deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+        working-directory: .
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.secrets.outputs.ready == 'true'
       - name: Get beam.com and wrangler
+        if: steps.secrets.outputs.ready == 'true'
         run: npm install --no-audit --no-fund
       # beam.com makes app.com: the release of the site in one file, with
       # its WebAssembly part.
       - name: Build app.com
+        if: steps.secrets.outputs.ready == 'true'
         run: npm run build
       - name: Deploy
+        if: steps.secrets.outputs.ready == 'true'
         run: npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
