@@ -1,100 +1,71 @@
 defmodule BoidsTest do
   use ExUnit.Case, async: true
   import Boids.Helpers
-  import ExUnit.CaptureLog
-
-  alias Boids.TestBoids.Mouse
 
   @box {{0, 0}, {100, 100}}
 
-  # A flock that stops at the end of the test. Without the option tick,
-  # its boids move only with step/2.
+  # A flock that stops at the end of the test.
   defp flock(opts \\ %{}) do
-    {:ok, flock} = :boids.start_flock(Map.merge(%{tick: :manual}, Map.new(opts)))
+    {:ok, flock} = :boids.start_flock(opts)
     on_exit(fn -> :boids.stop_flock(flock) end)
     flock
   end
 
-  # A boid with no rule.
-  defp still(more \\ %{}), do: Map.merge(%{pos: {0, 0}, rules: []}, Map.new(more))
+  # A boid with no rule and no clock: it moves only with step/2.
+  defp still(more \\ %{}), do: Map.merge(%{pos: {0, 0}, rules: [], tick: :manual}, Map.new(more))
+
+  # Only a process that hibernates has a heap smaller than the minimum
+  # heap of a new process.
+  defp hibernates?(pid) do
+    {:total_heap_size, words} = Process.info(pid, :total_heap_size)
+    words < 233
+  end
 
   defp pos(flock, id) do
     {:ok, %{pos: pos}} = :boids.lookup(flock, id)
     pos
   end
 
-  # The processes that make the steps of a flock.
-  defp engine(flock) do
-    %{clock: clock, workers: workers} = :boids.space(flock)
-    [clock | Tuple.to_list(workers)]
-  end
-
   describe "start_flock/1 and stop_flock/1" do
-    test "starts the process of a flock, with its space, its clock and its workers" do
+    test "starts the process of a flock, with its space" do
       {:ok, flock} = :boids.start_flock()
       assert Process.alive?(flock)
       space = :boids.space(flock)
-
-      assert %{
-               owner: ^flock,
-               cell_size: 10.0,
-               bounds: :undefined,
-               wrap: false,
-               defaults: %{},
-               clock: clock,
-               workers: workers
-             } = space
-
-      assert tuple_size(workers) == :erlang.system_info(:schedulers_online)
-      assert Enum.all?([clock | Tuple.to_list(workers)], &Process.alive?/1)
+      assert %{owner: ^flock, cell_size: 10.0, bounds: :undefined, wrap: false, defaults: %{}} = space
       assert :boids.space(space) == space
       assert :boids.count(flock) == 0
       assert :boids.snapshot(flock) == []
       assert :boids.stop_flock(flock) == :ok
       refute Process.alive?(flock)
-      assert eventually(fn -> not Enum.any?([clock | Tuple.to_list(workers)], &Process.alive?/1) end)
       assert :ets.info(space.rows) == :undefined
       assert :boids.stop_flock(flock) == {:error, :not_found}
       assert :boids.stop_flock(space) == {:error, :not_found}
     end
 
-    test "the processes that control a flock have a high priority, and the workers a low priority" do
-      flock = flock(workers: 2)
+    test "the processes that control a flock have a high priority" do
+      flock = flock()
       space = :boids.space(flock)
       assert Process.info(flock, :priority) == {:priority, :high}
       assert Process.info(:boids_flock.sup(flock), :priority) == {:priority, :high}
       assert Process.info(:boids_flock.boid_sup(space), :priority) == {:priority, :high}
-      assert Process.info(space.clock, :priority) == {:priority, :high}
-
-      for worker <- Tuple.to_list(space.workers),
-          do: assert(Process.info(worker, :priority) == {:priority, :low})
+      # A boid has a low priority, or the priority of the other processes.
+      {:ok, id} = :boids.add(flock, still())
+      assert Process.info(id, :priority) == {:priority, :low}
+      {:ok, id} = :boids.add(flock, still(priority: :normal))
+      assert Process.info(id, :priority) == {:priority, :normal}
     end
 
-    test "the processes of a flock have a label" do
-      flock = flock(name: :boids_test_label, workers: 2)
-      %{clock: clock, workers: {first, second}} = :boids.space(flock)
+    test "the processes of a flock and of a boid have a label" do
+      flock = flock(name: :boids_test_label)
+      {:ok, :a} = :boids.add(flock, still(id: :a))
       assert :proc_lib.get_label(flock) == {:boids, :flock, :boids_test_label}
-      assert :proc_lib.get_label(clock) == {:boids, :clock, flock}
-      assert :proc_lib.get_label(first) == {:boids, :worker, 1}
-      assert :proc_lib.get_label(second) == {:boids, :worker, 2}
+      assert :proc_lib.get_label(:boids.whereis(flock, :a)) == {:boids, :boid, :a}
       assert :proc_lib.get_label(flock()) == {:boids, :flock, :undefined}
     end
 
     test "accepts a list of options" do
-      flock =
-        flock(
-          bounds: @box,
-          wrap: true,
-          cell_size: 5,
-          defaults: %{max_speed: 3},
-          tick: 20,
-          max_dt: 1,
-          workers: 3
-        )
-
-      space = :boids.space(flock)
-      assert %{bounds: @box, wrap: true, cell_size: 5, defaults: %{max_speed: 3}, workers: {_, _, _}} = space
-      assert %{tick: 20, max_dt: 1} = :sys.get_state(space.clock)
+      flock = flock(bounds: @box, wrap: true, cell_size: 5, defaults: %{max_speed: 3})
+      assert %{bounds: @box, wrap: true, cell_size: 5, defaults: %{max_speed: 3}} = :boids.space(flock)
     end
 
     test "gives a name to the flock" do
@@ -125,14 +96,6 @@ defmodule BoidsTest do
             name: {:local, :flock},
             name: {:via, "module", :flock},
             defaults: [max_speed: 1],
-            tick: 0,
-            tick: 1.5,
-            tick: :fast,
-            max_dt: 0,
-            max_dt: :long,
-            workers: 0,
-            workers: 2000,
-            workers: :many,
             color: :red
           ] do
         assert :boids.start_flock(%{key => value}) == {:error, {:bad_option, {key, value}}}
@@ -142,9 +105,7 @@ defmodule BoidsTest do
       assert :boids.start_flock(cell_size: 1.0e200) == {:error, {:bad_option, {:cell_size, 1.0e200}}}
       box = {{0, 0}, {1.0e200, 1}}
       assert :boids.start_flock(bounds: box) == {:error, {:bad_option, {:bounds, box}}}
-      # The tick is an option of the flock, and not of a boid.
-      assert :boids.start_flock(defaults: %{tick: 5}) == {:error, {:bad_option, {:tick, 5}}}
-      assert :boids.start_flock(defaults: %{hibernate: false}) == {:error, {:bad_option, {:hibernate, false}}}
+      assert :boids.start_flock(defaults: %{tick: 0}) == {:error, {:bad_option, {:tick, 0}}}
       assert :boids.start_flock(defaults: %{shape: :bird}) == {:error, {:bad_option, {:shape, :bird}}}
       assert :boids.start_flock(:big) == {:error, {:bad_option, :big}}
       assert :boids.start_flock([:big]) == {:error, {:bad_option, [:big]}}
@@ -152,20 +113,19 @@ defmodule BoidsTest do
 
     test "each default is good alone" do
       # The check of each boid sees the defaults with the options of the boid.
-      flock = flock(bounds: {{0, 0, 0}, {9, 9, 9}}, defaults: %{vel: {0, 0, 1}, min_speed: 12})
+      flock = flock(bounds: {{0, 0, 0}, {9, 9, 9}}, defaults: %{vel: {0, 0, 1}, min_speed: 12, tick: :manual})
       assert :boids.add(flock, pos: {1, 1, 1}) == {:error, {:bad_option, {:min_speed, 12}}}
       assert {:ok, id} = :boids.add(flock, pos: {1, 1, 1}, max_speed: 20)
       assert {:ok, %{vel: {0, 0, 1}, min_speed: 12}} = :boids.boid(flock, id)
     end
 
-    test "stops the boids, the clock and the workers of the flock" do
+    test "stops the boids of the flock" do
       {:ok, flock} = :boids.start_flock()
-      {:ok, _} = :boids.add(flock, still())
-      {:ok, pid} = :gen_boid.start(Mouse, still(), flock: flock)
-      engine = engine(flock)
+      {:ok, id} = :boids.add(flock, still())
+      pid = :boids.whereis(flock, id)
+      assert Process.alive?(pid)
       assert :boids.stop_flock(:boids.space(flock)) == :ok
       refute Process.alive?(pid)
-      assert eventually(fn -> not Enum.any?(engine, &Process.alive?/1) end)
     end
   end
 
@@ -175,12 +135,12 @@ defmodule BoidsTest do
         Supervisor.start_link([{:boids, name: :boids_test_child, bounds: @box}], strategy: :one_for_one)
 
       assert %{bounds: @box} = :boids.space(:boids_test_child)
-      {:ok, _} = :boids.add(:boids_test_child, still())
+      {:ok, id} = :boids.add(:boids_test_child, still())
       assert :boids.count(:boids_test_child) == 1
       assert :boids.stop_flock(:boids_test_child) == {:error, :not_found}
-      engine = engine(:boids_test_child)
+      pid = :boids.whereis(:boids_test_child, id)
       Supervisor.stop(sup)
-      assert eventually(fn -> not Enum.any?(engine, &Process.alive?/1) end)
+      refute Process.alive?(pid)
       assert Process.whereis(:boids_test_child) == nil
     end
 
@@ -193,59 +153,44 @@ defmodule BoidsTest do
 
     test "refuses a bad option" do
       assert catch_error(:boids.child_spec(%{cell_size: -1})) == {:bad_option, {:cell_size, -1}}
-      assert catch_error(:boids.child_spec(%{workers: -1})) == {:bad_option, {:workers, -1}}
     end
 
     @tag :capture_log
     test "a flock that stops with an error starts again, with no boid" do
-      name = :boids_test_restart
-      {:ok, sup} = Supervisor.start_link([{:boids, name: name, tick: :manual}], strategy: :one_for_one)
-
-      # The flock starts again after the end of its process, of its
-      # clock, and of one of its workers.
-      for part <- [:flock, :clock, :worker] do
-        first = Process.whereis(name)
-        %{clock: clock, workers: workers} = :boids.space(name)
-        {:ok, _} = :boids.add(name, still())
-        {:ok, pid} = :gen_boid.start(Mouse, still(), flock: name)
-
-        case part do
-          :flock -> Process.exit(first, :kill)
-          :clock -> Process.exit(clock, :kill)
-          :worker -> Process.exit(elem(workers, 0), :kill)
-        end
-
-        assert eventually(fn -> Process.whereis(name) not in [nil, first] end)
-        assert eventually(fn -> not Enum.any?([pid, clock | Tuple.to_list(workers)], &Process.alive?/1) end)
-        assert :boids.count(name) == 0
-        assert :boids.step(name, 1) == :ok
-      end
-
+      {:ok, sup} = Supervisor.start_link([{:boids, name: :boids_test_restart}], strategy: :one_for_one)
+      first = Process.whereis(:boids_test_restart)
+      {:ok, id} = :boids.add(:boids_test_restart, still())
+      pid = :boids.whereis(:boids_test_restart, id)
+      Process.exit(first, :kill)
+      assert eventually(fn -> Process.whereis(:boids_test_restart) not in [nil, first] end)
+      assert eventually(fn -> not Process.alive?(pid) end)
+      assert :boids.count(:boids_test_restart) == 0
+      assert {:ok, _} = :boids.add(:boids_test_restart, still())
       Supervisor.stop(sup)
     end
   end
 
   describe "add/2" do
-    test "adds a boid with no process of its own" do
+    test "starts the process of a boid" do
       flock = flock()
       {:ok, id} = :boids.add(flock, still(pos: {1, 2}, vel: {3, 4}, group: :birds, data: :blue))
-      assert is_reference(id)
-      assert :boids.whereis(flock, id) == :undefined
+      assert is_pid(id)
+      assert :boids.whereis(flock, id) == id
       assert :boids.count(flock) == 1
 
       assert :boids.lookup(flock, id) ==
-               {:ok, %{id: id, pos: {1, 2}, vel: {3, 4}, group: :birds, data: :blue, pid: :undefined}}
+               {:ok, %{id: id, pos: {1, 2}, vel: {3, 4}, group: :birds, data: :blue, pid: id}}
 
       assert :boids.snapshot(flock) == [elem(:boids.lookup(flock, id), 1)]
       assert {:ok, %{id: ^id, pos: {1, 2}, max_speed: 10.0, rules: []}} = :boids.boid(flock, id)
-      assert :boids_space.owner(:boids.space(flock), id) == {:data, :undefined}
     end
 
     test "accepts an id and a list of options" do
       flock = flock()
-      assert :boids.add(flock, id: :a, pos: {1, 2}) == {:ok, :a}
-      assert {:ok, %{id: :a, pid: :undefined}} = :boids.lookup(flock, :a)
-      assert {:ok, %{id: :a, rules: [_, _, _]}} = :boids.boid(flock, :a)
+      assert :boids.add(flock, id: :a, pos: {1, 2}, tick: :manual) == {:ok, :a}
+      pid = :boids.whereis(flock, :a)
+      assert is_pid(pid)
+      assert {:ok, %{id: :a, pid: ^pid}} = :boids.lookup(flock, :a)
     end
 
     test "refuses an id that is in the flock" do
@@ -254,22 +199,18 @@ defmodule BoidsTest do
       assert :boids.add(flock, still(id: :a, pos: {5, 5})) == {:error, {:exists, :a}}
       assert :boids.count(flock) == 1
       assert pos(flock, :a) == {0, 0}
-      # The id of a boid that is a process.
-      {:ok, _, _} = :boids.join(flock, id: :me, pos: {1, 2})
-      assert :boids.add(flock, still(id: :me)) == {:error, {:exists, :me}}
-      assert :boids.whereis(flock, :me) == self()
     end
 
     test "refuses a bad option" do
       flock = flock()
       assert :boids.add(flock, %{}) == {:error, {:bad_option, {:pos, :undefined}}}
       assert :boids.add(flock, still(max_speed: -1)) == {:error, {:bad_option, {:max_speed, -1}}}
+      assert :boids.add(flock, still(tick: 0)) == {:error, {:bad_option, {:tick, 0}}}
+      assert :boids.add(flock, still(tick: 1.5)) == {:error, {:bad_option, {:tick, 1.5}}}
+      assert :boids.add(flock, still(max_dt: 0)) == {:error, {:bad_option, {:max_dt, 0}}}
       assert :boids.add(flock, still(seed: :random)) == {:error, {:bad_option, {:seed, :random}}}
-      # A boid has no clock and no process of its own.
-      assert :boids.add(flock, still(tick: 5)) == {:error, {:bad_option, {:tick, 5}}}
-      assert :boids.add(flock, still(max_dt: 1)) == {:error, {:bad_option, {:max_dt, 1}}}
-      assert :boids.add(flock, still(priority: :low)) == {:error, {:bad_option, {:priority, :low}}}
-      assert :boids.add(flock, still(hibernate: true)) == {:error, {:bad_option, {:hibernate, true}}}
+      assert :boids.add(flock, still(priority: :high)) == {:error, {:bad_option, {:priority, :high}}}
+      assert :boids.add(flock, still(hibernate: :yes)) == {:error, {:bad_option, {:hibernate, :yes}}}
       assert :boids.add(flock, still(wings: 2)) == {:error, {:bad_option, {:wings, 2}}}
       assert :boids.add(flock, :bird) == {:error, {:bad_option, :bird}}
       assert :boids.add(flock, [:bird]) == {:error, {:bad_option, [:bird]}}
@@ -277,7 +218,7 @@ defmodule BoidsTest do
     end
 
     test "uses the defaults of the flock" do
-      flock = flock(defaults: %{max_speed: 3, group: :fish, rules: []})
+      flock = flock(defaults: %{max_speed: 3, group: :fish, tick: :manual, rules: []})
       {:ok, a} = :boids.add(flock, pos: {0, 0})
       {:ok, b} = :boids.add(flock, pos: {0, 0}, max_speed: 4)
       assert {:ok, %{max_speed: 3, group: :fish, rules: []}} = :boids.boid(flock, a)
@@ -289,21 +230,16 @@ defmodule BoidsTest do
       {:ok, a} = :boids.add(flock, still())
       assert :boids.add(flock, still(pos: {0, 0, 0})) == {:error, {:bad_option, {:pos, {0, 0, 0}}}}
       assert :boids.join(flock, pos: {0, 0, 0}) == {:error, {:bad_option, {:pos, {0, 0, 0}}}}
-
-      assert :gen_boid.start(Mouse, still(pos: {0, 0, 0}), flock: flock) ==
-               {:error, {:bad_option, {:pos, {0, 0, 0}}}}
+      assert :boids.populate(flock, 2, area: {{0, 0, 0}, {1, 1, 1}}, tick: :manual) |> elem(0) == :error
 
       assert :boids.update(flock, a, %{pos: {0, 0, 0}, vel: {0, 0, 0}}) ==
                {:error, {:bad_option, {:pos, {0, 0, 0}}}}
 
       assert_raise ArgumentError, fn -> :boids.set_obstacle(flock, :rock, {0, 0, 0}, 1) end
       assert :boids.count(flock) == 1
-      # The first boid gives its size to the flock, also after its removal.
+      # An empty flock with no box accepts each size.
       :ok = :boids.remove(flock, a)
-      assert :boids.count(flock) == 0
-      assert :boids.add(flock, still(pos: {0, 0, 0})) == {:error, {:bad_option, {:pos, {0, 0, 0}}}}
-      assert :boids_space.dim(:boids.space(flock)) == 2
-      assert {:ok, _} = :boids.add(flock, still())
+      assert {:ok, _} = :boids.add(flock, still(pos: {0, 0, 0}))
       # A flock with a box has the size of its box.
       box = flock(bounds: {{0, 0, 0}, {9, 9, 9}})
       assert :boids.add(box, still()) == {:error, {:bad_option, {:pos, {0, 0}}}}
@@ -311,12 +247,13 @@ defmodule BoidsTest do
       assert :boids.set_obstacle(box, :rock, {0, 0, 0}, 1) == :ok
     end
 
+    @tag :capture_log
     test "an obstacle of another size does not stop a boid" do
-      # A flock with no box and no boid accepts an obstacle of each size.
+      # An empty flock with no box accepts an obstacle of each size.
       flock = flock()
       assert :boids.set_obstacle(flock, :rock, {5, 0, 0}, 2) == :ok
       {:ok, id} = :boids.add(flock, still(vel: {1, 0}, rules: [avoid: 1]))
-      assert :boids.step(flock, 1) == :ok
+      :boids.step(flock, 1)
       assert pos(flock, id) == {1.0, 0.0}
     end
 
@@ -327,46 +264,29 @@ defmodule BoidsTest do
       assert :boids.boid(flock, :nobody) == {:error, :not_found}
       assert :boids.update(flock, :nobody, %{max_speed: 1}) == {:error, :not_found}
       assert :boids.remove(flock, :nobody) == {:error, :not_found}
-      assert :boids.add_rule(flock, :nobody, {:wander, 1}) == {:error, :not_found}
-      assert :boids.delete_rule(flock, :nobody, :wander) == {:error, :not_found}
-      assert :boids.which_rules(flock, :nobody) == {:error, :not_found}
-      # A worker does not find an id that it does not have.
-      space = :boids.space(flock)
-      assert :boids_worker.get(space, :nobody) == {:error, :not_found}
-      assert :boids_worker.remove(space, :nobody) == {:error, :not_found}
-      assert :boids_worker.change(space, :nobody, :update, %{}) == {:error, :not_found}
     end
   end
 
   describe "remove/2" do
-    test "removes a boid and its row" do
+    test "stops the process of a boid, and removes its row" do
       flock = flock()
       {:ok, id} = :boids.add(flock, still())
       {:ok, other} = :boids.add(flock, still())
       assert :boids.remove(flock, id) == :ok
+      refute Process.alive?(id)
       assert :boids.lookup(flock, id) == :error
-      assert :boids.boid(flock, id) == {:error, :not_found}
-      assert :boids.near(flock, {0, 0}, 5) |> Enum.map(& &1.id) == [other]
       assert :boids.count(flock) == 1
       assert :boids.remove(flock, id) == {:error, :not_found}
-      assert :boids.step(flock, 1) == :ok
-      assert :boids.count(flock) == 1
-    end
-
-    test "stops the process of a boid that is a gen_boid of the flock" do
-      flock = flock()
-      {:ok, pid} = :gen_boid.start(Mouse, still(id: :mouse), flock: flock)
-      assert :boids.remove(flock, :mouse) == :ok
-      refute Process.alive?(pid)
-      assert :boids.count(flock) == 0
-      assert :boids.remove(flock, :mouse) == {:error, :not_found}
+      assert Process.alive?(other)
     end
 
     test "a late leave for a process that stopped does not take the row of a new process" do
       flock = flock()
-      {:ok, first} = :gen_boid.start(Mouse, still(id: :a), flock: flock)
+      {:ok, :a} = :boids.add(flock, still(id: :a))
+      first = :boids.whereis(flock, :a)
       :ok = :boids.remove(flock, :a)
-      {:ok, second} = :gen_boid.start(Mouse, still(id: :a), flock: flock)
+      {:ok, :a} = :boids.add(flock, still(id: :a))
+      second = :boids.whereis(flock, :a)
       # The message of remove/2 for the first process, after the start of the second.
       assert :boids_flock.leave(:boids.space(flock), :a, first) == :ok
       assert :boids.whereis(flock, :a) == second
@@ -413,186 +333,80 @@ defmodule BoidsTest do
 
       assert :boids.update(flock, id, %{id: :other}) == {:error, {:bad_option, {:id, :other}}}
       assert :boids.update(flock, id, %{tick: 5}) == {:error, {:bad_option, {:tick, 5}}}
-      assert :boids.update(flock, id, :faster) == {:error, {:bad_option, :faster}}
       assert pos(flock, id) == {0, 0}
     end
   end
 
-  describe "add_rule/3, delete_rule/3 and which_rules/2" do
-    test "change the rules of a boid, from its next step" do
+  describe "the process of a boid" do
+    @tag :capture_log
+    test "a boid that stops with an error goes from the flock, and the other boids continue" do
       flock = flock()
-      {:ok, id} = :boids.add(flock, still(max_force: 100))
-      assert :boids.which_rules(flock, id) == {:ok, []}
-      assert :boids.add_rule(flock, id, {{:seek, :home}, 1, target: {10, 0}}) == :ok
-      assert :boids.add_rule(flock, id, {{:seek, :food}, 1, %{target: {0, 10}}}) == :ok
-      assert :boids.which_rules(flock, id) == {:ok, [seek: :home, seek: :food]}
-      :boids.step(flock, 0.1)
-      {x, y} = pos(flock, id)
-      assert x > 0 and y > 0
-      assert :boids.delete_rule(flock, id, {:seek, :food}) == :ok
-      assert :boids.which_rules(flock, id) == {:ok, [seek: :home]}
-      assert {:ok, %{rules: [{{:seek, :home}, 1, %{target: {10, 0}}}]}} = :boids.boid(flock, id)
-      # A boid with no such rule does not change.
-      assert :boids.delete_rule(flock, id, :wander) == :ok
-      assert :boids.which_rules(flock, id) == {:ok, [seek: :home]}
-    end
-
-    test "a rule of your own is a function, and its name is the function" do
-      flock = flock()
-      me = self()
-
-      push = fn boid, neighbors, env ->
-        send(me, {:rule, boid.id, length(neighbors), env.dt})
-        {3, 0}
-      end
-
-      {:ok, id} = :boids.add(flock, still(id: :a, max_force: 100))
-      {:ok, _} = :boids.add(flock, still(pos: {1, 1}))
-      assert :boids.add_rule(flock, id, {push, 2}) == :ok
-      assert :boids.which_rules(flock, id) == {:ok, [push]}
-      :boids.step(flock, 0.5)
-      assert_received {:rule, :a, 1, 0.5}
-      assert_vec(pos(flock, id), {1.5, 0.0})
-      assert :boids.delete_rule(flock, id, push) == :ok
-      :boids.step(flock, 0.5)
-      refute_received {:rule, _, _, _}
-    end
-
-    test "refuse a bad rule, and change nothing" do
-      flock = flock()
-      {:ok, id} = :boids.add(flock, still())
-      assert :boids.add_rule(flock, id, {:seek, 1}) == {:error, {:bad_option, {:rules, {:seek, 1, %{}}}}}
-      assert :boids.add_rule(flock, id, {:fly, 1}) == {:error, {:bad_option, {:rules, {:fly, 1, %{}}}}}
-      assert :boids.which_rules(flock, id) == {:ok, []}
-    end
-
-    test "the memory of a rule has the name of the rule" do
-      flock = flock()
-      {:ok, id} = :boids.add(flock, still(seed: 1, rules: [{:wander, 1}, {{:wander, :slow}, 1, jitter: 0.1}]))
-      :boids.step(flock, 0.1)
-
-      assert {:ok, %{memory: %{:wander => {_, _}, {:wander, :slow} => {_, _}} = memory}} =
-               :boids.boid(flock, id)
-
-      assert map_size(memory) == 2
-      :ok = :boids.delete_rule(flock, id, :wander)
-      assert {:ok, %{memory: only}} = :boids.boid(flock, id)
-      assert Map.keys(only) == [{:wander, :slow}]
-    end
-  end
-
-  describe "a rule with an error" do
-    test "the flock removes the boid, writes the error to the log, and the other boids continue" do
-      flock = flock(workers: 2)
-      {:ok, good} = :boids.populate(flock, 20, area: @box, vel: {1, 0}, rules: [])
-      before = Map.new(good, &{&1, pos(flock, &1)})
-      bad = fn _boid, _neighbors, _env -> raise "a fault of a rule" end
-
-      {:ok, :boid_with_a_bad_rule} =
-        :boids.add(flock, id: :boid_with_a_bad_rule, pos: {1, 1}, rules: [{bad, 1}])
-
-      log = capture_log(fn -> assert :boids.step(flock, 0.5) == :ok end)
-      assert [_, _] = String.split(log, "The boid :boid_with_a_bad_rule stops")
-      assert log =~ "a fault of a rule"
-      assert :boids.lookup(flock, :boid_with_a_bad_rule) == :error
-      assert :boids.boid(flock, :boid_with_a_bad_rule) == {:error, :not_found}
-      assert :boids.count(flock) == 20
-      for id <- good, do: assert_vec(pos(flock, id), :boids_vec.add(before[id], {0.5, 0}))
-      # The id is free for a new boid, and the next step has no error.
-      assert :boids.add(flock, still(id: :boid_with_a_bad_rule)) == {:ok, :boid_with_a_bad_rule}
-      refute capture_log(fn -> :boids.step(flock, 0.5) end) =~ "boid_with_a_bad_rule"
-      assert :boids.count(flock) == 21
+      {:ok, :a} = :boids.add(flock, still(id: :a, pos: {1, 1}))
+      {:ok, other} = :boids.add(flock, still())
+      Process.exit(:boids.whereis(flock, :a), :kill)
+      assert eventually(fn -> :boids.whereis(flock, :a) == :undefined end)
+      assert :boids.count(flock) == 1
+      assert Process.alive?(other)
+      # The id is free for a new boid.
+      assert :boids.add(flock, still(id: :a)) == {:ok, :a}
     end
 
     @tag :capture_log
-    test "boids with an error at each step do not stop the flock" do
-      flock = flock(tick: 5)
-      {:ok, good} = :boids.populate(flock, 20, area: @box)
+    test "a boid with an error at each step does not stop the flock" do
+      flock = flock()
+      {:ok, good} = :boids.populate(flock, 20, area: @box, tick: 5)
       bad = fn _boid, _neighbors, _env -> raise "a fault of a rule" end
-      for _ <- 1..15, do: {:ok, _} = :boids.add(flock, pos: {1, 1}, rules: [{bad, 1}])
+      for _ <- 1..15, do: {:ok, _} = :boids.add(flock, pos: {1, 1}, rules: [{bad, 1}], tick: 5)
       assert eventually(fn -> :boids.count(flock) == 20 end)
       assert Process.alive?(flock)
-      assert Enum.all?(engine(flock), &Process.alive?/1)
+      assert Enum.all?(good, &Process.alive?/1)
       assert Enum.sort(Enum.map(:boids.snapshot(flock), & &1.id)) == Enum.sort(good)
     end
 
     @tag :capture_log
-    test "a gen_boid with such a rule stops, and the other boids continue" do
-      flock = flock()
-      bad = fn _boid, _neighbors, _env -> raise "a fault of a rule" end
-      {:ok, pid} = :gen_boid.start(Mouse, still(id: :mouse, rules: [{bad, 1}]), flock: flock)
-      {:ok, id} = :boids.add(flock, still(vel: {1, 0}))
-      ref = Process.monitor(pid)
-      assert :boids.step(flock, 1) == :ok
-      assert_receive {:DOWN, ^ref, _, _, {%RuntimeError{}, _}}
-      assert eventually(fn -> :boids.count(flock) == 1 end)
-      assert pos(flock, id) == {1.0, 0.0}
-      assert :boids.step(flock, 1) == :ok
-      assert pos(flock, id) == {2.0, 0.0}
-    end
-  end
-
-  describe "the processes of a flock" do
-    @tag :capture_log
     test "the end of the process of a flock stops all the flock" do
       {:ok, flock} = :boids.start_flock()
-      {:ok, pid} = :gen_boid.start(Mouse, still(), flock: flock)
-      engine = engine(flock)
+      {:ok, id} = :boids.add(flock, still())
       sup = :boids_flock.sup(flock)
       Process.exit(flock, :kill)
       assert eventually(fn -> not Process.alive?(sup) end)
-      refute Process.alive?(pid)
-      assert eventually(fn -> not Enum.any?(engine, &Process.alive?/1) end)
+      refute Process.alive?(id)
       assert :boids.stop_flock(flock) == {:error, :not_found}
     end
 
-    @tag :capture_log
-    test "the end of the clock or of a worker stops all the flock" do
-      for part <- [:clock, :worker] do
-        {:ok, flock} = :boids.start_flock(workers: 2)
-        space = :boids.space(flock)
-        {:ok, pid} = :gen_boid.start(Mouse, still(), flock: flock)
-        sup = :boids_flock.sup(flock)
-        Process.exit(if(part == :clock, do: space.clock, else: elem(space.workers, 1)), :kill)
-        assert eventually(fn -> not Process.alive?(sup) end)
-        refute Process.alive?(flock)
-        assert eventually(fn -> not Enum.any?([pid | engine_of(space)], &Process.alive?/1) end)
-        assert :ets.info(space.rows) == :undefined
-      end
-    end
-
-    defp engine_of(%{clock: clock, workers: workers}), do: [clock | Tuple.to_list(workers)]
-
-    test "a gen_boid whose process stopped is not found" do
+    test "a boid whose process stopped is not found" do
       flock = flock()
-      {:ok, pid} = :gen_boid.start(Mouse, still(id: :mouse), flock: flock)
+      {:ok, id} = :boids.add(flock, still())
       space = :boids.space(flock)
       # The flock does not see the end of the process before the call.
       :sys.suspend(flock)
-      ref = Process.monitor(pid)
-      :ok = :gen_boid.stop(pid)
+      ref = Process.monitor(id)
+      :ok = GenServer.stop(id)
       assert_receive {:DOWN, ^ref, _, _, _}
-      assert :boids.boid(space, :mouse) == {:error, :not_found}
-      assert :boids.update(space, :mouse, %{max_speed: 1}) == {:error, :not_found}
-      assert :boids.which_rules(space, :mouse) == {:error, :not_found}
+      assert :boids.boid(space, id) == {:error, :not_found}
+      assert :boids.update(space, id, %{max_speed: 1}) == {:error, :not_found}
       :sys.resume(flock)
       assert eventually(fn -> :boids.count(flock) == 0 end)
-      assert :boids.lookup(flock, :mouse) == :error
+    end
+
+    test "the flock removes a boid whose process stops" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, still())
+      :ok = GenServer.stop(id)
+      assert eventually(fn -> :boids.count(flock) == 0 end)
+      assert :boids.lookup(flock, id) == :error
       assert :boids.near(flock, {0, 0}, 5) == []
     end
 
     test "other messages change nothing" do
       flock = flock()
       {:ok, id} = :boids.add(flock, still())
-
-      for pid <- [flock | engine(flock)] do
-        send(pid, :hello)
-        send(pid, {:DOWN, make_ref(), :process, self(), :normal})
-        GenServer.cast(pid, :hello)
-      end
-
-      assert :boids.step(flock, 1) == :ok
-      assert pos(flock, id) == {0, 0}
+      send(id, :hello)
+      GenServer.cast(id, :hello)
+      send(flock, :hello)
+      send(flock, {:DOWN, make_ref(), :process, self(), :normal})
+      GenServer.cast(flock, :hello)
+      assert {:ok, %{pos: {0, 0}}} = :boids.boid(flock, id)
       assert :boids.count(flock) == 1
     end
   end
@@ -604,8 +418,8 @@ defmodule BoidsTest do
       name = :"boids_test_own_#{System.unique_integer([:positive])}"
 
       children = [
-        {:boids, name: name, tick: :manual, defaults: %{rules: []}},
-        {:gen_boid, {Mouse, [id: :hawk, pos: {1, 1}, vel: {1, 0}], [flock: name]}}
+        {:boids, name: name, defaults: %{tick: :manual, rules: []}},
+        {:gen_boid, {:boids_boid, [id: :hawk, pos: {1, 1}, vel: {1, 0}], [flock: name]}}
       ]
 
       start = {Supervisor, :start_link, [children, [strategy: :rest_for_one]]}
@@ -627,9 +441,6 @@ defmodule BoidsTest do
       assert eventually(fn -> :boids.whereis(flock, :hawk) not in [:undefined, first] end)
       assert pos(flock, :hawk) == {1, 1}
       assert :boids.count(flock) == 1
-      # The clock moves the new process.
-      :boids.step(flock, 1)
-      assert pos(flock, :hawk) == {2.0, 1.0}
     end
 
     test "finds its flock again when the flock starts again", %{flock: flock} do
@@ -657,15 +468,15 @@ defmodule BoidsTest do
     end
 
     test "the specification of the child has the module and its arguments" do
-      assert :gen_boid.child_spec({Mouse, %{id: :hawk}, %{flock: :f}}) == %{
-               id: {:gen_boid, Mouse, %{id: :hawk}},
-               start: {:gen_boid, :start_link, [Mouse, %{id: :hawk}, %{flock: :f}]}
+      assert :gen_boid.child_spec({:boids_boid, %{id: :hawk}, %{flock: :f}}) == %{
+               id: {:gen_boid, :boids_boid, %{id: :hawk}},
+               start: {:gen_boid, :start_link, [:boids_boid, %{id: :hawk}, %{flock: :f}]}
              }
     end
 
     test "start_link/3 refuses a bad option and an id of the flock", %{flock: flock} do
       Process.flag(:trap_exit, true)
-      start = fn options -> :gen_boid.start_link(Mouse, options, flock: flock) end
+      start = fn options -> :gen_boid.start_link(:boids_boid, options, flock: flock) end
       assert start.(pos: {0, 0}, mass: 0) == {:error, {:shutdown, {:bad_option, {:mass, 0}}}}
       assert start.(:bird) == {:error, {:shutdown, {:bad_option, :bird}}}
       assert start.(id: :hawk, pos: {0, 0}) == {:error, {:shutdown, {:exists, :hawk}}}
@@ -674,33 +485,30 @@ defmodule BoidsTest do
     end
   end
 
-  describe "the clock of a flock" do
-    test "the boids move in real time" do
-      flock = flock(tick: 5)
-      {:ok, id} = :boids.add(flock, pos: {0, 0}, vel: {10, 0}, rules: [])
-      {:ok, _} = :gen_boid.start(Mouse, still(id: :mouse, vel: {10, 0}), flock: flock)
+  describe "the clock of a boid" do
+    test "a boid moves in real time" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, pos: {0, 0}, vel: {10, 0}, rules: [], tick: 5)
       Process.sleep(200)
       {x, y} = pos(flock, id)
       # 2 units in 200 ms. The limits accept a slow computer.
       assert x > 1.0 and x < 10.0
       assert y == 0.0
-      assert elem(pos(flock, :mouse), 0) > 1.0
       later = eventually(fn -> elem(pos(flock, id), 0) > x end)
       assert later
     end
 
-    test "with a manual tick, the boids move only with step/2" do
+    test "with a manual tick, a boid moves only with step/2" do
       flock = flock()
       {:ok, id} = :boids.add(flock, still(vel: {10, 0}))
       Process.sleep(50)
       assert pos(flock, id) == {0, 0}
-      assert :sys.get_state(:boids.space(flock).clock).count == 0
     end
 
     test "the scale of the time makes the boids slow, fast or stopped" do
-      flock = flock(tick: 5)
+      flock = flock()
       assert :boids.set_time_scale(flock, 0) == :ok
-      {:ok, id} = :boids.add(flock, pos: {0, 0}, vel: {1, 0}, rules: [])
+      {:ok, id} = :boids.add(flock, pos: {0, 0}, vel: {1, 0}, rules: [], tick: 5)
       Process.sleep(50)
       assert pos(flock, id) == {0, 0}
       assert :boids.set_time_scale(flock, 100) == :ok
@@ -709,98 +517,70 @@ defmodule BoidsTest do
     end
 
     test "a step has the maximum time at most" do
-      flock = flock(tick: 20, max_dt: 0.001)
-      {:ok, id} = :boids.add(flock, pos: {0, 0}, vel: {10, 0}, rules: [])
+      flock = flock()
+      {:ok, id} = :boids.add(flock, pos: {0, 0}, vel: {10, 0}, rules: [], tick: 20, max_dt: 0.001)
       Process.sleep(200)
       {x, _} = pos(flock, id)
       # 10 ticks of 0.01 unit at most, and not 2 units.
       assert x > 0.0 and x < 0.5
     end
 
-    test "a late tick does not make a long step" do
-      flock = flock(tick: 10, max_dt: 0.02)
-      clock = :boids.space(flock).clock
-      :ok = :boids.subscribe(flock)
-      # The ticks come 100 ms late, as with processors that have too much work.
-      :erlang.suspend_process(clock)
-      Process.sleep(100)
-      :erlang.resume_process(clock)
-      assert_receive {:boids, ^flock, {:step, _, 0.02}}, 1000
-      :ok = :boids.unsubscribe(flock)
+    test "a boid hibernates between two steps" do
+      flock = flock()
 
-      steps = fn steps, acc ->
-        receive do
-          {:boids, ^flock, {:step, _, dt}} -> steps.(steps, [dt | acc])
-        after
-          0 -> acc
-        end
-      end
+      sleeps? = &hibernates?/1
 
-      assert Enum.all?(steps.(steps, []), &(&1 <= 0.02))
+      {:ok, timed} = :boids.add(flock, pos: {0, 0}, vel: {1, 0}, rules: [], tick: 20)
+      assert eventually(fn -> sleeps?.(timed) end)
+      before = pos(flock, timed)
+      assert eventually(fn -> pos(flock, timed) != before end)
+      {:ok, manual} = :boids.add(flock, still())
+      refute sleeps?.(manual)
+      :boids.step(flock, 0.1)
+      assert eventually(fn -> sleeps?.(manual) end)
+      # A boid that hibernates answers.
+      assert {:ok, %{id: ^manual}} = :boids.boid(flock, manual)
+    end
+
+    test "without hibernate, a boid keeps its heap" do
+      flock = flock()
+
+      sleeps? = &hibernates?/1
+
+      {:ok, timed} = :boids.add(flock, pos: {0, 0}, vel: {1, 0}, rules: [], tick: 5, hibernate: false)
+      {:ok, manual} = :boids.add(flock, still(hibernate: false))
+      assert eventually(fn -> pos(flock, timed) != {0, 0} end)
+      :boids.step(flock, 0.1)
+      refute sleeps?.(timed)
+      refute sleeps?.(manual)
+    end
+
+    test "a boid whose tick comes late waits longer before its next tick" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, pos: {0, 0}, vel: {10, 0}, rules: [], tick: 10)
+      # The tick comes 100 ms late, as with processors that have too much work.
+      :erlang.suspend_process(id)
+      Process.sleep(110)
+      late = pos(flock, id)
+      :erlang.resume_process(id)
+      assert eventually(fn -> pos(flock, id) != late end)
+      # The boid waits 8 times the delay more: about 0.7 second.
+      moved = pos(flock, id)
+      Process.sleep(300)
+      assert pos(flock, id) == moved
+      assert eventually(fn -> pos(flock, id) != moved end)
+      # Then the ticks come at the usual time again.
+      again = pos(flock, id)
+      Process.sleep(200)
+      assert elem(pos(flock, id), 0) - elem(again, 0) > 0.5
     end
 
     test "the maximum time of a step is 0.25 second, or 4 ticks" do
-      workers = :erlang.system_info(:schedulers_online)
-      assert :boids_clock.options(%{}) == {%{tick: 50, max_dt: 0.25, workers: workers}, %{}}
-      assert {%{max_dt: 0.25}, _} = :boids_clock.options(%{tick: :manual})
-      assert {%{max_dt: 0.25}, _} = :boids_clock.options(%{tick: 20})
-      assert {%{max_dt: 4.0}, %{wrap: false}} = :boids_clock.options(%{tick: 1000, wrap: false})
-      assert {%{max_dt: 0.1, workers: 2}, _} = :boids_clock.options(%{tick: 1000, max_dt: 0.1, workers: 2})
-      assert %{max_dt: 4.0} = :sys.get_state(:boids.space(flock(tick: 1000)).clock)
-    end
-
-    test "subscribe/1 gives a message after each step, and unsubscribe/1 stops the messages" do
-      flock = flock()
-      {:ok, id} = :boids.add(flock, still(vel: {1, 0}))
-      assert :boids.subscribe(flock) == :ok
-      # A second call changes nothing.
-      assert :boids.subscribe(:boids.space(flock)) == :ok
-      :boids.step(flock, 0.5)
-      assert_received {:boids, ^flock, {:step, 1, 0.5}}
-      refute_received {:boids, _, _}
-      # The message comes after the movement of the boids.
-      assert pos(flock, id) == {0.5, 0.0}
-      :boids.step(flock, 2)
-      assert_received {:boids, ^flock, {:step, 2, 2}}
-      assert :boids.unsubscribe(flock) == :ok
-      assert :boids.unsubscribe(flock) == :ok
-      :boids.step(flock, 0.5)
-      refute_received {:boids, _, _}
-    end
-
-    test "the clock forgets a subscriber that stops" do
-      flock = flock()
-      clock = :boids.space(flock).clock
-      me = self()
-
-      pid =
-        spawn(fn ->
-          :ok = :boids.subscribe(flock)
-          send(me, :ready)
-
-          receive do
-            {:boids, _, step} -> send(me, step)
-          end
-        end)
-
-      assert_receive :ready
-      assert Map.keys(:sys.get_state(clock).subscribers) == [pid]
-      :boids.step(flock, 1)
-      assert_receive {:step, 1, 1}
-      assert eventually(fn -> :sys.get_state(clock).subscribers == %{} end)
-      assert :boids.step(flock, 1) == :ok
-    end
-
-    test "the clock forgets a gen_boid that stops" do
-      flock = flock()
-      clock = :boids.space(flock).clock
-      {:ok, pid} = :gen_boid.start(Mouse, still(vel: {1, 0}), flock: flock)
-      assert Map.keys(:sys.get_state(clock).servers) == [pid]
-      :boids.step(flock, 1)
-      assert pos(flock, pid) == {1.0, 0.0}
-      :ok = :gen_boid.stop(pid)
-      assert eventually(fn -> :sys.get_state(clock).servers == %{} end)
-      assert :boids.step(flock, 1) == :ok
+      assert {%{tick: 50, max_dt: 0.25, priority: :low, hibernate: true}, %{}} = :gen_boid.options(%{})
+      assert {%{max_dt: 0.25}, _} = :gen_boid.options(%{tick: :manual})
+      assert {%{max_dt: 0.25}, _} = :gen_boid.options(%{tick: 20})
+      assert {%{max_dt: 4.0}, %{pos: {0, 0}}} = :gen_boid.options(%{tick: 1000, pos: {0, 0}})
+      assert {%{max_dt: 0.1}, _} = :gen_boid.options(%{tick: 1000, max_dt: 0.1})
     end
 
     test "a seed gives the same random numbers" do
@@ -829,7 +609,7 @@ defmodule BoidsTest do
     end
 
     test "each boid calculates its step before a boid moves" do
-      flock = flock(workers: 2)
+      flock = flock()
       me = self()
 
       rule = fn boid, neighbors, _env ->
@@ -849,27 +629,6 @@ defmodule BoidsTest do
       assert_received {:c, [{2.0, +0.0}, {1.0, +0.0}]}
     end
 
-    test "the boids of the workers and the processes that are boids see each other" do
-      flock = flock()
-      me = self()
-
-      rule = fn boid, neighbors, _env ->
-        send(me, {boid.id, Enum.map(neighbors, & &1.id)})
-        {0, 0}
-      end
-
-      {:ok, :a} = :boids.add(flock, still(id: :a, vel: {1, 0}, rules: [{rule, 1}]))
-
-      {:ok, _} =
-        :gen_boid.start(Mouse, still(id: :b, pos: {1, 0}, vel: {1, 0}, rules: [{rule, 1}]), flock: flock)
-
-      :boids.step(flock, 1)
-      assert_received {:a, [:b]}
-      assert_received {:b, [:a]}
-      assert pos(flock, :a) == {1.0, 0.0}
-      assert pos(flock, :b) == {2.0, 0.0}
-    end
-
     test "uses the scale of the time" do
       flock = flock()
       {:ok, a} = :boids.add(flock, still(vel: {1, 0}))
@@ -881,23 +640,42 @@ defmodule BoidsTest do
       assert pos(flock, a) == {5.0, 0.0}
     end
 
+    test "a step does not change the clock of a boid" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, still(vel: {1, 0}))
+      %{last: last} = :sys.get_state(id)
+      Process.sleep(5)
+      :boids.step(flock, 0.5)
+      assert %{last: ^last, pending: :undefined} = :sys.get_state(id)
+    end
+
+    test "a commit with no plan changes nothing" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, still(vel: {1, 0}))
+      assert GenServer.call(id, :commit) == :ok
+      assert pos(flock, id) == {0, 0}
+      # An update removes the plan.
+      assert GenServer.call(id, {:plan, 1}) == :ok
+      :ok = :boids.update(flock, id, %{pos: {7, 7}})
+      assert GenServer.call(id, :commit) == :ok
+      assert pos(flock, id) == {7, 7}
+    end
+
     test "refuses a bad time" do
       flock = flock()
       assert_raise FunctionClauseError, fn -> :boids.step(flock, -1) end
       assert_raise FunctionClauseError, fn -> :boids.step(flock, :long) end
     end
 
-    test "with a seed for each boid, each run gives the same result, with each number of workers" do
-      run = fn workers ->
-        {:ok, flock} =
-          :boids.start_flock(bounds: {{0, 0}, {60, 60}}, wrap: true, tick: :manual, workers: workers)
-
+    test "with a seed for each boid, two runs give the same result" do
+      run = fn ->
+        {:ok, flock} = :boids.start_flock(bounds: {{0, 0}, {60, 60}}, wrap: true)
         rules = [separation: 1.5, alignment: 1.0, cohesion: 1.0, wander: 0.5]
 
         for n <- 1..40 do
           pos = {rem(n * 17, 60), rem(n * 29, 60)}
           vel = {rem(n, 7) - 3, rem(n, 5) - 2}
-          {:ok, ^n} = :boids.add(flock, id: n, pos: pos, vel: vel, rules: rules, seed: n)
+          {:ok, ^n} = :boids.add(flock, id: n, pos: pos, vel: vel, rules: rules, tick: :manual, seed: n)
         end
 
         for _ <- 1..60, do: :boids.step(flock, 0.05)
@@ -906,150 +684,32 @@ defmodule BoidsTest do
         Enum.map(rows, &Map.take(&1, [:id, :pos, :vel]))
       end
 
-      first = run.(1)
-      assert first == run.(1)
-      assert first == run.(3)
+      first = run.()
+      assert first == run.()
       assert length(first) == 40
-    end
-  end
-
-  describe "a worker between the two parts of a step" do
-    # A flock with one worker, which has all its boids.
-    setup do
-      flock = flock(workers: 1)
-      %{workers: {worker}} = :boids.space(flock)
-      {:ok, a} = :boids.add(flock, still(vel: {1, 0}))
-      {:ok, b} = :boids.add(flock, still(pos: {50, 50}, vel: {1, 0}))
-      %{flock: flock, worker: worker, a: a, b: b}
-    end
-
-    test "the first part writes nothing, and the second part writes each boid", %{
-      flock: flock,
-      worker: worker,
-      a: a,
-      b: b
-    } do
-      assert GenServer.call(worker, {:plan, 1}) == :ok
-      assert pos(flock, a) == {0, 0}
-      assert {:ok, %{pos: {0, 0}}} = :boids.boid(flock, a)
-      assert GenServer.call(worker, :commit) == :ok
-      assert pos(flock, a) == {1.0, 0.0}
-      assert pos(flock, b) == {51.0, 50.0}
-      assert {:ok, %{pos: {1.0, +0.0}}} = :boids.boid(flock, a)
-    end
-
-    test "a second part with no first part changes nothing", %{flock: flock, worker: worker, a: a} do
-      assert GenServer.call(worker, :commit) == :ok
-      assert pos(flock, a) == {0, 0}
-      assert {:ok, %{pos: {0, 0}}} = :boids.boid(flock, a)
-      assert :boids.count(flock) == 2
-    end
-
-    test "a boid that changes after the first part keeps the change, and not the step", %{
-      flock: flock,
-      worker: worker,
-      a: a,
-      b: b
-    } do
-      assert GenServer.call(worker, {:plan, 1}) == :ok
-      :ok = :boids.update(flock, a, %{pos: {7, 7}})
-      assert GenServer.call(worker, :commit) == :ok
-      assert pos(flock, a) == {7, 7}
-      assert {:ok, %{pos: {7, 7}}} = :boids.boid(flock, a)
-      # The other boid made its step.
-      assert pos(flock, b) == {51.0, 50.0}
-      :boids.step(flock, 1)
-      assert pos(flock, a) == {8.0, 7.0}
-      assert pos(flock, b) == {52.0, 50.0}
-    end
-
-    test "a boid that comes after the first part stays, and does not move", %{
-      flock: flock,
-      worker: worker,
-      a: a
-    } do
-      assert GenServer.call(worker, {:plan, 1}) == :ok
-      {:ok, c} = :boids.add(flock, still(pos: {9, 9}, vel: {1, 0}))
-      assert GenServer.call(worker, :commit) == :ok
-      assert pos(flock, c) == {9, 9}
-      assert pos(flock, a) == {1.0, 0.0}
-      assert :boids.count(flock) == 3
-      :boids.step(flock, 1)
-      assert pos(flock, c) == {10.0, 9.0}
-    end
-
-    test "a boid that goes after the first part does not come back", %{
-      flock: flock,
-      worker: worker,
-      a: a,
-      b: b
-    } do
-      assert GenServer.call(worker, {:plan, 1}) == :ok
-      :ok = :boids.remove(flock, a)
-      assert GenServer.call(worker, :commit) == :ok
-      assert :boids.lookup(flock, a) == :error
-      assert :boids.boid(flock, a) == {:error, :not_found}
-      assert :boids.count(flock) == 1
-      assert pos(flock, b) == {51.0, 50.0}
-      # A new boid with the id of a boid that went is a new boid.
-      assert GenServer.call(worker, {:plan, 1}) == :ok
-      :ok = :boids.remove(flock, b)
-      {:ok, ^b} = :boids.add(flock, still(id: b, pos: {3, 3}))
-      assert GenServer.call(worker, :commit) == :ok
-      assert pos(flock, b) == {3, 3}
-    end
-
-    @tag :capture_log
-    test "a boid with an error that changes after the first part stays", %{flock: flock, worker: worker, a: a} do
-      bad = fn _boid, _neighbors, _env -> raise "a fault of a rule" end
-      {:ok, :bad} = :boids.add(flock, still(id: :bad, pos: {20, 20}, rules: [{bad, 1}]))
-      assert GenServer.call(worker, {:plan, 1}) == :ok
-      :ok = :boids.update(flock, :bad, %{rules: [], vel: {0, 1}})
-      assert GenServer.call(worker, :commit) == :ok
-      assert pos(flock, :bad) == {20, 20}
-      assert {:ok, %{rules: []}} = :boids.boid(flock, :bad)
-      assert pos(flock, a) == {1.0, 0.0}
-      :boids.step(flock, 1)
-      assert pos(flock, :bad) == {20.0, 21.0}
-    end
-
-    test "a step with no time calculates nothing", %{flock: flock, worker: worker, a: a} do
-      assert GenServer.call(worker, {:plan, 0}) == :ok
-      assert :sys.get_state(worker).pending == []
-      :ok = :boids.update(flock, a, %{pos: {7, 7}})
-      assert :sys.get_state(worker).stale == %{}
-      assert GenServer.call(worker, :commit) == :ok
-      assert pos(flock, a) == {7, 7}
     end
   end
 
   describe "populate/3" do
     test "adds boids at random positions of the box of the flock" do
-      flock = flock(bounds: {{10, 20}, {30, 50}}, workers: 3)
-      {:ok, ids} = :boids.populate(flock, 30, %{min_speed: 2, max_speed: 5})
+      flock = flock(bounds: {{10, 20}, {30, 50}})
+      {:ok, ids} = :boids.populate(flock, 30, %{tick: :manual, min_speed: 2, max_speed: 5})
       assert length(Enum.uniq(ids)) == 30
-      assert Enum.all?(ids, &is_reference/1)
       assert :boids.count(flock) == 30
-      assert Enum.sort(Enum.map(:boids.snapshot(flock), & &1.id)) == Enum.sort(ids)
 
-      for %{pos: {x, y}, vel: vel, pid: pid} <- :boids.snapshot(flock) do
+      for %{pos: {x, y}, vel: vel} <- :boids.snapshot(flock) do
         assert x >= 10 and x <= 30 and y >= 20 and y <= 50
         speed = :boids_vec.norm(vel)
         assert speed >= 2 - 1.0e-9 and speed <= 5 + 1.0e-9
-        assert pid == :undefined
       end
 
       positions = Enum.uniq(Enum.map(:boids.snapshot(flock), & &1.pos))
       assert length(positions) == 30
-      # Each boid has its worker.
-      for id <- ids, do: assert({:ok, %{id: ^id, min_speed: 2}} = :boids.boid(flock, id))
-      :boids.step(flock, 0.1)
-      assert Enum.uniq(Enum.map(:boids.snapshot(flock), & &1.pos)) -- positions != []
     end
 
     test "uses an area, in two or three dimensions" do
       flock = flock()
-      {:ok, _} = :boids.populate(flock, 10, area: {{0, 0, 0}, {1, 2, 3}}, vel: {0, 0, 1})
+      {:ok, _} = :boids.populate(flock, 10, tick: :manual, area: {{0, 0, 0}, {1, 2, 3}}, vel: {0, 0, 1})
 
       for %{pos: {x, y, z}, vel: vel} <- :boids.snapshot(flock) do
         assert x >= 0 and x <= 1 and y >= 0 and y <= 2 and z >= 0 and z <= 3
@@ -1059,7 +719,7 @@ defmodule BoidsTest do
 
     test "the area comes before the box of the flock" do
       flock = flock(bounds: @box)
-      {:ok, [id]} = :boids.populate(flock, 1, area: {{200, 200}, {201, 201}})
+      {:ok, [id]} = :boids.populate(flock, 1, tick: :manual, area: {{200, 200}, {201, 201}})
       {x, y} = pos(flock, id)
       assert x >= 200 and y >= 200
     end
@@ -1067,38 +727,28 @@ defmodule BoidsTest do
     test "no boid" do
       flock = flock(bounds: @box)
       assert :boids.populate(flock, 0, %{}) == {:ok, []}
-      # No boid gives no size to a flock.
-      free = flock()
-      assert :boids.populate(free, 0, area: {{0, 0, 0}, {1, 1, 1}}) == {:ok, []}
-      assert {:ok, _} = :boids.add(free, still())
     end
 
     test "gives new ids, and a seed to each boid" do
       flock = flock(bounds: @box)
-      {:ok, [a, b]} = :boids.populate(flock, 2, id: :same, seed: 5, rules: [wander: 1])
+      {:ok, [a, b]} = :boids.populate(flock, 2, id: :same, tick: :manual, seed: 5, rules: [wander: 1])
       assert a != b
       :boids.step(flock, 0.1)
-      {:ok, %{memory: %{wander: first}}} = :boids.boid(flock, a)
-      {:ok, %{memory: %{wander: second}}} = :boids.boid(flock, b)
+      {:ok, %{memory: %{1 => first}}} = :boids.boid(flock, a)
+      {:ok, %{memory: %{1 => second}}} = :boids.boid(flock, b)
       assert first != second
     end
 
     test "the boid number N has the seed plus N" do
-      flock = flock(bounds: @box, defaults: %{rules: [wander: 1]})
+      flock = flock(bounds: @box, defaults: %{tick: :manual, rules: [wander: 1]})
       {:ok, [first, second]} = :boids.populate(flock, 2, seed: 100)
       {:ok, one} = :boids.add(flock, pos: {1, 1}, seed: 101)
       {:ok, two} = :boids.add(flock, pos: {1, 1}, seed: 102)
-      rand = fn id -> elem(:boids.boid(flock, id), 1).rand end
-      assert rand.(first) == rand.(one)
-      assert rand.(second) == rand.(two)
       :boids.step(flock, 0.1)
-      point = fn id -> elem(:boids.boid(flock, id), 1).memory.wander end
+      point = fn id -> elem(:boids.boid(flock, id), 1).memory[1] end
       assert point.(first) == point.(one)
       assert point.(second) == point.(two)
       assert point.(first) != point.(second)
-      # Without a seed, a boid has the random numbers of its worker.
-      {:ok, [free]} = :boids.populate(flock, 1, %{})
-      assert rand.(free) == :undefined
     end
 
     test "refuses a bad option" do
@@ -1111,18 +761,9 @@ defmodule BoidsTest do
       assert :boids.populate(flock, 3, area: {{0}, {1}}) == {:error, {:bad_option, {:area, {{0}, {1}}}}}
       assert :boids.populate(flock, 3, area: @box, mass: 0) == {:error, {:bad_option, {:mass, 0}}}
       assert :boids.populate(flock, 3, area: @box, tick: -1) == {:error, {:bad_option, {:tick, -1}}}
-      assert :boids.populate(flock, 3, area: @box, seed: :random) == {:error, {:bad_option, {:seed, :random}}}
       assert :boids.populate(flock, 3, :many) == {:error, {:bad_option, :many}}
       assert :boids.count(flock) == 0
       assert_raise FunctionClauseError, fn -> :boids.populate(flock, -1, area: @box) end
-    end
-
-    test "refuses an area that does not have the size of the flock" do
-      flock = flock()
-      {:ok, _} = :boids.add(flock, still())
-      area = {{0, 0, 0}, {1, 1, 1}}
-      assert :boids.populate(flock, 2, area: area) == {:error, {:bad_option, {:area, area}}}
-      assert :boids.count(flock) == 1
     end
   end
 
@@ -1180,7 +821,7 @@ defmodule BoidsTest do
         vel = {4 * :math.cos(angle), 4 * :math.sin(angle)}
 
         {:ok, ^n} =
-          :boids.add(flock, Map.merge(%{id: n, pos: pos, vel: vel, seed: n}, Map.new(opts)))
+          :boids.add(flock, Map.merge(%{id: n, pos: pos, vel: vel, tick: :manual, seed: n}, Map.new(opts)))
       end
     end
 
@@ -1290,7 +931,7 @@ defmodule BoidsTest do
 
     test "boids in three dimensions" do
       flock = flock(bounds: {{0, 0, 0}, {30, 30, 30}}, wrap: true)
-      {:ok, ids} = :boids.populate(flock, 40, seed: 1, min_speed: 3)
+      {:ok, ids} = :boids.populate(flock, 40, tick: :manual, seed: 1, min_speed: 3)
       for _ <- 1..100, do: :boids.step(flock, 0.05)
 
       for %{pos: {x, y, z}, vel: vel} <- :boids.snapshot(flock) do
@@ -1304,12 +945,11 @@ defmodule BoidsTest do
 
   describe "a process of yours as a boid" do
     test "join/2 adds the process to the flock" do
-      flock = flock(defaults: %{max_speed: 3, seed: 1})
+      flock = flock(defaults: %{max_speed: 3, tick: :manual, seed: 1})
       assert {:ok, space, boid} = :boids.join(flock, pos: {1, 2}, vel: {1, 0}, rules: [])
       assert space == :boids.space(flock)
-      assert %{id: id, pos: {1, 2}, max_speed: 3, rand: {:exsss, _}} = boid
+      assert %{id: id, pos: {1, 2}, max_speed: 3} = boid
       assert id == self()
-      assert :boids_space.owner(space, id) == {:process, self()}
 
       assert :boids.lookup(flock, self()) ==
                {:ok, %{id: self(), pos: {1, 2}, vel: {1, 0}, group: :default, data: :undefined, pid: self()}}
@@ -1362,14 +1002,14 @@ defmodule BoidsTest do
       {:ok, _, _} = :boids.join(flock, id: :me, pos: {1, 2})
       assert :boids.join(flock, id: :me, pos: {3, 4}) == {:error, {:exists, :me}}
       assert :boids.join(flock, id: :other) == {:error, {:bad_option, {:pos, :undefined}}}
-      assert :boids.join(flock, id: :other, pos: {0, 0}, tick: 5) == {:error, {:bad_option, {:tick, 5}}}
+      assert :boids.join(flock, id: :other, pos: {0, 0}, tick: 0) == {:error, {:bad_option, {:tick, 0}}}
+      # The options of the process of add/2 are permitted, and not used.
+      assert {:ok, _, _} =
+               :boids.join(flock, id: :other, pos: {0, 0}, tick: 5, priority: :normal, hibernate: false)
+
+      :ok = :boids_flock.leave(:boids.space(flock), :other, self())
       assert :boids.join(flock, :me) == {:error, {:bad_option, :me}}
-      # The id of a boid of add/2.
-      {:ok, :data} = :boids.add(flock, still(id: :data))
-      assert :boids.join(flock, id: :data, pos: {3, 4}) == {:error, {:exists, :data}}
-      assert :gen_boid.start(Mouse, still(id: :data), flock: flock) == {:error, {:exists, :data}}
-      assert :boids.count(flock) == 2
-      assert :boids.whereis(flock, :data) == :undefined
+      assert :boids.count(flock) == 1
     end
 
     test "one process can have many boids" do
@@ -1400,14 +1040,10 @@ defmodule BoidsTest do
 
     test "the functions for a boid of add/2 do not find it" do
       flock = flock()
-      {:ok, _, _} = :boids.join(flock, id: :me, pos: {1, 2}, vel: {1, 0})
+      {:ok, _, _} = :boids.join(flock, id: :me, pos: {1, 2})
       assert :boids.boid(flock, :me) == {:error, :not_found}
       assert :boids.update(flock, :me, %{max_speed: 1}) == {:error, :not_found}
       assert :boids.remove(flock, :me) == {:error, :not_found}
-      assert :boids.add_rule(flock, :me, {:wander, 1}) == {:error, :not_found}
-      assert :boids.delete_rule(flock, :me, :wander) == {:error, :not_found}
-      assert :boids.which_rules(flock, :me) == {:error, :not_found}
-      # The clock of the flock does not move it.
       assert :boids.step(flock, 1) == :ok
       assert pos(flock, :me) == {1, 2}
     end

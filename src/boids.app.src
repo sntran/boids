@@ -1,5 +1,5 @@
 {application, boids, [
-    {description, "Boids: fast flocks with steering rules, for Erlang and Elixir"},
+    {description, "Boids: flocks of processes that sense, decide and act, with steering rules"},
     {vsn, "0.1.0"},
     {registered, [boids_sup]},
     {mod, {boids_app, []}},

@@ -3,8 +3,8 @@
 #
 #     mix run examples/terminal.exs [SECONDS]
 #
-# The flock makes 20 steps in a second. This script gets a message after
-# each step, reads the flock, and draws it.
+# Each bird and the hawk is a process. This script only reads the flock,
+# 20 times in a second, and draws it.
 
 defmodule Terminal do
   @width 100
@@ -36,18 +36,12 @@ defmodule Terminal do
 
     IO.write([IO.ANSI.clear(), "\e[?25l"])
     space = :boids.space(flock)
-    :ok = :boids.subscribe(flock)
     for _ <- 1..(seconds * 20), do: frame(space)
     IO.write("\e[?25h")
     :boids.stop_flock(flock)
   end
 
   defp frame(space) do
-    # The message of the flock after a step.
-    receive do
-      {:boids, _flock, {:step, _count, _dt}} -> :ok
-    end
-
     cells =
       for %{pos: {x, y}, vel: vel, group: group} <- :boids.snapshot(space), into: %{} do
         {{trunc(x), trunc(y / 2)}, glyph(group, vel)}
@@ -69,6 +63,7 @@ defmodule Terminal do
       end
 
     IO.write([IO.ANSI.home(), lines])
+    Process.sleep(50)
   end
 
   defp glyph(:hawk, _vel), do: [IO.ANSI.red(), "●", IO.ANSI.reset()]

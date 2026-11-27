@@ -19,10 +19,11 @@ can be out of the box.
 
 -export([new/1, options/1, delete/1]).
 -export([insert_new/2, put/2, remove/2]).
--export([lookup/2, owner/2, near/3, near/4, all/1, count/1, dim/1, fit/2, offset/3, cell/2]).
+-export([lookup/2, owner/2, servers/1, near/3, seen/4, all/1, count/1, dim/1, fit/2, offset/3]).
+-export([relate/4, related/3, related_to/3]).
 -export([env/1, obstacles/1, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
 
--export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0, cache/0]).
+-export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0]).
 
 -type vec() :: boids_vec:vec().
 -type space() :: #{
@@ -33,12 +34,10 @@ can be out of the box.
     cell_size := number(),
     bounds := {vec(), vec()} | undefined,
     wrap := boolean(),
-    defaults := map(),
-    clock => pid(),
-    workers => tuple()
+    links := ets:table(),
+    defaults := map()
 }.
--type kind() :: data | server | process.
--type cache() :: none | #{tuple() => [tuple()]} | {#{tuple() => [tuple()]}, #{tuple() => [tuple()]}}.
+-type kind() :: server | process.
 -type entry() :: #{
     id := term(),
     pos := vec(),
@@ -66,8 +65,8 @@ can be out of the box.
 }.
 
 %% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Last}. Kind tells
-%% who has the boid: a worker of the flock (data, with no Pid), a
-%% gen_boid (server), or another process (process).
+%% which process has the boid: a gen_boid (server), or another process
+%% (process).
 %%
 %% The grid has a copy of the row in the cell of its position:
 %% {Cell, Id, Pos, Vel, Group, Data}. One read of a cell gives all its
@@ -102,7 +101,11 @@ new(Opts) ->
     %% The table has the scale of the time, the size of the vectors of
     %% the first boid, and one row for each obstacle.
     ets:insert(Meta, {time_scale, 1.0}),
-    Space#{rows => Rows, grid => Grid, meta => Meta, owner => self()}.
+    %% The relations between the boids, for the reads of the boids:
+    %% {{out, From, Label}, [To]} and {{in, To, Label}, [From]}. Only
+    %% the owner writes them.
+    Links = ets:new(boids_links, [set, protected, {read_concurrency, true}]),
+    Space#{rows => Rows, grid => Grid, meta => Meta, links => Links, owner => self()}.
 
 -doc """
 Check the options of a space, and give them with their defaults. A bad
@@ -130,7 +133,8 @@ ok(_, _) -> false.
 
 -doc "Delete the tables of a space. Only the owner can do this.".
 -spec delete(space()) -> ok.
-delete(#{rows := Rows, grid := Grid, meta := Meta}) ->
+delete(#{rows := Rows, grid := Grid, meta := Meta, links := Links}) ->
+    ets:delete(Links),
     ets:delete(Rows),
     ets:delete(Grid),
     ets:delete(Meta),
@@ -203,16 +207,20 @@ lookup(#{rows := Rows}, Id) ->
     end.
 
 -doc """
-Who has a boid: `{data, undefined}` for a boid of a worker of the flock,
-`{server, Pid}` for a `gen_boid`, and `{process, Pid}` for another
-process.
+The process that has a boid: `{server, Pid}` for a `gen_boid`, and
+`{process, Pid}` for another process.
 """.
--spec owner(space(), term()) -> {kind(), pid() | undefined} | error.
+-spec owner(space(), term()) -> {kind(), pid()} | error.
 owner(#{rows := Rows}, Id) ->
     case ets:lookup(Rows, Id) of
         [{_, _, _, _, _, _, Pid, Kind, _}] -> {Kind, Pid};
         [] -> error
     end.
+
+-doc "The processes of the boids whose process is a `gen_boid`.".
+-spec servers(space()) -> [pid()].
+servers(#{rows := Rows}) ->
+    ets:select(Rows, [{{'_', '_', '_', '_', '_', '_', '$1', server, '_'}, [], ['$1']}]).
 
 -doc "All the rows. The order is not specified.".
 -spec all(space()) -> [entry()].
@@ -254,60 +262,33 @@ The boids move during the read. A boid that changes its cell at that
 moment can be absent from the result.
 """.
 -spec near(space(), vec(), number()) -> [neighbor()].
-near(Space, Pos, Radius) ->
-    {Near, none} = near(Space, Pos, Radius, none),
-    Near.
-
--doc """
-As `near/3`, with a cache of the cells: `#{}` at the start, then the
-cache of the last result. A process that reads the neighbors of many
-boids in one step reads each cell from the table one time. The cache
-does not see the writes after its read of a cell: start again with `#{}`
-at each step. With `none`, there is no cache.
-""".
--spec near(space(), vec(), number(), cache()) -> {[neighbor()], cache()}.
-near(Space = #{rows := Rows, grid := Grid}, Pos, Radius, Cache0) when is_number(Radius), Radius >= 0 ->
+near(Space = #{rows := Rows, grid := Grid}, Pos, Radius) when is_number(Radius), Radius >= 0 ->
     Widths = widths(Space),
     Query = query(Pos, Widths, Radius),
-    {Found, Cache} =
+    Found =
         case cells(Space, Pos, Radius) of
-            all -> {within([spot(Row) || Row <- ets:tab2list(Rows)], Query, []), Cache0};
-            Cells -> read(Cells, Grid, Query, [], Cache0)
+            all -> within([spot(Row) || Row <- ets:tab2list(Rows)], Query, []);
+            Cells -> lists:foldl(fun(Cell, Acc) -> within(ets:lookup(Grid, Cell), Query, Acc) end, [], Cells)
         end,
     %% A boid that writes its row during the read can have two copies in
     %% the grid: keep one of the two (specs/Space.tla, Dedupe). The keys
     %% of a map are exact, as the keys of the table: 1 and 1.0 are two
     %% ids. Then the nearest comes first.
     One = maps:values(#{element(2, Near) => Near || Near <- Found}),
-    {[neighbor(Widths, Pos, Near) || Near <- lists:sort(One)], Cache}.
+    [neighbor(Widths, Pos, Near) || Near <- lists:sort(One)].
 
-%% The boids of cells in the radius, from the cache or from the table.
-read([Cell | Rest], Grid, Query, Acc, none) ->
-    read(Rest, Grid, Query, within(ets:lookup(Grid, Cell), Query, Acc), none);
-read([Cell | Rest], Grid, Query, Acc, {New, Old}) ->
-    %% A cache in two parts, for a worker (boids_worker): the cells of
-    %% this part of its work, and those of the part before.
-    case New of
-        #{Cell := Spots} ->
-            read(Rest, Grid, Query, within(Spots, Query, Acc), {New, Old});
-        _ ->
-            Spots =
-                case Old of
-                    #{Cell := Kept} -> Kept;
-                    _ -> ets:lookup(Grid, Cell)
-                end,
-            read(Rest, Grid, Query, within(Spots, Query, Acc), {New#{Cell => Spots}, Old})
-    end;
-read([Cell | Rest], Grid, Query, Acc, Cache) ->
-    case Cache of
-        #{Cell := Spots} ->
-            read(Rest, Grid, Query, within(Spots, Query, Acc), Cache);
-        _ ->
-            Spots = ets:lookup(Grid, Cell),
-            read(Rest, Grid, Query, within(Spots, Query, Acc), Cache#{Cell => Spots})
-    end;
-read([], _Grid, _Query, Acc, Cache) ->
-    {Acc, Cache}.
+-doc """
+The boids of a list of ids at the distance `Radius` or less from the
+point `Pos`, in the order of their distance: as `near/3`, with a read of
+the rows of these boids only. A boid that knows its neighbors reads them
+with this function, which costs less than a search of the grid. An id
+that is not in the space gives nothing.
+""".
+-spec seen(space(), vec(), number(), [term()]) -> [neighbor()].
+seen(Space = #{rows := Rows}, Pos, Radius, Ids) when is_number(Radius), Radius >= 0 ->
+    Widths = widths(Space),
+    Spots = [spot(Row) || Id <- Ids, Row <- ets:lookup(Rows, Id)],
+    [neighbor(Widths, Pos, Near) || Near <- lists:sort(within(Spots, query(Pos, Widths, Radius), []))].
 
 %% The sizes of the box when its sides continue, or none.
 widths(#{wrap := true, bounds := {Min, Max}}) -> boids_vec:sub(Max, Min);
@@ -459,6 +440,32 @@ the caller. With 0, the boids stop. The default is 1.0.
 set_time_scale(#{meta := Meta}, Scale) when is_number(Scale), Scale >= 0, Scale =< 1.0e100 ->
     ets:insert(Meta, {time_scale, Scale}),
     ok.
+
+%% --- The relations ----------------------------------------------------
+
+-doc """
+Write the boids that the boid `From` has the relation `Label` to, and
+the same for the opposite direction of each of them. Only the owner of
+the space calls this function: `boids_flock` keeps the relations, and
+writes here what the boids read at each step.
+""".
+-spec relate(space(), out | in, {term(), term()}, [term()]) -> ok.
+relate(#{links := Links}, Direction, {Id, Label}, []) ->
+    ets:delete(Links, {Direction, Id, Label}),
+    ok;
+relate(#{links := Links}, Direction, {Id, Label}, Others) ->
+    ets:insert(Links, {{Direction, Id, Label}, Others}),
+    ok.
+
+-doc "The boids that the boid `From` has the relation `Label` to.".
+-spec related(space(), term(), term()) -> [term()].
+related(#{links := Links}, From, Label) ->
+    ets:lookup_element(Links, {out, From, Label}, 2, []).
+
+-doc "The boids that have the relation `Label` to the boid `To`.".
+-spec related_to(space(), term(), term()) -> [term()].
+related_to(#{links := Links}, To, Label) ->
+    ets:lookup_element(Links, {in, To, Label}, 2, []).
 
 %% --- The rows and the grid --------------------------------------------
 

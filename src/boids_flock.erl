@@ -1,16 +1,16 @@
 -module(boids_flock).
 -moduledoc """
-The process of a flock: the owner of the space, and the list of the
-processes that have a boid in it.
+The process of a flock: the owner of the space, the list of the
+processes that have a boid in it, and the relations between the boids.
 
-A flock has a clock and a small number of workers. The workers hold the
-boids of `boids:add/2` as values, and the clock makes the steps of the
-flock. This process starts them, and they stop with it.
+The process of a boid writes its own row in the space, with no message
+to this process. This process adds the row at the start, and it removes
+the row when the process of the boid stops.
 
-A process can be a boid too (`gen_boid`, `boids:join/2`). Such a process
-writes its own row in the space, with no message to this process. This
-process adds the row at the start, and it removes the row when the
-process of the boid stops.
+The relations are a graph (`graph`): a boid is a vertex, and a relation
+is an edge with a label. This process has the graph, and it writes a
+copy of the relations of each boid to a table, where the boids read
+them with no message.
 
 Use the functions of `boids`. A flock starts with `boids:start_flock/1`,
 or as a child of your supervisor with `boids:child_spec/1`.
@@ -18,6 +18,7 @@ or as a child of your supervisor with `boids:child_spec/1`.
 -behavior(gen_server).
 
 -export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/3]).
+-export([relate/4, unrelate/4, relations/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -export_type([flock/0]).
@@ -45,11 +46,12 @@ options(Opts) when is_list(Opts) ->
         error:badarg -> error({bad_option, Opts})
     end;
 options(Opts) when is_map(Opts) ->
-    {_Clock, Rest} = boids_clock:options(maps:remove(name, Opts)),
+    {_Relations, Rest} = kind(maps:remove(name, Opts)),
     Space = boids_space:options(Rest),
     %% Each default is good alone. The check of a boid sees them together,
     %% with its own options.
-    _ = boids_boid:options(maps:get(defaults, Space)),
+    {_Server, Boid} = gen_boid:options(maps:get(defaults, Space)),
+    _ = boids_boid:options(Boid),
     case Opts of
         #{name := Name} when is_atom(Name) -> Opts;
         #{name := {global, _}} -> Opts;
@@ -59,6 +61,14 @@ options(Opts) when is_map(Opts) ->
     end;
 options(Opts) ->
     error({bad_option, Opts}).
+
+%% The option relations of a flock, and the other options.
+kind(Opts) ->
+    case maps:take(relations, Opts) of
+        {Kind, Rest} when Kind =:= cyclic; Kind =:= acyclic -> {Kind, Rest};
+        {Kind, _Rest} -> error({bad_option, {relations, Kind}});
+        error -> {cyclic, Opts}
+    end.
 
 -doc "The space of a flock.".
 -spec space(flock()) -> boids_space:space().
@@ -91,6 +101,29 @@ another process has the id now, its row stays.
 leave(#{owner := Flock}, Id, Pid) ->
     gen_server:call(Flock, {leave, Id, Pid}).
 
+-doc """
+Add the relation `Label` from the boid `From` to the boid `To`. The
+result is `{error, {not_found, Id}}` for an id that is not in the flock,
+and `{error, cycle}` when the flock has the option `relations =>
+acyclic` and the relation makes a cycle.
+""".
+-spec relate(boids_space:space(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
+relate(#{owner := Flock}, From, Label, To) ->
+    gen_server:call(Flock, {relate, From, Label, To}).
+
+-doc "Remove the relation `Label` from the boid `From` to the boid `To`.".
+-spec unrelate(boids_space:space(), term(), term(), term()) -> ok.
+unrelate(#{owner := Flock}, From, Label, To) ->
+    gen_server:call(Flock, {unrelate, From, Label, To}).
+
+-doc """
+The graph of the relations: each boid with a relation is a vertex, and
+each relation is an edge with its label.
+""".
+-spec relations(boids_space:space()) -> graph:graph().
+relations(#{owner := Flock}) ->
+    gen_server:call(Flock, relations).
+
 %% --- gen_server -------------------------------------------------------
 
 -doc false.
@@ -100,20 +133,9 @@ init({Sup, Opts, Name}) ->
     %% The boids of a flock that has too much work run all the time. The
     %% flock must answer then too.
     process_flag(priority, high),
-    {Clock = #{workers := Count}, Rest} = boids_clock:options(Opts),
-    Space0 = boids_space:new(Rest),
-    %% The workers and the clock have a link to this process: when one
-    %% of them stops, all the flock stops.
-    Workers = [
-        begin
-            {ok, Worker} = boids_worker:start_link(Space0, Number),
-            Worker
-        end
-     || Number <- lists:seq(1, Count)
-    ],
-    Space1 = Space0#{workers => list_to_tuple(Workers)},
-    {ok, Pid} = boids_clock:start_link(Space1, Clock),
-    {ok, #{space => Space1#{clock => Pid}, sup => Sup, ids => #{}, refs => #{}}}.
+    {Relations, Rest} = kind(Opts),
+    Links = graph:new([Relations]),
+    {ok, #{space => boids_space:new(Rest), sup => Sup, ids => #{}, refs => #{}, links => Links}}.
 
 -doc false.
 handle_call(space, _From, State = #{space := Space}) ->
@@ -137,6 +159,27 @@ handle_call({join, Pid, Entry = #{id := Id, pos := Pos}}, _From, State0 = #{spac
         false ->
             {reply, {error, {bad_option, {pos, Pos}}}, State}
     end;
+handle_call({relate, From, Label, To}, _From, State = #{space := Space, links := Links0}) ->
+    case [Id || Id <- [From, To], boids_space:lookup(Space, Id) =:= error] of
+        [] ->
+            Links1 = graph:add_vertex(graph:add_vertex(Links0, From), To),
+            try graph:add_edge(Links1, From, To, Label) of
+                Links ->
+                    publish(Space, Links, [From, To], Label),
+                    {reply, ok, State#{links := Links}}
+            catch
+                %% The graph has no cycle (the option relations).
+                error:{bad_edge, _} -> {reply, {error, cycle}, State}
+            end;
+        [Id | _] ->
+            {reply, {error, {not_found, Id}}, State}
+    end;
+handle_call({unrelate, From, Label, To}, _From, State = #{space := Space, links := Links0}) ->
+    Links = graph:del_edge(Links0, {From, To, Label}),
+    publish(Space, Links, [From, To], Label),
+    {reply, ok, State#{links := Links}};
+handle_call(relations, _From, State = #{links := Links}) ->
+    {reply, Links, State};
 handle_call({leave, Id, Pid}, _From, State = #{space := Space}) ->
     %% A leave can come late: after the end of its process, and after
     %% another process has the id (specs/Flock.tla, CheckOwner).
@@ -171,8 +214,9 @@ forget_dead(Id, State = #{space := Space}) ->
             State
     end.
 
-forget(Id, State = #{space := Space, ids := Ids, refs := Refs}) ->
+forget(Id, State0 = #{space := Space}) ->
     boids_space:remove(Space, Id),
+    State = #{ids := Ids, refs := Refs} = unrelate(Id, State0),
     case Ids of
         #{Id := Ref} ->
             demonitor(Ref, [flush]),
@@ -180,3 +224,36 @@ forget(Id, State = #{space := Space, ids := Ids, refs := Refs}) ->
         _ ->
             State
     end.
+
+%% A boid that goes from the flock has no relation.
+unrelate(Id, State = #{space := Space, links := Links0}) ->
+    case graph:has_vertex(Links0, Id) of
+        true ->
+            Edges = graph:out_edges(Links0, Id) ++ graph:in_edges(Links0, Id),
+            Links = graph:del_vertex(Links0, Id),
+            [publish(Space, Links, [From, To], Label) || {From, To, Label} <- Edges],
+            State#{links := Links};
+        false ->
+            State
+    end.
+
+%% Write the relations with a label of boids to the table of the space,
+%% in the two directions: the boids read them there at each step.
+publish(Space, Links, Ids, Label) ->
+    lists:foreach(
+        fun(Id) ->
+            {Out, In} =
+                case graph:has_vertex(Links, Id) of
+                    true ->
+                        {
+                            [To || {_, To, L} <- graph:out_edges(Links, Id), L =:= Label],
+                            [From || {From, _, L} <- graph:in_edges(Links, Id), L =:= Label]
+                        };
+                    false ->
+                        {[], []}
+                end,
+            boids_space:relate(Space, out, {Id, Label}, Out),
+            boids_space:relate(Space, in, {Id, Label}, In)
+        end,
+        Ids
+    ).

@@ -1,9 +1,8 @@
 # The specifications of boids
 
-A flock has many processes: the process of the flock, its clock, its
-workers, the boids that are processes, and the callers. They act at the
-same time, and the order of their acts changes from run to run. A test
-sees one order of the acts. A specification sees all of them.
+The boids of a flock are processes. They act at the same time, and the
+order of their acts changes from run to run. A test sees one order of
+the acts. A specification sees all of them.
 
 This document tells what the library specifies in TLA+, what the checks
 prove, what they do not prove, and how to run them. The checker is the
@@ -26,9 +25,9 @@ flock to the design.
 
 | Specification | The flow | The code |
 |---|---|---|
-| `specs/Flock.tla` | The members of a flock: a process asks for the row of an id, the flock watches it, and the row goes when the process stops, leaves, or is removed. | `boids_flock`, `gen_boid`, `boids:remove/2`, `boids:join/2`, `boids:leave/2` |
-| `specs/Space.tla` | A write of a row against a read of the grid. | `boids_space:put/2`, `boids_space:near/3` and `near/4` |
-| `specs/Step.tla` | One step of all the boids in two parts. | `boids_clock`, `boids_worker`, `gen_boid` |
+| `specs/Flock.tla` | The members of a flock: a process asks for the row of an id, the flock watches it, and the row goes when the process stops, leaves, or is removed. | `boids_flock`, `boids:add/2`, `boids:remove/2`, `boids:join/2`, `boids:leave/2` |
+| `specs/Space.tla` | A write of a row against a read of the grid. | `boids_space:put/2`, `boids_space:near/3` |
+| `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 
 ### `specs/Flock.tla`
 
@@ -115,41 +114,31 @@ last write, and `remove/2` removes the two copies.
 ### `specs/Step.tla`
 
 The constants: the boids (`Boids`), the boids that also move on their
-own clock (`Clocks`), the steps of the clock (`Steps`, a bound of the
+own clock (`Clocks`), the steps of the caller (`Steps`, a bound of the
 model), and a guard for a fault model. The position of a boid is a
 number: a boid that reads the positions `s` goes to `See(s)`.
 
-A boid of the specification is a process that makes the two parts: a
-worker of the flock, for all the boids that it holds, or a `gen_boid`,
-for its one boid.
-
 | Action | When it can occur | In the code |
 |---|---|---|
-| `Begin` | No step runs: the clock asks each boid for its plan. | A tick of `boids_clock`, or `boids:step/2` |
-| `Plan(b)` | `b` runs and did not answer: it calculates its new position, and does not move. | `{plan, Dt}` in `boids_worker` and in `gen_boid` (`handle_step/3` of the module, then the forces) |
-| `Turn` | Each boid that runs answered: the clock asks each boid to move. | |
-| `Commit(b)` | `b` runs and did not answer: it moves to the position of its plan. | `commit` |
+| `Begin` | No step runs: the caller asks each boid for its plan. | `boids:step/2` |
+| `Plan(b)` | `b` runs and did not answer: it calculates its new position, and does not move. | `{plan, Dt}`: sense (`handle_sense/2`), decide (`handle_decide/2`), then the forces |
+| `Turn` | Each boid that runs answered: the caller asks each boid to move. | |
+| `Commit(b)` | `b` runs and did not answer: it moves to the position of its plan. | `commit`: act (`handle_act/1`), then the write of the row |
 | `End` | Each boid that runs moved. | |
-| `Tick(b)` | `b` has a clock of its own: it moves at its tick. | `boids:advance/3` in a process of `boids:join/2` |
+| `Tick(b)` | `b` has a clock: it moves at its tick. | `tick` |
 | `Stop(b)` | The process of `b` stops, at each moment. | |
 
 | Invariant or property | What it says | The fault that it stops |
 |---|---|---|
 | `Quiet` | While the boids calculate, no boid moves. | A result that changes with the order of the processes. |
 | `OneMoment` | After a step, each boid is where a boid that read the flock at the start of the step goes. A boid whose process stopped before it moved is where it was. | The same. |
-| `Ends` | Each step ends, also when processes stop during the step. | A clock that waits for a process that stopped. |
+| `Ends` | Each step ends, also when processes stop during the step. | A caller that waits for a process that stopped. |
 
 The small model (`specs/MCStep.tla`): three boids and two steps.
 `MCStepOnePart.cfg` lets a boid move when it calculates: `Quiet`
 violated. `MCStepClock.cfg` gives a clock to one boid: `Quiet` violated.
-Thus a process of `boids:join/2`, which moves on its own clock, is not
-in the one moment of a step.
-
-In the first part of a step, a worker keeps each cell of the grid that
-it read (`boids_space:near/4`). `Quiet` permits this: no boid of the
-clock moves in that part. A boid that changes at that moment
-(`boids:update/3`, a process of `boids:join/2`) can be at its position
-before the change for the boids of that worker, in that step only.
+Thus a run gives the same result each time only when each boid has
+`tick => manual`.
 
 ## The replay: the code against the specification
 
@@ -199,21 +188,20 @@ join, the process of the row stopped, or not. The result is `:ok`,
 - A model is small: three processes, two boids, two cells. A fault that
   needs more is not found.
 - `Space.tla` and `Step.tla` have no replay. Their tie to the code is
-  the comments in `boids_space`, `boids_clock`, `boids_worker` and
-  `gen_boid`, and the tests of the behavior
-  (`test/boids_space_test.exs`, `test/boids_test.exs`).
-- The boids of `boids:add/2` are not members of `Flock.tla`: no process
-  asks the flock for their rows. A worker adds the row of such a boid
-  with one insert that fails when the id has a row, and only that worker
-  removes it. The workers stop only with the flock, so these rows have
-  no process that stops before them.
-- A change of a boid between the two parts of a step
-  (`boids:update/3`) is not in `Step.tla`: the boid keeps the change,
-  and not the movement of that step.
+  the comments in `boids_space` and `gen_boid`, and the tests of the
+  behavior (`test/boids_space_test.exs`, `test/boids_test.exs`).
 - The replay sees one flock process on one node. It follows the orders
   that the tests make.
 - The specifications say nothing about the forces of the rules, the
   time of a tick, or the speed.
+- The relations between the boids (`boids:relate/4`) are not in
+  `Flock.tla`. The flock process has their graph, and it removes the
+  relations of a boid where the specification removes its row. The
+  replay does not see the messages of the relations.
+- A boid with the option `search` reads the rows of the neighbors that
+  it knows, one row at a time. `Space.tla` is about the read of the
+  grid. A read of one row sees the row before or after a write, and
+  never a part of it.
 
 ## How to run the checks
 
@@ -222,7 +210,6 @@ mix deps.get
 mix test test/boids_spec_test.exs test/boids_flock_spec_test.exs
 ```
 
-A change of `boids_flock`, of `boids_space:put/2`, `near/3` and
-`near/4`, or of the two parts of a step (`boids_clock`, `boids_worker`,
-`gen_boid`) changes its specification in the same commit, and the tests
-of the models and the replay must pass.
+A change of `boids_flock`, of `boids_space:put/2` and `near/3`, or of
+the two parts of `boids:step/2` changes its specification in the same
+commit, and the tests of the models and the replay must pass.

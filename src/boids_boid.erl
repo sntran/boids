@@ -5,8 +5,8 @@ rules.
 
 This module has no process and no table. A process holds a boid, and
 calls `step/4` with the neighbors that it sees and the time that passed.
-The workers of a flock and `gen_boid` do this. `boids:join/2` and
-`boids:advance/3` do the same for a process of yours.
+`gen_boid` does this. `boids:join/2` and `boids:advance/3` do the same
+for a process with another behavior.
 
 ## The options of a boid
 
@@ -26,7 +26,7 @@ The workers of a flock and `gen_boid` do this. `boids:join/2` and
 | `max_neighbors` | `infinity` | The boid sees only this number of the nearest boids. |
 | `rules` | see below | The list of the rules. |
 | `combine` | `sum` | How the forces of the rules become one force. |
-| `seed` | (none) | An integer: the boid has its own random numbers, from this seed. |
+| `state` | `undefined` | A term of yours. Only the boid sees it: the callbacks of a `gen_boid` keep their state here. |
 
 The options are a map, or a list of `{Key, Value}`.
 
@@ -57,9 +57,10 @@ is the three rules of a flock:
 
 `groups` is `all`, `same` (the group of the boid) or a list of groups.
 
-`target` is a point, `{boid, Id}` (a boid of the flock) or `{group,
-Group}` (the nearest neighbor of that group). A target that does not
-exist gives no force.
+`target` is a point, `{boid, Id}` (a boid of the flock), `{group,
+Group}` (the nearest neighbor of that group) or `{related, Label}` (the
+boid that this boid has the relation `Label` to, see `boids:relate/4`).
+A target that does not exist gives no force.
 
 A rule of your own is a function: `{Fun, Weight}`, where `Fun(Boid,
 Neighbors, Env)` gives the force. `Neighbors` are the boids that the
@@ -101,7 +102,7 @@ multiplied by its weight, with the length `max_force` at most. With
     rules := [{name(), number(), map()}],
     combine := sum | priority,
     memory := map(),
-    rand := undefined | rand:export_state()
+    state := term()
 }.
 -type rule_name() ::
     separation
@@ -125,13 +126,14 @@ multiplied by its weight, with the length `max_force` at most. With
     | {rule_name(), Id :: term()}
     | fun((boid(), [boids_space:neighbor()], env()) -> vec()).
 -type rule() :: {name(), number()} | {name(), number(), map() | [{atom(), term()}]}.
--type target() :: vec() | {boid, term()} | {group, term()}.
+-type target() :: vec() | {boid, term()} | {group, term()} | {related, term()}.
 -type env() :: #{
     dt => number(),
     bounds => {vec(), vec()} | undefined,
     wrap => boolean(),
     obstacles => [boids_steer:obstacle()],
     lookup => fun((term()) -> {ok, #{pos := vec(), vel := vec(), _ => _}} | error),
+    related => fun((term(), term()) -> [term()]),
     _ => _
 }.
 
@@ -145,8 +147,6 @@ vector of a rule has the size of the position.
 -spec new(map() | [{atom(), term()}]) -> boid().
 new(Opts0) ->
     Opts = to_map(Opts0),
-    %% The random numbers of a boid come from the option seed.
-    is_map_key(rand, Opts) andalso error({bad_option, {rand, maps:get(rand, Opts)}}),
     Pos = check(pos, maps:get(pos, Opts, undefined)),
     Base = #{
         id => make_ref(),
@@ -163,7 +163,7 @@ new(Opts0) ->
         rules => [{separation, 1.5}, {alignment, 1.0}, {cohesion, 1.0}],
         combine => sum,
         memory => #{},
-        rand => undefined
+        state => undefined
     },
     validate(maps:merge(Base, Opts)).
 
@@ -174,7 +174,7 @@ change. A bad option gives the error `{bad_option, {Key, Value}}`.
 -spec update(boid(), map() | [{atom(), term()}]) -> boid().
 update(Boid = #{pos := Old}, Changes0) ->
     Changes = to_map(Changes0),
-    [error({bad_option, {Key, maps:get(Key, Changes)}}) || Key <- [id, memory, rand], is_map_key(Key, Changes)],
+    [error({bad_option, {Key, maps:get(Key, Changes)}}) || Key <- [id, memory], is_map_key(Key, Changes)],
     case validate(maps:merge(Boid, Changes)) of
         #{pos := New} when tuple_size(New) =/= tuple_size(Old) -> error({bad_option, {pos, New}});
         %% A rule that the boid has no more has no memory.
@@ -226,7 +226,7 @@ to_map(Opts) when is_list(Opts) ->
 to_map(Opts) -> error({bad_option, Opts}).
 
 validate(Boid0) ->
-    Checked = #{pos := Pos, vel := Vel, rules := Rules} = seeded(maps:map(fun check/2, Boid0)),
+    Checked = #{pos := Pos, vel := Vel, rules := Rules} = maps:map(fun check/2, Boid0),
     Dim = tuple_size(Pos),
     %% The vectors of a rule have the size of the position.
     [error({bad_option, {rules, Rule}}) || Rule = {Name, _, Opts} <- Rules, not is_function(Name), not sized(Opts, Dim)],
@@ -235,12 +235,6 @@ validate(Boid0) ->
         {true, #{min_speed := Min, max_speed := Max}} when Min > Max -> error({bad_option, {min_speed, Min}});
         {true, _} -> Checked
     end.
-
-%% A boid with a seed has its own random numbers.
-seeded(Boid = #{seed := Seed}) ->
-    (maps:remove(seed, Boid))#{rand => rand:export_seed_s(rand:seed_s(exsss, Seed))};
-seeded(Boid) ->
-    Boid.
 
 sized(Opts, Dim) ->
     Vectors =
@@ -261,8 +255,7 @@ ok(id, _) -> true;
 ok(group, _) -> true;
 ok(data, _) -> true;
 ok(memory, Memory) -> is_map(Memory);
-ok(rand, _) -> true;
-ok(seed, Seed) -> is_integer(Seed);
+ok(state, _) -> true;
 ok(pos, Pos) -> boids_vec:is_vec(Pos);
 ok(vel, Vel) -> boids_vec:is_vec(Vel);
 ok(max_speed, N) -> boids_vec:is_size(N);
@@ -333,6 +326,7 @@ opt(_, max_time, N) -> is_distance(N);
 opt(_, groups, Groups) -> Groups =:= all orelse Groups =:= same orelse is_list(Groups);
 opt(_, target, {boid, _}) -> true;
 opt(_, target, {group, _}) -> true;
+opt(_, target, {related, _}) -> true;
 opt(_, target, Point) -> boids_vec:is_vec(Point);
 opt(_, bounds, {Min, Max}) -> boids_vec:is_box(Min, Max);
 opt(_, path, Path) -> is_list(Path) andalso Path =/= [] andalso lists:all(fun boids_vec:is_vec/1, Path);
@@ -431,15 +425,9 @@ seconds. `Neighbors` is the result of `perceive/2`.
 -spec step(boid(), [boids_space:neighbor()], env(), number()) -> boid().
 step(Boid, _Neighbors, _Env, Dt) when Dt =< 0 ->
     Boid;
-step(Boid = #{rand := undefined}, Neighbors, Env, Dt) ->
+step(Boid, Neighbors, Env, Dt) ->
     {Force, Boid1} = force(Boid, Neighbors, Env#{dt => Dt}),
-    integrate(Boid1, Force, Env, Dt);
-step(Boid = #{rand := Rand}, Neighbors, Env, Dt) ->
-    %% The rules get the random numbers of the boid, and not those of
-    %% the process.
-    _ = rand:seed(Rand),
-    Moved = step(Boid#{rand := undefined}, Neighbors, Env, Dt),
-    Moved#{rand := rand:export_seed()}.
+    integrate(Boid1, Force, Env, Dt).
 
 %% --- The rules: the forces --------------------------------------------
 
@@ -559,6 +547,12 @@ target({boid, Id}, #{pos := Pos}, Ns, Env) ->
                 {ok, #{pos := At, vel := Vel}} -> {seen_at(Env, Pos, At), Vel};
                 error -> none
             end
+    end;
+target({related, Label}, B = #{id := Id}, Ns, Env) ->
+    Related = maps:get(related, Env, fun(_, _) -> [] end),
+    case Related(Id, Label) of
+        [To | _] -> target({boid, To}, B, Ns, Env);
+        [] -> none
     end;
 target({group, Group}, _B, Ns, _Env) ->
     case [N || N = #{group := Other} <- Ns, Other =:= Group] of

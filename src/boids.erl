@@ -1,12 +1,13 @@
 -module(boids).
 -moduledoc """
-Flocks of boids.
+Flocks of boids, with one Erlang process for each boid.
 
-A flock is a space where boids see their neighbors. A boid moves by its
-rules: the three rules of a flock (separation, alignment and cohesion),
-and the steering rules (seek, flee, arrive, pursue, evade, wander, avoid,
-contain, follow and others). See `boids_boid` for the options of a boid
-and of each rule.
+A flock is a space where boids see their neighbors. A boid is a process
+that senses, decides and acts: it finds its neighbors, calculates the
+force of its rules, and moves. The rules are the three rules of a flock
+(separation, alignment and cohesion), and the steering rules (seek,
+flee, arrive, pursue, evade, wander, avoid, contain, follow and others).
+See `boids_boid` for the options of a boid and of each rule.
 
 ```erlang
 {ok, Flock} = boids:start_flock(#{bounds => {{0, 0}, {100, 100}}, wrap => true}),
@@ -27,31 +28,33 @@ In Elixir, the module is `:boids`:
 - A flock (`start_flock/1`, or `child_spec/1` for your supervisor) owns
   the space: ETS tables with one row for each boid, and a grid of cells
   as the index.
-- A boid of `add/2` or `populate/3` is a value, with no process of its
-  own. A small number of workers hold the boids of the flock, and make
-  their steps on all the processors.
-- A boid can be a process too: a module of yours with the behavior
-  `gen_boid` tells what the boid decides at each step, and how it
-  answers messages.
-- A process with another behavior can be a boid: `join/2` adds its row,
-  and `advance/3` makes one step. The flock removes the row when the
-  process stops.
+- A boid is a process with the behavior `gen_boid`. At each tick of its
+  own clock it reads its neighbors, calculates its force, moves and
+  writes its row. It sends no message. A module of yours tells what the
+  boid perceives, what it decides and what it does at each step, and how
+  it answers messages.
+- A boid of `add/2` or `populate/3` is a `gen_boid` with no module of
+  yours, below the supervisor of the flock.
+- A process with another behavior can be a boid too: `join/2` adds its
+  row, and `advance/3` makes one step. The flock removes the row when
+  the process stops.
 - Each process reads the flock with `snapshot/1`, `lookup/2` and
-  `near/3`, with no message.
+  `near/3`, with no message to a boid.
+- The boids of a flock can have relations (`relate/4`): a boid follows a
+  leader, or fears an enemy. `graph/2` gives the flock as a graph of the
+  boids that see each other.
 
 Each function with a flock also accepts the space of the flock
 (`space/1`). With the space, a read sends no message at all.
 
 ## The time
 
-The clock of a flock makes a step each `tick` milliseconds. In a step,
-first each boid calculates its movement from the same state of the
-flock, then they all move. `subscribe/1` gives a message after each
-step. `set_time_scale/2` makes the time of the flock faster or slower,
-or stops it.
-
-With `tick => manual`, the boids move only with `step/2`. With a seed
-for each boid, such a run always gives the same result.
+A boid moves in real time, each `tick` milliseconds of its own clock.
+`set_time_scale/2` makes the time of the flock faster or slower, or
+stops it. With `tick => manual`, the boids move only with `step/2`:
+each boid calculates its step from the same state of the flock, and
+then they all move. With a seed for each boid, such a run always gives
+the same result.
 
 ## The units
 
@@ -64,7 +67,8 @@ and a force is in units for each second for each second.
 -export([add_rule/3, delete_rule/3, which_rules/2]).
 -export([snapshot/1, lookup/2, near/3, count/1]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
--export([step/2, subscribe/1, unsubscribe/1]).
+-export([step/2]).
+-export([graph/2, relate/4, unrelate/4, relations/1, related/3, related_to/3]).
 -export([join/2, sense/2, plan/3, plan/4, commit/2, advance/3, leave/2]).
 
 -export_type([flock/0, options/0]).
@@ -95,13 +99,8 @@ The options:
 - `cell_size`: the side of a cell of the grid (default: `10.0`). The
   best value is near the `perception` of the boids.
 - `defaults`: options for each boid of the flock, as a map.
-- `tick`: the milliseconds between two steps of the flock (default:
-  `50`), or `manual`: the boids move only with `step/2`.
-- `max_dt`: the maximum of the seconds of one step, so that a late tick
-  does not make a long step. The default is the larger of 0.25 second
-  and 4 ticks.
-- `workers`: the number of the processes that make the steps of the
-  boids (default: the number of the schedulers of the node).
+- `relations`: `cyclic` (the default) or `acyclic`: with `acyclic`, the
+  relations between the boids cannot make a cycle (`relate/4`).
 
 A bad option gives `{error, {bad_option, {Key, Value}}}`.
 """.
@@ -170,32 +169,35 @@ space(Flock) -> boids_flock:space(Flock).
 %% --- The boids --------------------------------------------------------
 
 -doc """
-Add a boid to a flock. The result has the id of the boid: the option
-`id`, or a new reference.
+Add a boid to a flock: start its process. The result has the id of the
+boid. The id is the option `id`, or the pid of the process.
 
-The options are those of a boid (`boids_boid`), on top of the `defaults`
-of the flock. `pos` is necessary.
+The options are those of a boid (`boids_boid`) and of its process
+(`gen_boid`), on top of the `defaults` of the flock. `pos` is
+necessary.
 
 All the boids of a flock have positions of the same size: two numbers,
 or three. An id that is in the flock gives `{error, {exists, Id}}`. A
 bad option gives `{error, {bad_option, {Key, Value}}}`.
 
-The boid has no process of its own: a worker of the flock holds it. For
-a boid that is a process, see `gen_boid`. When a rule of the boid (a
-function of yours) has an error, the flock writes the error to the log
-and removes the boid. The other boids continue.
+A boid that stops with an error does not start again: the flock removes
+it, and the other boids continue. `whereis/2` gives its process, for a
+monitor.
 """.
 -spec add(flock(), options()) -> {ok, term()} | {error, term()}.
-add(Flock, Opts) ->
-    Space = #{defaults := Defaults} = space(Flock),
-    try boids_boid:new(maps:merge(Defaults, boids_boid:to_map(Opts))) of
-        Boid = #{id := Id} ->
-            case boids_worker:add(Space, Boid) of
-                ok -> {ok, Id};
-                {error, Reason} -> {error, Reason}
-            end
+add(Flock, Opts0) ->
+    Space = space(Flock),
+    try boids_boid:to_map(Opts0) of
+        Opts -> start(Space, boids_flock:boid_sup(Space), Opts)
     catch
         error:{bad_option, _} = Reason -> {error, Reason}
+    end.
+
+%% A boid with no module of the user. Its process checks the options.
+start(Space = #{defaults := Defaults}, Sup, Opts) ->
+    case gen_boid:start_child(Sup, undefined, Opts, #{flock => Space}) of
+        {ok, Pid} -> {ok, maps:get(id, maps:merge(Defaults, Opts), Pid)};
+        {error, Reason} -> {error, Reason}
     end.
 
 -doc """
@@ -213,21 +215,29 @@ populate(Flock, Count, Opts0) when is_integer(Count), Count >= 0 ->
     try
         Opts = boids_boid:to_map(Opts0),
         Area = {Min, _} = area(maps:get(area, Opts, Bounds)),
-        %% The check of the options is done one time, for all the boids.
-        Sample = boids_boid:new(maps:without([area, id], maps:merge(Defaults, Opts#{pos => Min}))),
-        {Area, is_map_key(vel, Opts), maps:get(seed, Opts, undefined), Sample}
+        Template = maps:without([area, id], maps:merge(Defaults, Opts)),
+        {_Server, BoidOpts} = gen_boid:options(Template),
+        {Area, Template, boids_boid:new(BoidOpts#{pos => Min})}
     of
-        {Area1 = {Min1, _}, Fixed, Seed, Sample1} ->
-            case Count =:= 0 orelse boids_space:fit(Space, Min1) of
-                true ->
-                    Boids = [random(Area1, Fixed, Seed, N, Sample1) || N <- lists:seq(1, Count)],
-                    boids_worker:add_all(Space, Boids),
-                    {ok, [Id || #{id := Id} <- Boids]};
-                false ->
-                    {error, {bad_option, {area, Area1}}}
-            end
+        {{Min1, Max1}, Template1, Sample} ->
+            Random = fun() -> random(Min1, Max1, Template1, Sample) end,
+            populate(Space, boids_flock:boid_sup(Space), 1, Count, Template1, Random, [])
     catch
         error:{bad_option, _} = Reason -> {error, Reason}
+    end.
+
+%% The check of the options is done one time, for all the boids.
+populate(_Space, _Sup, N, Count, _Template, _Random, Ids) when N > Count ->
+    {ok, lists:reverse(Ids)};
+populate(Space, Sup, N, Count, Template, Random, Ids) ->
+    Opts =
+        case Template of
+            #{seed := Seed} -> Template#{seed := Seed + N};
+            _ -> Template
+        end,
+    case start(Space, Sup, maps:merge(Opts, Random())) of
+        {ok, Id} -> populate(Space, Sup, N + 1, Count, Template, Random, [Id | Ids]);
+        {error, Reason} -> {error, Reason}
     end.
 
 area({Min, Max}) when tuple_size(Min) =:= tuple_size(Max), tuple_size(Min) =:= 2 orelse tuple_size(Min) =:= 3 ->
@@ -235,36 +245,26 @@ area({Min, Max}) when tuple_size(Min) =:= tuple_size(Max), tuple_size(Min) =:= 2
 area(Area) ->
     error({bad_option, {area, Area}}).
 
-%% The boid number N: a copy of the sample at a random position.
-random({Min, Max}, Fixed, Seed, N, Sample = #{min_speed := Slow, max_speed := Fast}) ->
+random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}) ->
     Pos = boids_vec:random_in(Min, Max),
-    Moves =
-        case Fixed of
-            true ->
-                #{};
-            false ->
-                Speed = Slow + rand:uniform() * (Fast - Slow),
-                #{vel => boids_vec:scale(boids_vec:random_unit(tuple_size(Min)), Speed)}
-        end,
-    Own =
-        case Seed of
-            undefined -> Moves;
-            _ -> Moves#{seed => Seed + N}
-        end,
-    boids_boid:update(Sample#{id := make_ref()}, Own#{pos => Pos}).
+    case Template of
+        #{vel := _} ->
+            #{pos => Pos};
+        _ ->
+            Speed = Slow + rand:uniform() * (Fast - Slow),
+            #{pos => Pos, vel => boids_vec:scale(boids_vec:random_unit(tuple_size(Min)), Speed)}
+    end.
 
 -doc """
-Remove a boid from its flock: a boid of `add/2`, or a `gen_boid` of
-`gen_boid:start/3`, whose process stops. For another id, the result is
-`{error, not_found}`: a process of yours with `join/2`, or a boid below
-a supervisor of yours (`gen_boid:start_link/3`).
+Remove a boid from its flock: stop its process. This is for a boid of
+`add/2`, `populate/3` and `gen_boid:start/3`. For another id, the result
+is `{error, not_found}`: a process of yours with `join/2`, or a boid
+below a supervisor of yours (`gen_boid:start_link/3`).
 """.
 -spec remove(flock(), term()) -> ok | {error, not_found}.
 remove(Flock, Id) ->
     Space = space(Flock),
     case boids_space:owner(Space, Id) of
-        {data, _} ->
-            boids_worker:remove(Space, Id);
         {server, Pid} ->
             %% A boid below a supervisor of the user is not a child here.
             case supervisor:terminate_child(boids_flock:boid_sup(Space), Pid) of
@@ -276,8 +276,10 @@ remove(Flock, Id) ->
     end.
 
 -doc """
-Change options of a boid of `add/2` or of a `gen_boid`: for example its
-`rules`, its `max_speed` or its `pos`. The id does not change.
+Change options of a boid: for example its `rules`, its `max_speed` or
+its `pos`. The id and the options of the process (`tick`, `max_dt`,
+`seed`) do not change. For a process of yours with `join/2`, the result
+is `{error, not_found}`.
 """.
 -spec update(flock(), term(), options()) -> ok | {error, term()}.
 update(Flock, Id, Changes) ->
@@ -312,21 +314,17 @@ which_rules(Flock, Id) ->
 change(Flock, Id, Function, Arg) ->
     Space = space(Flock),
     case boids_space:owner(Space, Id) of
-        {data, _} -> boids_worker:change(Space, Id, Function, Arg);
         {server, Pid} -> call(Pid, {change, Function, Arg});
         _ -> {error, not_found}
     end.
 
 -doc """
-All the state of a boid of `add/2` or of a `gen_boid`. See
-`t:boids_boid:boid/0`.
+All the state of a boid, from its process. See `t:boids_boid:boid/0`.
 """.
 -spec boid(flock(), term()) -> {ok, boids_boid:boid()} | {error, not_found}.
 boid(Flock, Id) ->
     Space = space(Flock),
     case boids_space:owner(Space, Id) of
-        {data, _} ->
-            boids_worker:get(Space, Id);
         {server, Pid} ->
             case call(Pid, get) of
                 {error, not_found} -> {error, not_found};
@@ -346,8 +344,8 @@ call(Pid, Request) ->
     end.
 
 -doc """
-The process of a boid, or `undefined`: for an id that is not in the
-flock, and for a boid of `add/2`, which has no process of its own.
+The process of a boid, or `undefined` for an id that is not in the
+flock.
 """.
 -spec whereis(flock(), term()) -> pid() | undefined.
 whereis(Flock, Id) ->
@@ -360,9 +358,8 @@ whereis(Flock, Id) ->
 
 -doc """
 All the boids of a flock: a list of maps with `id`, `pos`, `vel`,
-`group`, `data` and `pid` (the process of the boid, or `undefined`). The
-order is not specified. A read between two steps gives one moment of
-the flock.
+`group`, `data` and `pid`. The order is not specified. The boids move
+during the read, so the rows are not all of the same moment.
 """.
 -spec snapshot(flock()) -> [boids_space:entry()].
 snapshot(Flock) ->
@@ -419,32 +416,127 @@ set_time_scale(Flock, Scale) ->
 %% --- The time ---------------------------------------------------------
 
 -doc """
-Make one step of `Dt` seconds for the boids of `add/2` and for each
-`gen_boid`. First each boid calculates its step, and the flock does not
-change. Then each boid moves. The function returns after the two parts.
+Make one step of `Dt` seconds for all the boids that are a `gen_boid`:
+those of `add/2` too. First each boid calculates its step, and the flock
+does not change. Then each boid moves. The function returns after the
+two parts.
 
-The scale of the time of the flock applies to `Dt`. Use it with `tick =>
-manual`: for a test, or for a simulation that is faster than the clock.
+The scale of the time of the flock applies to `Dt`. Use it with boids
+that have `tick => manual`: for a test, or for a simulation that is
+faster than the clock.
 """.
 -spec step(flock(), number()) -> ok.
 step(Flock, Dt) when is_number(Dt), Dt >= 0 ->
-    boids_clock:step(space(Flock), Dt).
+    Pids = boids_space:servers(space(Flock)),
+    request(Pids, {plan, Dt}),
+    request(Pids, commit).
+
+%% The two parts of a step are in specs/Step.tla. A boid that stops
+%% during the step gives an error, which changes nothing for the other
+%% boids. The answers come in each order: the caller takes them as they
+%% come, with no search in its messages.
+request(Pids, Request) ->
+    Sent = lists:foldl(
+        fun(Pid, Acc) -> gen_server:send_request(Pid, Request, Pid, Acc) end,
+        gen_server:reqids_new(),
+        Pids
+    ),
+    collect(Sent).
+
+collect(Sent) ->
+    case gen_server:receive_response(Sent, infinity, true) of
+        {_Response, _Pid, Rest} -> collect(Rest);
+        no_request -> ok
+    end.
+
+%% --- The flock as a graph ---------------------------------------------
 
 -doc """
-Send a message to the process that calls this function after each step
-of the flock: `{boids, Flock, {step, Count, Dt}}`. `Flock` is the
-process of the flock, `Count` the number of the step, and `Dt` its
-seconds. Use it to draw the flock, or to read it, one time for each
-step. `unsubscribe/1` stops the messages.
-""".
--spec subscribe(flock()) -> ok.
-subscribe(Flock) ->
-    boids_clock:subscribe(space(Flock), self()).
+The flock as a graph (`graph`) of the boids that see each other. Each
+boid is a vertex: its id, with its row as the label. An edge goes from a
+boid to each boid at the distance `Radius` or less.
 
--doc "Stop the messages of `subscribe/1`.".
--spec unsubscribe(flock()) -> ok.
-unsubscribe(Flock) ->
-    boids_clock:unsubscribe(space(Flock), self()).
+The functions of `graph` then answer questions about all the flock:
+
+```erlang
+Graph = boids:graph(Flock, 10),
+Groups = graph:components(Graph),
+Alone = [Id || Id <- graph:vertices(Graph), graph:out_degree(Graph, Id) =:= 0].
+```
+
+The build reads all the flock: it takes about 50 microseconds for each
+boid. Use it for a view of the flock, and not at each step of a boid.
+""".
+-spec graph(flock(), number()) -> graph:graph().
+graph(Flock, Radius) ->
+    Space = space(Flock),
+    Rows = snapshot(Space),
+    Vertices = lists:foldl(fun(Row = #{id := Id}, Graph) -> graph:add_vertex(Graph, Id, Row) end, graph:new(), Rows),
+    lists:foldl(
+        fun(#{id := Id, pos := Pos}, Graph0) ->
+            %% A boid that came after the read of the rows is not a vertex.
+            Others = [Other || #{id := Other} <- near(Space, Pos, Radius), Other =/= Id, graph:has_vertex(Graph0, Other)],
+            lists:foldl(fun(Other, Graph) -> graph:add_edge(Graph, Id, Other) end, Graph0, Others)
+        end,
+        Vertices,
+        Rows
+    ).
+
+-doc """
+Add a relation between two boids of a flock: the boid `From` has the
+relation `Label` to the boid `To`. A label is a term of yours, for
+example `follows`, `fears` or `mate`.
+
+```erlang
+ok = boids:relate(Flock, Bird, follows, Leader),
+ok = boids:update(Flock, Bird, #{rules => [{leader, 1.0, #{target => {related, follows}}}]}).
+```
+
+A rule with the target `{related, Label}` uses the relation at each
+step. The relation goes when one of the two boids goes from the flock.
+
+The result is `{error, {not_found, Id}}` for an id that is not in the
+flock. In a flock with the option `relations => acyclic`, a relation
+that makes a cycle gives `{error, cycle}`: use it for a hierarchy.
+""".
+-spec relate(flock(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
+relate(Flock, From, Label, To) ->
+    boids_flock:relate(space(Flock), From, Label, To).
+
+-doc "Remove a relation of `relate/4`.".
+-spec unrelate(flock(), term(), term(), term()) -> ok.
+unrelate(Flock, From, Label, To) ->
+    boids_flock:unrelate(space(Flock), From, Label, To).
+
+-doc """
+All the relations of a flock, as a graph (`graph`): each boid with a
+relation is a vertex, and each relation is an edge `{From, To, Label}`.
+
+```erlang
+Relations = boids:relations(Flock),
+Followers = graph:in_neighbours(Relations, Leader),
+Order = graph:topsort(Relations).
+```
+""".
+-spec relations(flock()) -> graph:graph().
+relations(Flock) ->
+    boids_flock:relations(space(Flock)).
+
+-doc """
+The boids that the boid `From` has the relation `Label` to. The read
+sends no message.
+""".
+-spec related(flock(), term(), term()) -> [term()].
+related(Flock, From, Label) ->
+    boids_space:related(space(Flock), From, Label).
+
+-doc """
+The boids that have the relation `Label` to the boid `To`: for example
+the followers of a leader. The read sends no message.
+""".
+-spec related_to(flock(), term(), term()) -> [term()].
+related_to(Flock, To, Label) ->
+    boids_space:related_to(space(Flock), To, Label).
 
 %% --- A process of your own as a boid ----------------------------------
 
@@ -455,8 +547,7 @@ two in the state of the process, and call `advance/3` at each step.
 
 The options are those of a boid (`boids_boid`), on top of the `defaults`
 of the flock. The default id is the pid of the process. The flock
-removes the boid when the process stops. The clock of the flock does not
-move this boid: the process calls `advance/3` when it wants a step.
+removes the boid when the process stops.
 
 ```erlang
 init(Flock) ->
@@ -473,7 +564,8 @@ handle_info(tick, {Space, Boid}) ->
 join(Flock, Opts0) ->
     Space = #{defaults := Defaults} = space(Flock),
     try
-        boids_boid:new(maps:merge(#{id => self()}, maps:merge(Defaults, boids_boid:to_map(Opts0))))
+        {_Server, BoidOpts} = gen_boid:options(maps:merge(Defaults, boids_boid:to_map(Opts0))),
+        boids_boid:new(maps:merge(#{id => self()}, BoidOpts))
     of
         Boid ->
             case boids_flock:join(Space, self(), boids_boid:entry(Boid)) of
@@ -507,7 +599,8 @@ at its neighbors before the step.
 plan(Space, Boid, Neighbors, Dt) ->
     Env = #{time_scale := Scale} = boids_space:env(Space),
     Lookup = fun(Id) -> boids_space:lookup(Space, Id) end,
-    boids_boid:step(Boid, Neighbors, Env#{lookup => Lookup}, Dt * Scale).
+    Related = fun(From, Label) -> boids_space:related(Space, From, Label) end,
+    boids_boid:step(Boid, Neighbors, Env#{lookup => Lookup, related => Related}, Dt * Scale).
 
 -doc """
 Write a boid to its flock, so that the other boids see its new position.

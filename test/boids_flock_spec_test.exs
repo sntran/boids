@@ -5,7 +5,6 @@ defmodule BoidsFlockSpecTest do
   import Boids.Helpers
 
   alias Boids.FlockSpec
-  alias Boids.TestBoids.Mouse
 
   @moduletag :tmp_dir
   @moduletag :capture_log
@@ -34,7 +33,7 @@ defmodule BoidsFlockSpecTest do
   # With `wait`, each act is done before the next act starts. Without it,
   # the processes of the test and of the flock run at the same time.
   defp run(acts, wait \\ false) do
-    {:ok, flock} = :boids.start_flock(tick: :manual)
+    {:ok, flock} = :boids.start_flock()
     recorder = FlockSpec.trace(flock)
 
     members =
@@ -50,13 +49,11 @@ defmodule BoidsFlockSpecTest do
     {events, table}
   end
 
-  # A boid of boids:add/2 has no process, and sends no message to the
-  # flock. An add of these tests starts a gen_boid.
   defp act(flock, {:add, id}, members) do
     # After many kills in one second, the supervisor of the boids stops,
     # and its supervisor starts it again. A call to it exits then.
     try do
-      :gen_boid.start(Mouse, %{id: id, pos: {0, 0}}, flock: flock)
+      :boids.add(flock, id: id, pos: {0, 0}, tick: :manual)
     catch
       :exit, _ -> :ok
     end
@@ -218,14 +215,12 @@ defmodule BoidsFlockSpecTest do
   end
 
   test "the record has each message of the flock, with the answers", %{tmp_dir: dir} do
-    {:ok, flock} = :boids.start_flock(tick: :manual)
+    {:ok, flock} = :boids.start_flock()
     recorder = FlockSpec.trace(flock)
-    {:ok, pid} = :gen_boid.start(Mouse, %{id: :a, pos: {0, 0}}, flock: flock)
-    {:error, _} = :gen_boid.start(Mouse, %{id: :a, pos: {1, 1}}, flock: flock)
-    {:error, _} = :gen_boid.start(Mouse, %{id: :b, pos: {1, 1, 1}}, flock: flock)
-    # A boid of a worker sends no message to the flock.
-    {:ok, :data} = :boids.add(flock, id: :data, pos: {2, 2})
-    :ok = :boids.remove(flock, :data)
+    {:ok, :a} = :boids.add(flock, id: :a, pos: {0, 0}, tick: :manual)
+    pid = :boids.whereis(flock, :a)
+    {:error, _} = :boids.add(flock, id: :a, pos: {1, 1}, tick: :manual)
+    {:error, _} = :boids.add(flock, id: :b, pos: {1, 1, 1}, tick: :manual)
     :ok = :boids.remove(flock, :a)
     send(flock, {:DOWN, make_ref(), :process, self(), :normal})
     assert eventually(fn -> :boids.count(flock) == 0 end)
