@@ -60,7 +60,9 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
     group => term(),
     data => term(),
     pid => pid() | undefined,
-    kind => kind()
+    kind => kind(),
+    %% The moves of the boid from node to node, before this process.
+    moves => non_neg_integer()
 }.
 -type neighbor() :: #{
     id := term(),
