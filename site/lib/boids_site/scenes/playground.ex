@@ -22,6 +22,9 @@ defmodule BoidsSite.Scenes.Playground do
   """
   @behaviour BoidsSite.Scene
 
+  @impl true
+  def waits, do: true
+
   defmodule Kind do
     @moduledoc "A boid of a kind of the playground: it changes its rules when it sees a boid of a group."
     @behaviour :gen_boid

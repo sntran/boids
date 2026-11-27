@@ -14,7 +14,10 @@ defmodule BoidsSite.Socket do
     "flight" => BoidsSite.Scenes.Flight,
     "flock" => BoidsSite.Scenes.Flock,
     "game" => BoidsSite.Scenes.Game,
-    "playground" => BoidsSite.Scenes.Playground
+    "playground" => BoidsSite.Scenes.Playground,
+    "lab" => BoidsSite.Scenes.Lab,
+    "herd" => BoidsSite.Scenes.Herd,
+    "land" => BoidsSite.Scenes.Land
   }
 
   @impl true
@@ -26,18 +29,24 @@ defmodule BoidsSite.Socket do
   @impl true
   def websocket_init(name) do
     case @scenes do
-      # The playground waits for the definition of the visitor.
-      %{^name => BoidsSite.Scenes.Playground = module} -> {[], %{module: module, scene: nil, number: 0}}
-      %{^name => module} -> start(%{module: module, scene: nil, number: 0}, nil)
-      _ -> {[{:close, 1008, "no such scene"}], nil}
+      %{^name => module} ->
+        if BoidsSite.Scene.waits?(module) do
+          # The scene waits for the definition of the visitor.
+          {[], %{module: module, scene: nil, number: 0}}
+        else
+          start(%{module: module, scene: nil, number: 0}, nil)
+        end
+
+      _ ->
+        {[{:close, 1008, "no such scene"}], nil}
     end
   end
 
   @impl true
   def websocket_handle({:text, text}, %{module: module, scene: scene} = state) do
     case decode(text) do
-      %{"scene" => definition} when module == BoidsSite.Scenes.Playground ->
-        start(state, definition)
+      %{"scene" => definition} ->
+        if BoidsSite.Scene.waits?(module), do: start(state, definition), else: {[], state}
 
       %{} = message when scene != nil ->
         :ok = BoidsSite.Scene.input(scene, message)

@@ -7,8 +7,12 @@ its VM.
 | Page | What it shows |
 |---|---|
 | `/` | What the library is, with a flock of birds and a hawk that moves on the page. |
-| `/game` | Rock Patrol: a ship in a field of rocks, and a queen with drones that hunt it and shoot at it. A person flies the ship with the keys. |
-| `/flight` | Long Flight: a person leads a flock of birds through lands with rocks and hawks. The person does not control a bird: after each land, the person takes a card (a rule, or a change of the birds) and puts the rules in an order. |
+| `/showcases` | The games made with the library, with what each one shows of it. |
+| `/showcases/rock-patrol` | Rock Patrol: a ship in a field of rocks, and a queen with drones that hunt it and shoot at it. A person flies the ship with the keys. |
+| `/showcases/long-flight` | Long Flight: a person leads a flock of birds through lands with rocks and hawks. The person does not control a bird: after each land, the person takes a card and puts the rules of the flock in an order. |
+| `/showcases/flock-lab` | Flock Lab: puzzles for young programmers. Rule blocks tell the sheep what to do. |
+| `/showcases/quiet-herd` | Quiet Herd: cross a field of deer with no wave of fear. |
+| `/showcases/living-land` | Living Land: species whose rule weights are genes. |
 | `/playground` | A visitor defines kinds of boids and their rules, and sees them move. |
 
 [beam.com](https://github.com/sntran/BEAM.com) makes one file of the
@@ -67,8 +71,9 @@ then deploys at each push.
 
 ## How it works
 
-- A page opens one WebSocket for its scene (`/ws/flock`, `/ws/game`,
-  `/ws/flight`, `/ws/playground`). The server starts one world with its boids for
+- The old addresses `/game` and `/flight` move to their pages in
+  `/showcases`.
+- A page opens one WebSocket for its scene (for example `/ws/flock`, `/ws/game` and `/ws/playground`). The server starts one world with its boids for
   that socket, and sends one moment of it at each tick: the position, the
   direction and the kind of each boid. The page draws the moments.
 - A scene stops when its socket closes. With no visitor, the VM has no

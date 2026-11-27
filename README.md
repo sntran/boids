@@ -109,12 +109,12 @@ mix run --no-halt
 
 Then open `http://localhost:4000`.
 
-- **The game** (`/game`) is a ship in a field of rocks, and a queen with
+- **Rock Patrol** (`/showcases/rock-patrol`) is a ship in a field of rocks, and a queen with
   drones that hunt the ship and shoot at it. The arrow keys turn the
   ship and give thrust, and the space bar shoots. Each thing in the game is a
   module with the behavior `gen_boid`: see
   [`site/lib/boids_site/scenes/game.ex`](https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/game.ex).
-- **Long Flight** (`/flight`) is a game where you lead a flock through
+- **Long Flight** (`/showcases/long-flight`) is a game where you lead a flock through
   lands with rocks and hawks, and never control a bird. After each land
   you take a card (a rule, or a change of the birds), and you put the
   rules of the flock in an order: with `combine => priority`, the order

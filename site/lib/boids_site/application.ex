@@ -14,8 +14,11 @@ defmodule BoidsSite.Application do
         {:_,
          [
            {"/", :cowboy_static, {:priv_file, :boids_site, "index.html"}},
-           {"/game", :cowboy_static, {:priv_file, :boids_site, "game.html"}},
-           {"/flight", :cowboy_static, {:priv_file, :boids_site, "flight.html"}},
+           {"/showcases", :cowboy_static, {:priv_file, :boids_site, "showcases/index.html"}},
+           {"/showcases/:game", BoidsSite.Showcase, []},
+           # The addresses of the first version of the site.
+           {"/game", BoidsSite.Showcase, {:moved, "/showcases/rock-patrol"}},
+           {"/flight", BoidsSite.Showcase, {:moved, "/showcases/long-flight"}},
            {"/playground", :cowboy_static, {:priv_file, :boids_site, "playground.html"}},
            {"/assets/[...]", :cowboy_static, {:priv_dir, :boids_site, "assets"}},
            {"/ws/:scene", BoidsSite.Socket, []}

@@ -33,7 +33,19 @@ defmodule BoidsSite.Scene do
   @doc "More for the header of the scene: for example `zones`, a list of `[x0, y0, x1, y1, color]`."
   @callback header(t()) :: map()
 
-  @optional_callbacks more: 2, input: 2, direct: 1, header: 1
+  @doc """
+  True for a scene that starts only with a definition of the page: the
+  page sends `{"scene": DEFINITION}`, and can send it again for a new
+  scene. The default is false: the scene starts when the page opens.
+  """
+  @callback waits() :: boolean()
+
+  @optional_callbacks waits: 0, more: 2, input: 2, direct: 1, header: 1
+
+  @doc "True for a scene that waits for a definition of the page (see `c:waits/0`)."
+  def waits?(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :waits, 0) and module.waits()
+  end
 
   @doc "The milliseconds between two steps of a boid, and between two moments for the page."
   def tick, do: String.to_integer(System.get_env("BOIDS_TICK", "50"))
