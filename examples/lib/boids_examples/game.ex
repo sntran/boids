@@ -4,11 +4,31 @@ defmodule BoidsExamples.Game do
   also tells what it is: its address, its title, and what it shows of
   the library.
 
+  Each game is a folder of `examples/` with three files: its module
+  (`rock_patrol/rock_patrol.ex`), its page (`rock_patrol.html`) and its
+  tests (`rock_patrol_test.exs`). The module has `use BoidsExamples.Game`,
+  which puts the page in the module (`page/0`): the page is then a part
+  of the release, also on Cloudflare Workers.
+
   The site and the tests find the games with `all/0`: a new game needs
-  only its module, its page (`priv/showcases/SLUG.html`) and its tests.
-  The common test (`test/games_test.exs`) starts each game, runs it for
-  some seconds, and checks its page.
+  only its folder. The common test (`test/games_test.exs`) starts each
+  game, runs it for some seconds, and checks its page.
   """
+
+  @doc false
+  defmacro __using__(_options) do
+    page = Path.rootname(__CALLER__.file) <> ".html"
+
+    quote do
+      @behaviour BoidsExamples.Game
+      @external_resource unquote(page)
+      @boids_examples_page File.read!(unquote(page))
+
+      @doc "The page of the game: the file next to its module, with the extension `.html`."
+      @impl BoidsExamples.Game
+      def page, do: @boids_examples_page
+    end
+  end
 
   @typedoc """
   What a game is:
@@ -33,6 +53,9 @@ defmodule BoidsExamples.Game do
 
   @doc "What the game is."
   @callback info() :: info()
+
+  @doc "The HTML of the page of the game (`use BoidsExamples.Game` gives it)."
+  @callback page() :: String.t()
 
   @doc """
   A definition that starts the game, for a game that waits for a

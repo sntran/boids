@@ -26,7 +26,7 @@ defmodule BoidsExamples.Games.LivingLand do
   readings.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do

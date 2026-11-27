@@ -36,7 +36,7 @@ defmodule BoidsExamples.GamesTest do
       %{slug: slug, title: title} = game.info()
       assert index =~ ~s(href="/showcases/#{slug}")
       assert index =~ title
-      page = File.read!(Showcase.page(slug))
+      page = game.page()
       assert page =~ ~s(aria-current="page">Showcases)
       # The page connects to the socket of its game.
       assert page =~ ~s(name: "#{slug}")
@@ -84,10 +84,10 @@ defmodule BoidsExamples.GamesTest do
       assert Enum.any?(moments, &(&1.b != []))
       assert hd(moments).b != List.last(moments).b
 
-      # The scene stops with its visitor.
+      # The scene stops with its visitor. A scene of an earlier test can
+      # stop in this time too, so the count can go below its first value.
       Process.exit(visitor, :kill)
-      Process.sleep(300)
-      assert :counters.get(count, 1) == before
+      assert Enum.any?(1..50, fn _ -> Process.sleep(100) || :counters.get(count, 1) <= before end)
     end
   end
 

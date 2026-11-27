@@ -1,9 +1,9 @@
 defmodule BoidsExamples.Showcase do
   @moduledoc """
   The pages of the showcases. `/showcases` is the list of the games
-  (`BoidsExamples.Game.all/0`), and `/showcases/SLUG` is the page
-  `priv/showcases/SLUG.html` of a game. An old address of a game moves to
-  its new address.
+  (`BoidsExamples.Game.all/0`), and `/showcases/SLUG` is the page of a
+  game (`page/0` of its module). An old address of a game moves to its
+  new address.
   """
   @behaviour :cowboy_handler
 
@@ -22,14 +22,11 @@ defmodule BoidsExamples.Showcase do
     request =
       case slug && BoidsExamples.Game.find(slug) do
         nil -> :cowboy_req.reply(404, %{"content-type" => "text/plain"}, "There is no such game.", request)
-        _module -> html(request, 200, File.read!(page(slug)))
+        module -> html(request, 200, module.page())
       end
 
     {:ok, request, state}
   end
-
-  @doc "The file of the page of a game."
-  def page(slug), do: Path.join([:code.priv_dir(:boids_examples), "showcases", slug <> ".html"])
 
   @doc "The page of the list of the games."
   def index do

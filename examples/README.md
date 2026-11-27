@@ -5,10 +5,12 @@ that moves in a game is a boid: one Erlang process with the behavior
 `gen_boid`. The site is one Cowboy app, and each boid on a page is a
 process of its VM.
 
-- The games are in [`lib/boids_examples/games`](lib/boids_examples/games):
-  one module for each game.
-- Each game has its tests in [`test/games`](test/games), and all the
-  games pass the common test [`test/games_test.exs`](test/games_test.exs):
+- Each game is a folder here, with three files: its module, its page and
+  its tests. For example [`rock_patrol`](rock_patrol) has
+  `rock_patrol.ex`, `rock_patrol.html` and `rock_patrol_test.exs`.
+- The folder [`lib`](lib) has the site: the pages, the socket, and the
+  behaviors of a scene and of a game.
+- All the games pass the common test [`test/games_test.exs`](test/games_test.exs):
   each game starts with the library of this repository, runs for two
   seconds, and stops. CI runs these tests at each push, so a change of
   the library that breaks an example fails CI.
@@ -78,15 +80,18 @@ then deploys at each push.
 
 ## Add a game
 
-1. Write a module in `lib/boids_examples/games` with two behaviors:
-   `BoidsExamples.Scene` (it starts the world of the game, tells how the
-   page draws each boid, and takes the input of the person) and
-   `BoidsExamples.Game` (`info/0`: its slug, its title, what the person
-   does, what it shows of the library, an icon, and its place in the
-   list).
-2. Write its page, `priv/showcases/SLUG.html`. The page connects to the
-   socket `/ws/SLUG` with `Boids.scene` of `/assets/scene.js`.
-3. Write its tests in `test/games`.
+Make a folder `my_game` here, with three files:
+
+1. `my_game.ex`: a module with `use BoidsExamples.Game` and
+   `@behaviour BoidsExamples.Scene`. As a scene, it starts the world of
+   the game, tells how the page draws each boid, and takes the input of
+   the person. As a game, its `info/0` gives its slug, its title, what
+   the person does, what it shows of the library, an icon, and its place
+   in the list.
+2. `my_game.html`: its page. The page connects to the socket `/ws/SLUG`
+   with `Boids.scene` of `/assets/scene.js`. `use BoidsExamples.Game`
+   puts the page in the module.
+3. `my_game_test.exs`: its tests.
 
 The site finds the new game with no other change: the list of the
 showcases, the address of its page and its socket come from `info/0`.
@@ -103,11 +108,11 @@ The common test starts it and checks its page.
   world and does no work.
 - A scene is a module with the behavior `BoidsExamples.Scene`
   ([`lib/boids_examples/scene.ex`](lib/boids_examples/scene.ex)). The scenes are
-  in [`lib/boids_examples/games`](lib/boids_examples/games).
+  in their folders.
 - The game is the example of the library for a boid with a module of
-  its own: see [`rock_patrol.ex`](lib/boids_examples/games/rock_patrol.ex).
+  its own: see [`rock_patrol.ex`](rock_patrol/rock_patrol.ex).
 - Long Flight is the example for rules as data:
-  [`long_flight.ex`](lib/boids_examples/games/long_flight.ex). The deck of the person
+  [`long_flight.ex`](long_flight/long_flight.ex). The deck of the person
   is the list of the rules of each bird, and the order of the list is
   the priority of the rules (`combine => priority`). A card adds a
   rule, changes a weight, makes a bird change its rules when it sees a
@@ -116,16 +121,16 @@ The common test starts it and checks its page.
   stops. One process, the director, has the land, the deck and the
   counts of a run.
 - Flock Lab waits for a program of the page (the callback `waits/0`):
-  [`flock_lab.ex`](lib/boids_examples/games/flock_lab.ex). A block of the kid is one
+  [`flock_lab.ex`](flock_lab/flock_lab.ex). A block of the kid is one
   rule from a fixed list, and the server checks each block. The levels
   have stars for the goal, the time and the number of blocks.
 - Quiet Herd is the example for a state of each boid:
-  [`quiet_herd.ex`](lib/boids_examples/games/quiet_herd.ex). The fear of a deer is its
+  [`quiet_herd.ex`](quiet_herd/quiet_herd.ex). The fear of a deer is its
   state, and changes its rules. The data of each boid tells its
   neighbors how fast the fox moves and how afraid a deer is, so fear
   goes from deer to deer with no message.
 - Living Land is the example for processes that start and stop all the
-  time: [`living_land.ex`](lib/boids_examples/games/living_land.ex). The genes of an
+  time: [`living_land.ex`](living_land/living_land.ex). The genes of an
   animal give the weights of its rules, its speed and its sight. An
   animal starts its young as a new process, and a hunter calls the
   process of the grazer that it catches.

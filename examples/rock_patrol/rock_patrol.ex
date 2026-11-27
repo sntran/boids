@@ -18,7 +18,7 @@ defmodule BoidsExamples.Games.RockPatrol do
   - `Queen`: it starts new drones.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do

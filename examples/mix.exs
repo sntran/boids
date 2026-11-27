@@ -10,8 +10,25 @@ defmodule BoidsExamples.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      # Each game is a folder of examples/ with its module, its page and
+      # its tests: rock_patrol/rock_patrol.ex, rock_patrol.html and
+      # rock_patrol_test.exs. The folder lib/ has the site.
+      elixirc_paths: ["lib" | games()],
+      test_paths: ["."],
+      test_load_filters: [&test?/1],
+      test_ignore_filters: [&(not test?(&1))]
     ]
+  end
+
+  # The folders of the games: a folder with a module of its own name.
+  defp games do
+    for dir <- File.ls!(__DIR__), File.regular?(Path.join([__DIR__, dir, dir <> ".ex"])), do: dir
+  end
+
+  # A test is a file *_test.exs in test/ or in the folder of a game.
+  defp test?(path) do
+    String.ends_with?(path, "_test.exs") and hd(Path.split(path)) in ["test" | games()]
   end
 
   def application do

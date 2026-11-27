@@ -25,7 +25,7 @@ defmodule BoidsExamples.Games.LongFlight do
   the counts, and it starts and clears the lands.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do

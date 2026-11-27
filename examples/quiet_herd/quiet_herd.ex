@@ -22,7 +22,7 @@ defmodule BoidsExamples.Games.QuietHerd do
   of the afraid deer, and the alarm that calls the guards.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do

@@ -25,7 +25,7 @@ defmodule BoidsExamples.Games.FlockLab do
   - `boids:flocks/2` measures the goal of level 4.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do

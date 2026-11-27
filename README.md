@@ -113,30 +113,30 @@ Then open `http://localhost:4000`.
   drones that hunt the ship and shoot at it. The arrow keys turn the
   ship and give thrust, and the space bar shoots. Each thing in the game is a
   module with the behavior `gen_boid`: see
-  [`examples/lib/boids_examples/games/rock_patrol.ex`](https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/rock_patrol.ex).
+  [`examples/rock_patrol/rock_patrol.ex`](https://github.com/sntran/boids/blob/main/examples/rock_patrol/rock_patrol.ex).
 - **Long Flight** (`/showcases/long-flight`) is a game where you lead a flock through
   lands with rocks and hawks, and never control a bird. After each land
   you take a card (a rule, or a change of the birds), and you put the
   rules of the flock in an order: with `combine => priority`, the order
   is the priority. See
-  [`examples/lib/boids_examples/games/long_flight.ex`](https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/long_flight.ex).
+  [`examples/long_flight/long_flight.ex`](https://github.com/sntran/boids/blob/main/examples/long_flight/long_flight.ex).
 - **Flock Lab** (`/showcases/flock-lab`) is a set of puzzles for young
   programmers. A kid builds a program from blocks ("Go to the flag",
   "Do not bump", "When I see the wolf"), presses Run, and sees if the
   sheep reach the pen. Each level teaches one idea: steps, numbers,
   order, conditions, relations. "Show the code" gives the same program
   as Erlang and Elixir. See
-  [`examples/lib/boids_examples/games/flock_lab.ex`](https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/flock_lab.ex).
+  [`examples/flock_lab/flock_lab.ex`](https://github.com/sntran/boids/blob/main/examples/flock_lab/flock_lab.ex).
 - **Quiet Herd** (`/showcases/quiet-herd`) is a stealth game: move a fox
   across a field of deer. Each deer has a fear that changes its rules,
   and fear goes from deer to deer. No code makes the wave of fear: it
   comes from the rules of each deer. See
-  [`examples/lib/boids_examples/games/quiet_herd.ex`](https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/quiet_herd.ex).
+  [`examples/quiet_herd/quiet_herd.ex`](https://github.com/sntran/boids/blob/main/examples/quiet_herd/quiet_herd.ex).
 - **Living Land** (`/showcases/living-land`) has grazers and hunters
   whose rule weights, speed and sight are genes. An animal with enough
   energy starts a young process with changed genes, and an animal with
   no energy stops. You change the land, and see what evolves. See
-  [`examples/lib/boids_examples/games/living_land.ex`](https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/living_land.ex).
+  [`examples/living_land/living_land.ex`](https://github.com/sntran/boids/blob/main/examples/living_land/living_land.ex).
 - **The playground** (`/playground`) starts boids from a definition
   that you write: kinds of boids, their rules, what they do when they
   see another kind, and chains of boids that follow each other.
