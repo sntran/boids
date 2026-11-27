@@ -245,7 +245,8 @@ defmodule BoidsExamples.LandTest do
     Scene.input(scene, %{"add" => "grazers"})
     Scene.input(scene, %{"add" => "hunters"})
     Scene.input(scene, %{"rock" => [80, 45]})
-    assert wait(fn -> length(species(scene, :grazers)) == 9 and length(species(scene, :hunters)) == 4 end)
+    # A hunter can eat a grazer while the test waits.
+    assert wait(fn -> length(species(scene, :grazers)) >= 7 and length(species(scene, :hunters)) == 4 end)
 
     Scene.input(scene, %{"reset" => true})
     assert wait(fn -> length(species(scene, :grazers)) == 4 and length(species(scene, :hunters)) == 1 end)

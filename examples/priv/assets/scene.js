@@ -321,6 +321,10 @@
     // Shapes that do not turn with the direction of the boid.
     var still = { leaf: true, spark: true };
 
+    // The shadow of a shape: its half length and its half width, as parts
+    // of the size. A person is wider across than along its way.
+    var shadows = { person: [0.42, 0.62], child: [0.36, 0.52], sheep: [0.75, 0.6], beetle: [0.65, 0.5], bee: [0.6, 0.45], duck: [0.6, 0.45], duckling: [0.6, 0.45], firefly: [0.4, 0.3], leaf: [0.9, 0.5], spark: [0.5, 0.5] };
+
     // --- The grounds --------------------------------------------------
     //
     // `ground` of the header: grass, water, sand, floor or night. The
@@ -472,8 +476,9 @@
           // that a person sees its shape on a small screen.
           var body = size * 1.5;
           // A shadow under the animal, then the animal in its direction.
+          var shadow = shadows[boid.kind.shape] || [0.75, 0.42];
           ctx.fillStyle = c.shade;
-          ellipse(body * 0.12, body * 0.18, body * 0.75, body * 0.42, -boid.angle);
+          ellipse(body * 0.12, body * 0.18, body * shadow[0], body * shadow[1], -boid.angle);
           ctx.fill();
           ctx.save();
           if (!still[boid.kind.shape]) { ctx.rotate(-boid.angle); }
