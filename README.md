@@ -88,12 +88,34 @@ list:
 
 The 200 boids now move in real time: each is a process that makes a step
 each 50 ms. `snapshot/1` reads their positions, for example to draw
-them. `examples/terminal.exs` draws a flock, a hawk and two obstacles in
-the terminal:
+them.
+
+## See a flock
+
+`examples/web.exs` shows a flock in the browser: birds that flock, two
+hawks that hunt them and then rest, a convoy that follows its leader,
+and three rocks.
 
 ```sh
-mix run examples/terminal.exs
+mix run examples/web.exs
 ```
+
+Then open `http://localhost:4000`. The example has no dependency: it is
+a small server on top of the library, and a page that draws the boids.
+It uses each part of the library:
+
+- The birds are boids of `boids:populate/3`, with rules only.
+- A hawk is a module with the behavior `gen_boid`. It senses its prey,
+  it decides to hunt or to rest, and it uses its energy.
+- Each boid of the convoy has the relation `follows` to the boid before
+  it, and a rule with that relation.
+- The number of the groups of the flock comes from `boids:graph/2`.
+
+`mix run examples/web.exs record run.html` writes a run of 30 seconds to
+one page, which plays with no server.
+
+`examples/terminal.exs` draws a smaller flock in the terminal, and
+`examples/speed.exs` measures the speed of a flock on your computer.
 
 ## A boid with a behavior
 

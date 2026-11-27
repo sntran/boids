@@ -1,0 +1,331 @@
+<title>Boids in Flight</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one sky (the canvas) with a narrow instrument strip below it, as the panel of a field observer. */
+  :root {
+    --sky: #eaf1f6;
+    --panel: #f7fafc;
+    --ink: #142230;
+    --muted: #586b7c;
+    --line: #cfdbe5;
+    --bird: #2c4257;
+    --hawk: #b4481c;
+    --convoy: #0d7a78;
+    --rock: #b4c3cf;
+    --display: "Space Grotesk", "Inter", system-ui, sans-serif;
+    --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --data: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --sky: #0e1822; --panel: #131f2b; --ink: #e4edf4; --muted: #8fa3b5; --line: #26384a;
+      --bird: #c3d3e1; --hawk: #f08c4e; --convoy: #4fcabf; --rock: #2a3b4c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --sky: #0e1822; --panel: #131f2b; --ink: #e4edf4; --muted: #8fa3b5; --line: #26384a;
+    --bird: #c3d3e1; --hawk: #f08c4e; --convoy: #4fcabf; --rock: #2a3b4c;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--panel);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .page {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding-block: 28px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; }
+  h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); max-width: 62ch; min-width: 0; }
+  .sky {
+    position: relative;
+    background: var(--sky);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  canvas { display: block; width: 100%; height: auto; }
+  .source {
+    position: absolute; left: 10px; top: 10px;
+    font-family: var(--data); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px;
+  }
+  .strip { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: flex-start; }
+  .reading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .reading dt {
+    font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .reading dd { margin: 0; font-family: var(--data); font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+  dl { margin: 0; display: contents; }
+  .mark { width: 10px; height: 10px; display: inline-block; }
+  .mark.bird { background: var(--bird); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+  .mark.hawk { background: var(--hawk); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+  .mark.convoy { background: var(--convoy); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+  .energy { display: flex; align-items: center; gap: 8px; }
+  .bar { width: 72px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--hawk); }
+  .controls { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  button {
+    font: 500 0.85rem var(--body); color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible { outline: 2px solid var(--convoy); outline-offset: 2px; }
+  button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px 28px; border-top: 1px solid var(--line); padding-top: 18px; }
+  .notes h2 { font-family: var(--display); font-size: 0.95rem; font-weight: 600; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .notes p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+  code { font-family: var(--data); font-size: 0.85em; color: var(--ink); }
+</style>
+
+<div class="page">
+  <header>
+    <h1>Boids in Flight</h1>
+    <p>Each boid is one Erlang process. It senses its neighbors, decides, and acts, on its own clock.</p>
+  </header>
+
+  <div class="sky">
+    <canvas id="sky" width="1600" height="900" role="img" aria-label="A flock of birds, two hawks and a convoy that move around three rocks"></canvas>
+    <span class="source" id="source">Loading</span>
+  </div>
+
+  <div class="strip">
+    <dl>
+      <div class="reading"><dt><span class="mark bird"></span>Birds</dt><dd id="birds">0</dd></div>
+      <div class="reading"><dt>Groups of the flock</dt><dd id="groups">0</dd></div>
+      <div class="reading"><dt><span class="mark hawk"></span>Hawk 1</dt><dd class="energy"><span id="mode0">rests</span><span class="bar"><i id="bar0"></i></span></dd></div>
+      <div class="reading"><dt><span class="mark hawk"></span>Hawk 2</dt><dd class="energy"><span id="mode1">rests</span><span class="bar"><i id="bar1"></i></span></dd></div>
+      <div class="reading"><dt><span class="mark convoy"></span>Convoy</dt><dd id="convoy">0</dd></div>
+      <div class="reading"><dt>Time</dt><dd id="time">0.0 s</dd></div>
+    </dl>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+      <button id="links" type="button" aria-pressed="true">Relations</button>
+      <button id="sight" type="button" aria-pressed="false">Sight of the hawks</button>
+    </div>
+  </div>
+
+  <section class="notes">
+    <div>
+      <h2><span class="mark bird"></span>The birds follow rules</h2>
+      <p>Each bird has five rules: <code>avoid</code>, <code>evade</code>, <code>separation</code>, <code>alignment</code> and <code>cohesion</code>. No process tells the flock where to go.</p>
+    </div>
+    <div>
+      <h2><span class="mark hawk"></span>The hawks decide</h2>
+      <p>A hawk is a module with the behavior <code>gen_boid</code>. It hunts while it has energy, then it rests. The bar shows its energy.</p>
+    </div>
+    <div>
+      <h2><span class="mark convoy"></span>The convoy has relations</h2>
+      <p>Each boid of the convoy has the relation <code>follows</code> to the boid before it. The lines show these relations.</p>
+    </div>
+    <div>
+      <h2>The flock is a graph</h2>
+      <p>The number of groups comes from <code>boids:graph/2</code> and <code>graph:components/1</code>, one time each second.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("sky");
+  var ctx = canvas.getContext("2d");
+  var el = function (id) { return document.getElementById(id); };
+  var run = null;        // the box, the groups, the rocks and the relations
+  var before = null;     // the moment before the last moment
+  var last = null;       // the last moment
+  var lastAt = 0;        // when the last moment came
+  var frames = null;     // the moments of a recorded run
+  var cursor = 0;
+  var paused = false;
+  var showLinks = true;
+  var showSight = false;
+  var PERIOD = 50;       // the milliseconds between two moments
+
+  function colors() {
+    var style = getComputedStyle(document.documentElement);
+    var read = function (name) { return style.getPropertyValue(name).trim(); };
+    return { bird: read("--bird"), hawk: read("--hawk"), convoy: read("--convoy"), rock: read("--rock"), line: read("--line") };
+  }
+
+  function start(header) {
+    run = header;
+    canvas.width = 1600;
+    canvas.height = Math.round(1600 * run.box[1] / run.box[0]);
+  }
+
+  function take(moment) {
+    before = last || moment;
+    last = moment;
+    lastAt = performance.now();
+    if (moment.g !== undefined) { el("groups").textContent = moment.g; }
+    for (var i = 0; i < moment.h.length && i < 2; i++) {
+      el("mode" + i).textContent = moment.h[i][0];
+      el("bar" + i).style.width = Math.round(moment.h[i][1] * 10) + "%";
+    }
+    el("time").textContent = (moment.n * PERIOD / 1000).toFixed(1) + " s";
+  }
+
+  function count() {
+    var birds = 0, convoy = 0;
+    for (var i = 3; i < last.b.length; i += 4) {
+      if (last.b[i] === 0) { birds++; } else if (last.b[i] === 2) { convoy++; }
+    }
+    el("birds").textContent = birds;
+    el("convoy").textContent = convoy;
+  }
+
+  // The position between two moments. A boid that went across a side of
+  // the box is at its new position.
+  function between(a, b, size, part) {
+    return Math.abs(b - a) > size / 2 ? b : a + (b - a) * part;
+  }
+
+  function turn(a, b, part) {
+    var d = b - a;
+    if (d > Math.PI) { d -= 2 * Math.PI; } else if (d < -Math.PI) { d += 2 * Math.PI; }
+    return a + d * part;
+  }
+
+  function draw(now) {
+    requestAnimationFrame(draw);
+    if (!run || !last) { return; }
+    if (frames && !paused && now - lastAt >= PERIOD) {
+      cursor = (cursor + 1) % frames.length;
+      if (cursor === 0) { last = null; }
+      take(frames[cursor]);
+    }
+    var part = paused ? 1 : Math.min((now - lastAt) / PERIOD, 1);
+    var scale = canvas.width / run.box[0];
+    var height = run.box[1];
+    var c = colors();
+    var at = [];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = c.rock;
+    run.rocks.forEach(function (rock) {
+      ctx.beginPath();
+      ctx.arc(rock[0] * scale, (height - rock[1]) * scale, rock[2] * scale, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+
+    for (var i = 0; i < last.b.length; i += 4) {
+      at.push([
+        between(before.b[i], last.b[i], run.box[0], part),
+        between(before.b[i + 1], last.b[i + 1], height, part),
+        turn(before.b[i + 2], last.b[i + 2], part),
+        last.b[i + 3]
+      ]);
+    }
+
+    if (showSight) {
+      ctx.strokeStyle = c.hawk;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 1.5;
+      at.forEach(function (boid) {
+        if (boid[3] !== 1) { return; }
+        ctx.beginPath();
+        ctx.arc(boid[0] * scale, (height - boid[1]) * scale, 28 * scale, 0, 2 * Math.PI);
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    if (showLinks) {
+      ctx.strokeStyle = c.convoy;
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 2;
+      run.links.forEach(function (link) {
+        var from = at[link[0]], to = at[link[1]];
+        if (!from || !to) { return; }
+        if (Math.abs(from[0] - to[0]) > run.box[0] / 2 || Math.abs(from[1] - to[1]) > height / 2) { return; }
+        ctx.beginPath();
+        ctx.moveTo(from[0] * scale, (height - from[1]) * scale);
+        ctx.lineTo(to[0] * scale, (height - to[1]) * scale);
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    at.forEach(function (boid) {
+      var size = boid[3] === 1 ? 2.4 : boid[3] === 2 ? 1.5 : 1.2;
+      ctx.fillStyle = boid[3] === 1 ? c.hawk : boid[3] === 2 ? c.convoy : c.bird;
+      ctx.save();
+      ctx.translate(boid[0] * scale, (height - boid[1]) * scale);
+      ctx.rotate(-boid[2]);
+      ctx.beginPath();
+      ctx.moveTo(size * scale, 0);
+      ctx.lineTo(-size * 0.8 * scale, size * 0.6 * scale);
+      ctx.lineTo(-size * 0.4 * scale, 0);
+      ctx.lineTo(-size * 0.8 * scale, -size * 0.6 * scale);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  function play(recorded) {
+    start(recorded);
+    frames = recorded.frames;
+    cursor = 0;
+    take(frames[0]);
+    count();
+    el("source").textContent = "Recorded run of " + Math.round(frames.length * PERIOD / 1000) + " s";
+  }
+
+  function live() {
+    var events = new EventSource("events");
+    el("source").textContent = "Live";
+    events.addEventListener("start", function (event) { start(JSON.parse(event.data)); last = null; });
+    events.onmessage = function (event) {
+      if (paused) { return; }
+      take(JSON.parse(event.data));
+      count();
+    };
+    events.onerror = function () { el("source").textContent = "No connection to the flock"; };
+  }
+
+  function toggle(id, change) {
+    el(id).addEventListener("click", function () {
+      var on = change();
+      el(id).setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+  toggle("pause", function () { paused = !paused; el("pause").textContent = paused ? "Play" : "Pause"; lastAt = performance.now(); return paused; });
+  toggle("links", function () { showLinks = !showLinks; return showLinks; });
+  toggle("sight", function () { showSight = !showSight; return showSight; });
+
+  // A person who wants less movement starts the flock with the button.
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    paused = true;
+    el("pause").textContent = "Play";
+    el("pause").setAttribute("aria-pressed", "true");
+  }
+
+  var given = window.BOIDS;
+  if (given && given.frames) {
+    play(given);
+  } else if (given && given.live) {
+    live();
+  } else {
+    fetch("frames.json")
+      .then(function (response) { return response.json(); })
+      .then(play)
+      .catch(function () { el("source").textContent = "No run to show"; });
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
