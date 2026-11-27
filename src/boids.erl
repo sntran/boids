@@ -410,7 +410,15 @@ For a world on several nodes, the result has the boids of all the nodes.
 -spec snapshot(world()) -> [boids_space:entry()].
 snapshot(World) ->
     Space = space(World),
-    lists:append([boids_space:all(Space) | everywhere(Space, snapshot, [])]).
+    case everywhere(Space, snapshot, []) of
+        [] ->
+            boids_space:all(Space);
+        Others ->
+            %% A boid that moves to another node at this moment can be in
+            %% the rows of the two nodes: keep one row for each id.
+            Rows = lists:append([boids_space:all(Space) | Others]),
+            maps:values(#{Id => Row || Row = #{id := Id} <- Rows})
+    end.
 
 -doc "The boids of a world that are on this node: see `snapshot/1`.".
 -spec snapshot(world(), local) -> [boids_space:entry()].

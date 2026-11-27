@@ -537,6 +537,16 @@ What changes for your code:
   node of the tile where they are.
 - Make a tile much larger than the distance that a boid sees. Then few
   boids are near a border.
+- Make the world many tiles large. With few tiles, one node can get
+  most of them: in a test with 9 tiles and two nodes, one node had two
+  thirds of the boids.
+- Several nodes help when they have their own processors. On one
+  computer, a world of 6,000 boids on two nodes made 15 % to 25 % fewer
+  steps than on one node: that is the cost of the borders and of the
+  moves.
+- A read of all the nodes (`boids:snapshot/1`, `boids:count/1`) is not
+  of one moment: a boid that moves at that moment can be absent, or
+  counted two times by `count/1`.
 - The ids of a world are for one boid each, on all the nodes.
 
 The move is safe when the network has faults:
