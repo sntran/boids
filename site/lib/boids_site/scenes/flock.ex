@@ -51,11 +51,12 @@ defmodule BoidsSite.Scenes.Flock do
 
   @impl true
   def start(_definition) do
-    {:ok, flock} =
-      :boids.start_flock(bounds: {{0, 0}, {160, 60}}, wrap: true, defaults: %{tick: BoidsSite.Scene.tick()})
+    {:ok, server} =
+      :boids.start_space(bounds: {{0, 0}, {160, 60}}, wrap: true, defaults: %{tick: BoidsSite.Scene.tick()})
 
-    :ok = :boids.set_obstacle(flock, :west, {42, 38}, 6)
-    :ok = :boids.set_obstacle(flock, :east, {118, 20}, 7)
+    space = :boids.space(server)
+    :ok = :boids.set_obstacle(space, :west, {42, 38}, 6)
+    :ok = :boids.set_obstacle(space, :east, {118, 20}, 7)
 
     birds = [
       {:avoid, 4.0, %{lookahead: 1.5}},
@@ -66,7 +67,7 @@ defmodule BoidsSite.Scenes.Flock do
     ]
 
     {:ok, _} =
-      :boids.populate(flock, 60,
+      :boids.populate(space, 60,
         group: :birds,
         rules: birds,
         min_speed: 6,
@@ -75,8 +76,8 @@ defmodule BoidsSite.Scenes.Flock do
         search: 2
       )
 
-    {:ok, hawk} = :gen_boid.start(Hawk, {20, 20}, flock: flock)
-    {:ok, %{flock: flock, space: :boids.space(flock), hawk: hawk}}
+    {:ok, hawk} = :gen_boid.start(Hawk, {20, 20}, space: space)
+    {:ok, %{space: space, hawk: hawk}}
   end
 
   @impl true

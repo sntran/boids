@@ -2,7 +2,7 @@
 #
 #     mix run examples/speed.exs [BOIDS] [NEIGHBORS]
 #
-# The script starts a flock of boids that make 20 steps in a second
+# The script starts boids that make 20 steps in a second
 # (`tick => 50`), and counts the steps that they make. With too many
 # boids for the computer, each boid makes fewer steps. It does this for
 # boids that search their neighbors at each step, and for boids that
@@ -32,22 +32,22 @@ defmodule Speed do
     IO.puts("|---|---|---|")
 
     for search <- [1, 4] do
-      {:ok, flock} = :boids.start_flock(bounds: {{0, 0}, {side, side}}, wrap: true)
+      {:ok, space} = :boids.start_space(bounds: {{0, 0}, {side, side}}, wrap: true)
       steps = :counters.new(1, [:write_concurrency])
 
       for _ <- 1..count do
         pos = {:rand.uniform() * side, :rand.uniform() * side}
         vel = :boids_vec.scale(:boids_vec.random_unit(2), 5.0)
-        {:ok, _} = :gen_boid.start(Counter, %{pos: pos, vel: vel, search: search, state: steps}, flock: flock)
+        {:ok, _} = :gen_boid.start(Counter, %{pos: pos, vel: vel, search: search, state: steps}, space: space)
       end
 
-      # The first seconds move the boids from random positions to a flock.
+      # The first seconds move the boids from random positions to flocks.
       Process.sleep(3000)
       before = :counters.get(steps, 1)
       Process.sleep(5000)
       rate = (:counters.get(steps, 1) - before) / 5
       IO.puts("| each #{search} steps | #{round(rate)} | #{Float.round(rate / count, 1)} |")
-      :ok = :boids.stop_flock(flock)
+      :ok = :boids.stop_space(space)
     end
   end
 end

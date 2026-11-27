@@ -36,8 +36,8 @@ defmodule BoidsReadmeTest do
   defmodule Person do
     use GenServer
 
-    def init(flock) do
-      {:ok, space, boid} = :boids.join(flock, pos: {0, 0}, vel: {1, 0})
+    def init(name) do
+      {:ok, space, boid} = :boids.join(name, pos: {0, 0}, vel: {1, 0})
       Process.send_after(self(), :tick, 5)
       {:ok, %{space: space, boid: boid}}
     end
@@ -49,36 +49,36 @@ defmodule BoidsReadmeTest do
   end
 
   setup do
-    {:ok, flock} = :boids.start_flock(bounds: {{0, 0}, {100, 100}}, wrap: true)
-    on_exit(fn -> :boids.stop_flock(flock) end)
-    %{flock: flock}
+    {:ok, space} = :boids.start_space(bounds: {{0, 0}, {100, 100}}, wrap: true)
+    on_exit(fn -> :boids.stop_space(space) end)
+    %{space: space}
   end
 
-  test "a first flock", %{flock: flock} do
-    {:ok, ids} = :boids.populate(flock, 200, max_speed: 12.0)
+  test "a first flock", %{space: space} do
+    {:ok, ids} = :boids.populate(space, 200, max_speed: 12.0)
     assert length(ids) == 200
 
     assert [%{id: id, pos: {_, _}, vel: {_, _}, group: :default, data: :undefined, pid: id} | _] =
-             :boids.snapshot(flock)
+             :boids.snapshot(space)
 
     assert is_pid(id)
-    before = Map.new(:boids.snapshot(flock), &{&1.id, &1.pos})
-    assert eventually(fn -> Enum.all?(:boids.snapshot(flock), &(&1.pos != before[&1.id])) end)
+    before = Map.new(:boids.snapshot(space), &{&1.id, &1.pos})
+    assert eventually(fn -> Enum.all?(:boids.snapshot(space), &(&1.pos != before[&1.id])) end)
   end
 
-  test "a boid with a behavior", %{flock: flock} do
-    {:ok, hawk} = :gen_boid.start(Hawk, {50, 50}, flock: flock)
+  test "a boid with a behavior", %{space: space} do
+    {:ok, hawk} = :gen_boid.start(Hawk, {50, 50}, space: space)
     assert :gen_boid.call(hawk, :energy) == 10.0
     assert :gen_boid.which_rules(hawk) == [:wander]
 
     # The hawk sees a bird: it pursues the bird, and it uses energy.
-    {:ok, _bird} = :boids.add(flock, pos: {55, 50}, group: :birds, rules: [], tick: :manual)
-    for _ <- 1..10, do: :boids.step(flock, 0.05)
+    {:ok, _bird} = :boids.add(space, pos: {55, 50}, group: :birds, rules: [], tick: :manual)
+    for _ <- 1..10, do: :boids.step(space, 0.05)
     assert :gen_boid.which_rules(hawk) == [:pursue]
     assert :gen_boid.call(hawk, :energy) < 10.0
   end
 
-  test "the rules of a boid", %{flock: flock} do
+  test "the rules of a boid", %{space: space} do
     birds = [
       {:avoid, 4.0},
       {:evade, 3.0, %{target: {:group, :hawks}, radius: 12}},
@@ -88,29 +88,29 @@ defmodule BoidsReadmeTest do
     ]
 
     assert {:ok, _} =
-             :boids.populate(flock, 70, %{group: :birds, rules: birds, combine: :priority, tick: :manual})
+             :boids.populate(space, 70, %{group: :birds, rules: birds, combine: :priority, tick: :manual})
 
     hawk = [{:avoid, 4.0}, {:pursue, 1.0, %{target: {:group, :birds}}}, {:wander, 0.5}]
 
     assert {:ok, id} =
-             :boids.add(flock, %{pos: {50, 50}, group: :hawks, rules: hawk, perception: 25, tick: :manual})
+             :boids.add(space, %{pos: {50, 50}, group: :hawks, rules: hawk, perception: 25, tick: :manual})
 
-    assert :boids.set_obstacle(flock, :rock, {30, 30}, 5) == :ok
-    for _ <- 1..20, do: :boids.step(flock, 0.05)
-    assert :boids.update(flock, id, %{rules: [{:arrive, 1.0, %{target: {10, 10}}}]}) == :ok
-    for _ <- 1..400, do: :boids.step(flock, 0.05)
-    {:ok, %{pos: pos}} = :boids.lookup(flock, id)
+    assert :boids.set_obstacle(space, :rock, {30, 30}, 5) == :ok
+    for _ <- 1..20, do: :boids.step(space, 0.05)
+    assert :boids.update(space, id, %{rules: [{:arrive, 1.0, %{target: {10, 10}}}]}) == :ok
+    for _ <- 1..400, do: :boids.step(space, 0.05)
+    {:ok, %{pos: pos}} = :boids.lookup(space, id)
     assert_vec(pos, {10.0, 10.0}, 0.1)
 
     # One rule at a time, with a name for each of two rules of seek.
-    assert :boids.add_rule(flock, id, {{:seek, :home}, 1.0, %{target: {0, 0}}}) == :ok
-    assert :boids.add_rule(flock, id, {{:seek, :food}, 2.0, %{target: {40, 10}}}) == :ok
-    assert :boids.which_rules(flock, id) == {:ok, [:arrive, {:seek, :home}, {:seek, :food}]}
-    assert :boids.delete_rule(flock, id, {:seek, :food}) == :ok
-    assert :boids.which_rules(flock, id) == {:ok, [:arrive, {:seek, :home}]}
+    assert :boids.add_rule(space, id, {{:seek, :home}, 1.0, %{target: {0, 0}}}) == :ok
+    assert :boids.add_rule(space, id, {{:seek, :food}, 2.0, %{target: {40, 10}}}) == :ok
+    assert :boids.which_rules(space, id) == {:ok, [:arrive, {:seek, :home}, {:seek, :food}]}
+    assert :boids.delete_rule(space, id, {:seek, :food}) == :ok
+    assert :boids.which_rules(space, id) == {:ok, [:arrive, {:seek, :home}]}
   end
 
-  test "a rule of your own", %{flock: flock} do
+  test "a rule of your own", %{space: space} do
     gravity = fn _boid, _neighbors, _env -> {0, -9.81} end
 
     fear = fn boid, neighbors, _env ->
@@ -121,76 +121,79 @@ defmodule BoidsReadmeTest do
     end
 
     {:ok, id} =
-      :boids.add(flock, pos: {50, 50}, rules: [{gravity, 1.0}, {fear, 3.0}], max_speed: 5, tick: :manual)
+      :boids.add(space, pos: {50, 50}, rules: [{gravity, 1.0}, {fear, 3.0}], max_speed: 5, tick: :manual)
 
-    {:ok, _cat} = :boids.add(flock, pos: {53, 50}, group: :cats, rules: [], max_speed: 0, tick: :manual)
-    for _ <- 1..10, do: :boids.step(flock, 0.05)
-    {:ok, %{vel: {vx, vy}}} = :boids.lookup(flock, id)
+    {:ok, _cat} = :boids.add(space, pos: {53, 50}, group: :cats, rules: [], max_speed: 0, tick: :manual)
+    for _ <- 1..10, do: :boids.step(space, 0.05)
+    {:ok, %{vel: {vx, vy}}} = :boids.lookup(space, id)
     # The boid moves down, and away from the cat.
     assert vx < 0 and vy < 0
   end
 
-  test "the relations between the boids", %{flock: flock} do
+  test "the relations between the boids", %{space: space} do
     {:ok, leader} =
-      :boids.add(flock, pos: {50, 50}, vel: {2, 0}, rules: [cruise: 1.0], max_speed: 2, tick: :manual)
+      :boids.add(space, pos: {50, 50}, vel: {2, 0}, rules: [cruise: 1.0], max_speed: 2, tick: :manual)
 
-    {:ok, bird} = :boids.add(flock, pos: {20, 80}, rules: [], tick: :manual)
+    {:ok, bird} = :boids.add(space, pos: {20, 80}, rules: [], tick: :manual)
 
-    assert :boids.relate(flock, bird, :follows, leader) == :ok
-    assert :boids.update(flock, bird, %{rules: [{:leader, 1.0, %{target: {:related, :follows}}}]}) == :ok
-    assert :boids.related(flock, bird, :follows) == [leader]
-    assert :boids.related_to(flock, leader, :follows) == [bird]
+    assert :boids.relate(space, bird, :follows, leader) == :ok
+    assert :boids.update(space, bird, %{rules: [{:leader, 1.0, %{target: {:related, :follows}}}]}) == :ok
+    assert :boids.related(space, bird, :follows) == [leader]
+    assert :boids.related_to(space, leader, :follows) == [bird]
 
-    relations = :boids.relations(flock)
+    relations = :boids.relations(space)
     assert :graph.in_neighbours(relations, leader) == [bird]
     assert :graph.get_path(relations, bird, leader) == [bird, leader]
 
     # The bird comes behind its leader.
-    for _ <- 1..400, do: :boids.step(flock, 0.05)
-    {:ok, %{pos: at}} = :boids.lookup(flock, bird)
-    {:ok, %{pos: to}} = :boids.lookup(flock, leader)
-    assert :boids_vec.norm(:boids_space.offset(:boids.space(flock), at, to)) < 10
+    for _ <- 1..400, do: :boids.step(space, 0.05)
+    {:ok, %{pos: at}} = :boids.lookup(space, bird)
+    {:ok, %{pos: to}} = :boids.lookup(space, leader)
+    assert :boids_vec.norm(:boids_space.offset(:boids.space(space), at, to)) < 10
 
     # The relations of a boid go with the boid.
-    assert :boids.remove(flock, leader) == :ok
-    assert :boids.related(flock, bird, :follows) == []
+    assert :boids.remove(space, leader) == :ok
+    assert :boids.related(space, bird, :follows) == []
   end
 
   test "a hierarchy has no cycle" do
-    {:ok, flock} = :boids.start_flock(relations: :acyclic)
-    {:ok, a} = :boids.add(flock, pos: {0, 0}, tick: :manual)
-    {:ok, b} = :boids.add(flock, pos: {1, 0}, tick: :manual)
-    assert :boids.relate(flock, a, :follows, b) == :ok
-    assert :boids.relate(flock, b, :follows, a) == {:error, :cycle}
-    assert :graph.topsort(:boids.relations(flock)) == [a, b]
-    :boids.stop_flock(flock)
+    {:ok, space} = :boids.start_space(relations: :acyclic)
+    {:ok, a} = :boids.add(space, pos: {0, 0}, tick: :manual)
+    {:ok, b} = :boids.add(space, pos: {1, 0}, tick: :manual)
+    assert :boids.relate(space, a, :follows, b) == :ok
+    assert :boids.relate(space, b, :follows, a) == {:error, :cycle}
+    assert :graph.topsort(:boids.relations(space)) == [a, b]
+    :boids.stop_space(space)
   end
 
-  test "the flock as a graph", %{flock: flock} do
+  test "the flocks of a space", %{space: space} do
     still = [rules: [], tick: :manual]
-    {:ok, a} = :boids.add(flock, [pos: {10, 10}] ++ still)
-    {:ok, b} = :boids.add(flock, [pos: {15, 10}] ++ still)
-    {:ok, c} = :boids.add(flock, [pos: {60, 60}] ++ still)
+    {:ok, a} = :boids.add(space, [pos: {10, 10}] ++ still)
+    {:ok, b} = :boids.add(space, [pos: {15, 10}] ++ still)
+    {:ok, c} = :boids.add(space, [pos: {60, 60}] ++ still)
 
-    graph = :boids.graph(flock, 10)
-    assert Enum.sort(Enum.map(:graph.components(graph), &Enum.sort/1)) == Enum.sort([Enum.sort([a, b]), [c]])
+    flocks = :boids.flocks(space, 10)
+    assert Enum.sort(Enum.map(flocks, &Enum.sort/1)) == Enum.sort([Enum.sort([a, b]), [c]])
+    assert Enum.max(Enum.map(flocks, &length/1)) == 2
+
+    graph = :boids.graph(space, 10)
     assert for(id <- :graph.vertices(graph), :graph.out_degree(graph, id) == 0, do: id) == [c]
     assert :graph.has_path(graph, a, b)
     refute :graph.has_path(graph, a, c)
   end
 
-  test "a process of yours as a boid", %{flock: flock} do
-    {:ok, pid} = GenServer.start_link(Person, flock)
-    assert {:ok, %{pos: {0, 0}}} = :boids.lookup(flock, pid)
-    assert eventually(fn -> elem(:boids.lookup(flock, pid), 1).pos != {0, 0} end)
+  test "a process of yours as a boid", %{space: space} do
+    {:ok, pid} = GenServer.start_link(Person, space)
+    assert {:ok, %{pos: {0, 0}}} = :boids.lookup(space, pid)
+    assert eventually(fn -> elem(:boids.lookup(space, pid), 1).pos != {0, 0} end)
     GenServer.stop(pid)
-    assert eventually(fn -> :boids.count(flock) == 0 end)
+    assert eventually(fn -> :boids.count(space) == 0 end)
   end
 
-  test "a flock below a supervisor of yours" do
-    children = [{:boids, name: :boids_readme_flock, bounds: {{0, 0}, {100, 100}}}]
+  test "a space below a supervisor of yours" do
+    children = [{:boids, name: :boids_readme_space, bounds: {{0, 0}, {100, 100}}}]
     {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one)
-    assert :boids.count(:boids_readme_flock) == 0
+    assert :boids.count(:boids_readme_space) == 0
     Supervisor.stop(sup)
   end
 end

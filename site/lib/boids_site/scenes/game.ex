@@ -41,7 +41,7 @@ defmodule BoidsSite.Scenes.Game do
     @behaviour :gen_boid
 
     @impl true
-    def init(%{pos: pos, vel: vel, size: size, flock: flock}) do
+    def init(%{pos: pos, vel: vel, size: size, space: space}) do
       speed = :boids_vec.norm(vel)
 
       {:ok,
@@ -54,22 +54,22 @@ defmodule BoidsSite.Scenes.Game do
          min_speed: speed * 0.6,
          max_speed: speed * 1.4,
          rules: [{:cruise, 1.0, %{speed: speed}}, {:separation, 2.0, %{radius: size * 3.0, groups: [:rocks]}}],
-         state: flock
+         state: space
        }}
     end
 
     @impl true
-    def handle_cast(:hit, %{data: size, pos: pos, vel: vel, state: flock} = boid) do
+    def handle_cast(:hit, %{data: size, pos: pos, vel: vel, state: space} = boid) do
       if size > 1 do
         for angle <- [-0.7, 0.7] do
           part = %{
             pos: pos,
             vel: :boids_vec.scale(BoidsSite.Scenes.Game.turn(vel, angle), 1.4),
             size: size - 1,
-            flock: flock
+            space: space
           }
 
-          {:ok, _} = :gen_boid.start(Rock, part, flock: flock)
+          {:ok, _} = :gen_boid.start(Rock, part, space: space)
         end
       end
 
@@ -148,7 +148,7 @@ defmodule BoidsSite.Scenes.Game do
     alias BoidsSite.Scenes.Game
 
     @impl true
-    def init(%{pos: pos, flock: flock}) do
+    def init(%{pos: pos, space: space}) do
       rules = [
         {{:separation, :rocks}, 3.0, %{radius: 10, groups: [:rocks]}},
         {:wander, 1.0},
@@ -156,13 +156,13 @@ defmodule BoidsSite.Scenes.Game do
       ]
 
       {:ok,
-       %{pos: pos, group: :queen, data: 5, perception: 16, max_speed: 6, rules: rules, state: %{flock: flock, steps: 1}}}
+       %{pos: pos, group: :queen, data: 5, perception: 16, max_speed: 6, rules: rules, state: %{space: space, steps: 1}}}
     end
 
     @impl true
-    def handle_act(%{id: id, pos: pos, state: %{flock: flock, steps: steps} = state} = boid) do
-      if rem(steps, Game.steps(2500)) == 0 and length(:boids.related_to(flock, id, :guards)) < 10 do
-        Queen.drone(flock, id, pos)
+    def handle_act(%{id: id, pos: pos, state: %{space: space, steps: steps} = state} = boid) do
+      if rem(steps, Game.steps(2500)) == 0 and length(:boids.related_to(space, id, :guards)) < 10 do
+        Queen.drone(space, id, pos)
       end
 
       {:ok, %{boid | state: %{state | steps: steps + 1}}}
@@ -173,9 +173,9 @@ defmodule BoidsSite.Scenes.Game do
     def handle_cast(:hit, %{data: left} = boid), do: {:noreply, %{boid | data: left - 1}}
 
     @doc "Start a drone that guards a queen."
-    def drone(flock, queen, {x, y}) do
-      {:ok, drone} = :gen_boid.start(Drone, {x + :rand.uniform() * 4 - 2, y + :rand.uniform() * 4 - 2}, flock: flock)
-      :boids.relate(flock, drone, :guards, queen)
+    def drone(space, queen, {x, y}) do
+      {:ok, drone} = :gen_boid.start(Drone, {x + :rand.uniform() * 4 - 2, y + :rand.uniform() * 4 - 2}, space: space)
+      :boids.relate(space, drone, :guards, queen)
     end
   end
 
@@ -198,9 +198,9 @@ defmodule BoidsSite.Scenes.Game do
     ]
 
     @impl true
-    def init(flock) do
+    def init(space) do
       state = %{
-        flock: flock,
+        space: space,
         keys: %{},
         idle: Game.steps(60_000),
         heading: 0.0,
@@ -261,7 +261,7 @@ defmodule BoidsSite.Scenes.Game do
           forward = Game.direction(state.heading)
           from = :boids_vec.add(pos, :boids_vec.scale(forward, 2.5))
           shot = %{pos: from, vel: :boids_vec.add(:boids_vec.scale(forward, 45.0), vel), ship: self()}
-          {:ok, _} = :gen_boid.start(Shot, shot, flock: state.flock)
+          {:ok, _} = :gen_boid.start(Shot, shot, space: state.space)
           %{state | wait: Game.steps(250)}
         else
           %{state | wait: max(state.wait - 1, 0)}
@@ -320,17 +320,17 @@ defmodule BoidsSite.Scenes.Game do
 
   @impl true
   def start(_definition) do
-    {:ok, flock} =
-      :boids.start_flock(
+    {:ok, server} =
+      :boids.start_space(
         bounds: {{0, 0}, {@width, @height}},
         wrap: true,
         cell_size: 12,
         defaults: %{tick: BoidsSite.Scene.tick()}
       )
 
-    space = :boids.space(flock)
-    {:ok, ship} = :gen_boid.start(Ship, space, flock: space)
-    scene = %{flock: flock, space: space, ship: ship}
+    space = :boids.space(server)
+    {:ok, ship} = :gen_boid.start(Ship, space, space: space)
+    scene = %{space: space, ship: ship}
     for _ <- 1..5, do: rock(scene)
     queen(scene)
     {:ok, scene}
@@ -366,7 +366,7 @@ defmodule BoidsSite.Scenes.Game do
           ["Pilot", if(data.auto, do: "autopilot", else: "you")]
         ]
 
-        # Each second: the swarms of drones, from the flock as a graph.
+        # Each second: the swarms of drones, from the space as a graph.
         readings = if rem(number, steps(1000)) == 0, do: readings ++ [["Swarms", swarms(space)]], else: readings
         %{r: readings, x: %{thrust: data.thrust, safe: data.safe}}
 
@@ -410,13 +410,13 @@ defmodule BoidsSite.Scenes.Game do
 
     if :boids_vec.norm(:boids_space.offset(space, at, pos)) > 30 do
       vel = :boids_vec.scale(:boids_vec.random_unit(2), 3.0 + :rand.uniform() * 3.0)
-      {:ok, _} = :gen_boid.start(Rock, %{pos: pos, vel: vel, size: 3, flock: space}, flock: space)
+      {:ok, _} = :gen_boid.start(Rock, %{pos: pos, vel: vel, size: 3, space: space}, space: space)
     end
   end
 
   defp queen(%{space: space}) do
     pos = {:rand.uniform() * @width, :rand.uniform() * 20.0}
-    {:ok, queen} = :gen_boid.start(Queen, %{pos: pos, flock: space}, flock: space)
+    {:ok, queen} = :gen_boid.start(Queen, %{pos: pos, space: space}, space: space)
     for _ <- 1..5, do: Queen.drone(space, queen, pos)
   end
 end

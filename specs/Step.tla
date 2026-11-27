@@ -1,26 +1,26 @@
 ---- MODULE Step ----
 (***************************************************************************)
-(* One step of all the boids of a flock (boids:step/2, gen_boid).         *)
-(* The caller asks each boid for its plan: the boid reads the flock and   *)
-(* calculates its new position, but it does not move. When each boid      *)
-(* answered, the caller asks each boid to move (commit). Thus each boid   *)
-(* calculates from the same state of the flock, and the result of a step  *)
-(* does not change with the order of the processes.                       *)
+(* One step of all the boids of a space (boids:step/2, gen_boid).          *)
+(* The caller asks each boid for its plan: the boid reads the space and    *)
+(* calculates its new position, but it does not move. When each boid       *)
+(* answered, the caller asks each boid to move (commit). Thus each boid    *)
+(* calculates from the same state of the space, and the result of a step   *)
+(* does not change with the order of the processes.                        *)
 (*                                                                         *)
-(* The position of a boid is a number here. A boid that reads the         *)
-(* positions s goes to See(s).                                            *)
+(* The position of a boid is a number here. A boid that reads the          *)
+(* positions s goes to See(s).                                             *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
-    Boids,      \* the boids of the flock
+    Boids,      \* the boids of the space
     Clocks,     \* the boids that also move on their own clock (a tick that is not manual)
     Steps,      \* the steps of the caller (a bound of the model)
     None,       \* no plan
     TwoParts    \* FALSE: the fault model where a boid moves when it calculates
 
 VARIABLES
-    val,        \* the position of each boid in the flock
+    val,        \* the position of each boid in the space
     plan,       \* the position that each boid calculated, or None
     phase,      \* "idle", "plan", "commit"
     wait,       \* the boids that did not answer in this part of the step
@@ -54,7 +54,7 @@ Begin ==
     /\ wait' = runs
     /\ UNCHANGED <<val, plan, steps, runs, ticked>>
 
-\* A boid calculates its new position from the flock as it is now.
+\* A boid calculates its new position from the space as it is now.
 Plan(b) ==
     /\ phase = "plan" /\ b \in wait \cap runs
     /\ IF TwoParts
@@ -115,7 +115,7 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Work)
 \* While the boids calculate, no boid moves.
 Quiet == phase = "plan" => val = base
 
-\* After a step, each boid is where a boid that read the flock at the
+\* After a step, each boid is where a boid that read the space at the
 \* start of the step goes. A boid whose process stopped before it moved
 \* is where it was.
 OneMoment ==

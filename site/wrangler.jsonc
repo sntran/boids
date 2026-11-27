@@ -9,7 +9,7 @@
   // app.com goes into the Worker as bytes. Without this rule, the import of
   // worker.js puts the bytes into the JavaScript.
   "rules": [{ "type": "Data", "globs": ["**/*.com"], "fallthrough": true }],
-  // Stateful: one Durable Object runs the VM with the flocks of all the
+  // Stateful: one Durable Object runs the VM with the boids of all the
   // visitors.
   "durable_objects": { "bindings": [{ "name": "BEAM", "class_name": "Beam" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Beam"] }],

@@ -1,6 +1,6 @@
--module(boids_flock).
+-module(boids_space_server).
 -moduledoc """
-The process of a flock: the owner of the space, the list of the
+The process of a space: the owner of its tables, the list of the
 processes that have a boid in it, and the relations between the boids.
 
 The process of a boid writes its own row in the space, with no message
@@ -12,7 +12,7 @@ is an edge with a label. This process has the graph, and it writes a
 copy of the relations of each boid to a table, where the boids read
 them with no message.
 
-Use the functions of `boids`. A flock starts with `boids:start_flock/1`,
+Use the functions of `boids`. A space starts with `boids:start_space/1`,
 or as a child of your supervisor with `boids:child_spec/1`.
 """.
 -behavior(gen_server).
@@ -21,9 +21,9 @@ or as a child of your supervisor with `boids:child_spec/1`.
 -export([relate/4, unrelate/4, relations/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
--export_type([flock/0]).
+-export_type([server/0]).
 
--type flock() :: pid() | atom() | {global, term()} | {via, module(), term()}.
+-type server() :: pid() | atom() | {global, term()} | {via, module(), term()}.
 
 -doc false.
 start_link(Sup, Opts0) ->
@@ -35,7 +35,7 @@ start_link(Sup, Opts0) ->
     end.
 
 -doc """
-Check the options of a flock, and give them as a map. A bad option gives
+Check the options of a space, and give them as a map. A bad option gives
 the error `{bad_option, {Key, Value}}`.
 """.
 -spec options(map() | [{atom(), term()}]) -> map().
@@ -62,7 +62,7 @@ options(Opts) when is_map(Opts) ->
 options(Opts) ->
     error({bad_option, Opts}).
 
-%% The option relations of a flock, and the other options.
+%% The option relations of a space, and the other options.
 kind(Opts) ->
     case maps:take(relations, Opts) of
         {Kind, Rest} when Kind =:= cyclic; Kind =:= acyclic -> {Kind, Rest};
@@ -70,68 +70,68 @@ kind(Opts) ->
         error -> {cyclic, Opts}
     end.
 
--doc "The space of a flock.".
--spec space(flock()) -> boids_space:space().
-space(Flock) ->
-    gen_server:call(Flock, space).
+-doc "The map of a space, with its tables (`boids_space`).".
+-spec space(server()) -> boids_space:space().
+space(Server) ->
+    gen_server:call(Server, space).
 
 -doc false.
-sup(Flock) ->
-    gen_server:call(Flock, sup).
+sup(Server) ->
+    gen_server:call(Server, sup).
 
 -doc false.
-boid_sup(#{owner := Flock}) ->
-    gen_server:call(Flock, boid_sup).
+boid_sup(#{owner := Server}) ->
+    gen_server:call(Server, boid_sup).
 
 -doc """
-Add the row of a boid of the process `Pid` to the space. The flock
-removes the row when the process stops. All the boids of a flock have
+Add the row of a boid of the process `Pid` to the space. The space
+removes the row when the process stops. All the boids of a space have
 positions of the same size: two numbers, or three.
 """.
 -spec join(boids_space:space(), pid(), boids_space:entry()) ->
     ok | {error, {exists, term()} | {bad_option, {pos, term()}}}.
-join(#{owner := Flock}, Pid, Entry) ->
-    gen_server:call(Flock, {join, Pid, Entry}).
+join(#{owner := Server}, Pid, Entry) ->
+    gen_server:call(Server, {join, Pid, Entry}).
 
 -doc """
 Remove the row of a boid of the process `Pid` from the space. When
 another process has the id now, its row stays.
 """.
 -spec leave(boids_space:space(), term(), pid()) -> ok.
-leave(#{owner := Flock}, Id, Pid) ->
-    gen_server:call(Flock, {leave, Id, Pid}).
+leave(#{owner := Server}, Id, Pid) ->
+    gen_server:call(Server, {leave, Id, Pid}).
 
 -doc """
 Add the relation `Label` from the boid `From` to the boid `To`. The
-result is `{error, {not_found, Id}}` for an id that is not in the flock,
-and `{error, cycle}` when the flock has the option `relations =>
+result is `{error, {not_found, Id}}` for an id that is not in the space,
+and `{error, cycle}` when the space has the option `relations =>
 acyclic` and the relation makes a cycle.
 """.
 -spec relate(boids_space:space(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
-relate(#{owner := Flock}, From, Label, To) ->
-    gen_server:call(Flock, {relate, From, Label, To}).
+relate(#{owner := Server}, From, Label, To) ->
+    gen_server:call(Server, {relate, From, Label, To}).
 
 -doc "Remove the relation `Label` from the boid `From` to the boid `To`.".
 -spec unrelate(boids_space:space(), term(), term(), term()) -> ok.
-unrelate(#{owner := Flock}, From, Label, To) ->
-    gen_server:call(Flock, {unrelate, From, Label, To}).
+unrelate(#{owner := Server}, From, Label, To) ->
+    gen_server:call(Server, {unrelate, From, Label, To}).
 
 -doc """
 The graph of the relations: each boid with a relation is a vertex, and
 each relation is an edge with its label.
 """.
 -spec relations(boids_space:space()) -> graph:graph().
-relations(#{owner := Flock}) ->
-    gen_server:call(Flock, relations).
+relations(#{owner := Server}) ->
+    gen_server:call(Server, relations).
 
 %% --- gen_server -------------------------------------------------------
 
 -doc false.
 init({Sup, Opts, Name}) ->
-    %% The tools that show processes show that this process is a flock.
-    proc_lib:set_label({boids, flock, Name}),
-    %% The boids of a flock that has too much work run all the time. The
-    %% flock must answer then too.
+    %% The tools that show processes show that this process is a space.
+    proc_lib:set_label({boids, space, Name}),
+    %% The boids of a space that has too much work run all the time. The
+    %% space must answer then too.
     process_flag(priority, high),
     {Relations, Rest} = kind(Opts),
     Links = graph:new([Relations]),
@@ -182,7 +182,7 @@ handle_call(relations, _From, State = #{links := Links}) ->
     {reply, Links, State};
 handle_call({leave, Id, Pid}, _From, State = #{space := Space}) ->
     %% A leave can come late: after the end of its process, and after
-    %% another process has the id (specs/Flock.tla, CheckOwner).
+    %% another process has the id (specs/Members.tla, CheckOwner).
     case boids_space:lookup(Space, Id) of
         {ok, #{pid := Pid}} -> {reply, ok, forget(Id, State)};
         _ -> {reply, ok, State}
@@ -202,7 +202,7 @@ handle_info(_Message, State) ->
     {noreply, State}.
 
 %% A boid that starts again with its id can come before the message
-%% 'DOWN' of its last process (specs/Flock.tla, TakeOver).
+%% 'DOWN' of its last process (specs/Members.tla, TakeOver).
 forget_dead(Id, State = #{space := Space}) ->
     case boids_space:lookup(Space, Id) of
         {ok, #{pid := Pid}} when node(Pid) =:= node() ->
@@ -225,7 +225,7 @@ forget(Id, State0 = #{space := Space}) ->
             State
     end.
 
-%% A boid that goes from the flock has no relation.
+%% A boid that goes from the space has no relation.
 unrelate(Id, State = #{space := Space, links := Links0}) ->
     case graph:has_vertex(Links0, Id) of
         true ->

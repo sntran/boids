@@ -2,12 +2,12 @@
 -moduledoc """
 The behavior of a boid: a process that senses, decides and acts.
 
-Each boid of a flock is a process with this behavior. At each step, the
+Each boid of a space is a process with this behavior. At each step, the
 boid does three things:
 
 1. **Sense.** It finds the neighbors that it sees, and the obstacles.
 2. **Decide.** It calculates the force of its rules.
-3. **Act.** It moves, and it writes its new position to the flock.
+3. **Act.** It moves, and it writes its new position to the space.
 
 The library does these three things. Your module tells what the boid is,
 and it can add to each of them with a callback:
@@ -40,7 +40,7 @@ handle_call(energy, _From, Boid = #{state := #{energy := Energy}}) ->
 ```
 
 ```erlang
-{ok, Hawk} = gen_boid:start(hawk, {50, 50}, #{flock => Flock}),
+{ok, Hawk} = gen_boid:start(hawk, {50, 50}, #{space => Space}),
 10.0 = gen_boid:call(Hawk, energy).
 ```
 
@@ -66,7 +66,7 @@ follows its rules.
 
 | Callback | When it runs | It gives |
 |---|---|---|
-| `init(Args)` | The boid starts. | `{ok, Options}`: the options of the boid (`boids_boid`) and of its process (below), on top of the `defaults` of the flock. Or `ignore`, or `{stop, Reason}`. |
+| `init(Args)` | The boid starts. | `{ok, Options}`: the options of the boid (`boids_boid`) and of its process (below), on top of the `defaults` of the space. Or `ignore`, or `{stop, Reason}`. |
 | `handle_sense(Seen, Boid)` | At each step, after the library found what the boid perceives. | `{ok, Seen, Boid}` |
 | `handle_decide(Seen, Boid)` | At each step, before the forces of the rules. | `{ok, Boid}` |
 | `handle_act(Boid)` | At each step, after the movement. | `{ok, Boid}` |
@@ -90,13 +90,13 @@ environment, so a rule of yours (a function) reads your keys.
 |---|---|---|
 | `tick` | `50` | The milliseconds between two steps, or `manual`: the boid moves only with `boids:step/2`. |
 | `max_dt` | `0.25`, or 4 ticks | The maximum of the seconds of one step. A late tick does not make a long step. The default is the larger of 0.25 second and 4 ticks. |
-| `search` | `1` | The boid searches the flock for its neighbors each `search` steps. In the other steps, it reads only the neighbors that it knows. |
+| `search` | `1` | The boid searches the space for its neighbors each `search` steps. In the other steps, it reads only the neighbors that it knows. |
 | `seed` | (none) | An integer: the seed of the random numbers of the process. |
 | `priority` | `low` | The priority of the process: `low` or `normal`. |
 | `hibernate` | `true` | The process hibernates between two steps. |
 
 The time of a step is the time that passed on the monotonic clock,
-multiplied by the scale of the time of the flock. With the scale 0, the
+multiplied by the scale of the time of the space. With the scale 0, the
 boid does not move, and its callbacks run with `dt` 0. The process waits
 `tick` milliseconds after each step, so the time between two steps is a
 little more than `tick`.
@@ -104,20 +104,20 @@ little more than `tick`.
 ## The neighbors that a boid knows
 
 The search of the neighbors is the largest part of a step. With `search
-=> 4`, a boid searches the flock at one step of 4. In the 3 other steps,
+=> 4`, a boid searches the space at one step of 4. In the 3 other steps,
 it reads the rows of the neighbors that it found: it sees them where
 they are now, and it does not see a boid that came near after the
-search. A flock of such boids makes about 15 % more steps in a second.
+search. A space of such boids makes about 15 % more steps in a second.
 
 ## The supervisor of a boid
 
-`start/3` starts the boid below the supervisor of its flock. That
+`start/3` starts the boid below the supervisor of its space. That
 supervisor does not start a boid again after an error. `start_link/3`
 and `child_spec/1` are for a supervisor of yours, which starts the boid
 again as you tell it. Give an `id` in the options of `init/1`, so that
 the process that starts again is the same boid.
 
-## A flock with too much work
+## A space with too much work
 
 When the boids need more time than the computer has, each tick comes
 late. A boid whose tick comes late waits longer before its next tick, so
@@ -145,7 +145,7 @@ about 3 KB. Without it, the process holds about 100 KB.
 -export_type([boid/0, start_options/0, seen/0]).
 
 -type boid() :: pid() | atom() | {global, term()} | {via, module(), term()}.
--type start_options() :: #{flock := boids:flock(), name => atom() | {global, term()} | {via, module(), term()}}.
+-type start_options() :: #{space := boids:space(), name => atom() | {global, term()} | {via, module(), term()}}.
 -type seen() :: #{neighbors := [boids_space:neighbor()], dt := number(), _ => _}.
 
 -callback init(Args :: term()) ->
@@ -173,32 +173,32 @@ about 3 KB. Without it, the process holds about 100 KB.
 
 -define(KEYS, [tick, max_dt, search, seed, priority, hibernate]).
 
-%% The start has a high priority: a flock with too much work must not
+%% The start has a high priority: a space with too much work must not
 %% make its caller wait.
 %%
 %% A boid that hibernates has a heap for its boid only. Without a
 %% minimum size, the heap becomes larger 4 or 5 times in each step, each
 %% time with a collection of the garbage: a quarter of the time of a
-%% flock. This minimum (in words) is sufficient for the garbage of one
+%% space. This minimum (in words) is sufficient for the garbage of one
 %% step with about 15 neighbors. A boid that hibernates does not keep it.
 -define(GEN, [{spawn_opt, [{priority, high}, {min_heap_size, 4185}]}]).
 
 -doc """
-Start a boid below the supervisor of its flock. The boid stops with its
-flock, and it does not start again after an error.
+Start a boid below the supervisor of its space. The boid stops with its
+space, and it does not start again after an error.
 
-`Options` is a map, or a list of `{Key, Value}`: `flock` (necessary: the
-flock or its space), and `name` (a name for the process: an atom,
-`{global, Term}` or `{via, Module, Term}`).
+`Options` is a map, or a list of `{Key, Value}`: `space` (necessary: the
+process of the space, its name, or its map), and `name` (a name for the
+process: an atom, `{global, Term}` or `{via, Module, Term}`).
 
 A bad option of `init/1` gives `{error, {bad_option, {Key, Value}}}`,
-and an id that is in the flock `{error, {exists, Id}}`.
+and an id that is in the space `{error, {exists, Id}}`.
 """.
 -spec start(module(), term(), start_options() | [{atom(), term()}]) -> {ok, pid()} | ignore | {error, term()}.
 start(Module, Args, Options0) ->
-    Options = #{flock := Flock} = start_options(Options0),
-    Space = boids:space(Flock),
-    start_child(boids_flock:boid_sup(Space), Module, Args, Options#{flock := Space}).
+    Options = #{space := Space0} = start_options(Options0),
+    Space = boids:space(Space0),
+    start_child(boids_space_server:boid_sup(Space), Module, Args, Options#{space := Space}).
 
 -doc false.
 start_child(Sup, Module, Args, Options) ->
@@ -211,11 +211,11 @@ start_child(Sup, Module, Args, Options) ->
 
 -doc """
 Start a boid with a link to the caller: for a supervisor of yours. The
-options are those of `start/3`. Give the name of the flock, and not its
-pid, so that the boid finds a flock that started again.
+options are those of `start/3`. Give the name of the space, and not its
+pid, so that the boid finds a space that started again.
 
 A bad option of `init/1` gives `{error, {shutdown, {bad_option, {Key,
-Value}}}}`, and an id that is in the flock `{error, {shutdown, {exists,
+Value}}}}`, and an id that is in the space `{error, {shutdown, {exists,
 Id}}}`.
 """.
 -spec start_link(module(), term(), start_options() | [{atom(), term()}]) -> {ok, pid()} | ignore | {error, term()}.
@@ -231,8 +231,8 @@ start_link(Module, Args, Options0) ->
 
 start_options(Options0) ->
     Options = boids_boid:to_map(Options0),
-    is_map_key(flock, Options) orelse error({bad_option, {flock, undefined}}),
-    [error({bad_option, {Key, Value}}) || Key := Value <- Options, Key =/= flock, Key =/= name],
+    is_map_key(space, Options) orelse error({bad_option, {space, undefined}}),
+    [error({bad_option, {Key, Value}}) || Key := Value <- Options, Key =/= space, Key =/= name],
     Options.
 
 -doc """
@@ -241,12 +241,12 @@ The specification of a boid as a child of a supervisor of yours, from
 
 ```erlang
 {ok, {#{strategy => rest_for_one}, [
-    boids:child_spec(#{name => my_flock}),
-    gen_boid:child_spec({hawk, {50, 50}, #{flock => my_flock}})
+    boids:child_spec(#{name => my_space}),
+    gen_boid:child_spec({hawk, {50, 50}, #{space => my_space}})
 ]}}
 ```
 
-In Elixir, the child is `{:gen_boid, {Hawk, {50, 50}, flock: :my_flock}}`.
+In Elixir, the child is `{:gen_boid, {Hawk, {50, 50}, space: :my_space}}`.
 """.
 -spec child_spec({module(), term(), start_options() | [{atom(), term()}]}) -> supervisor:child_spec().
 child_spec({Module, Args, Options}) ->
@@ -326,7 +326,7 @@ check(Key, Value) -> error({bad_option, {Key, Value}}).
 %% --- gen_server -------------------------------------------------------
 
 -doc false.
-init({Module, Args, #{flock := Flock}}) ->
+init({Module, Args, #{space := Space0}}) ->
     %% A boid with no module (boids:add/2) has its options as arguments.
     Given =
         case Module of
@@ -336,7 +336,7 @@ init({Module, Args, #{flock := Flock}}) ->
     case Given of
         {ok, Opts} ->
             try
-                Space = #{defaults := Defaults} = boids:space(Flock),
+                Space = #{defaults := Defaults} = boids:space(Space0),
                 {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
                 {Space, Server, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
             of
@@ -357,10 +357,10 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
     end,
     %% The tools that show processes show which boid this process is.
     proc_lib:set_label({boids, boid, Id}),
-    case boids_flock:join(Space, self(), (boids_boid:entry(Boid))#{kind => server}) of
+    case boids_space_server:join(Space, self(), (boids_boid:entry(Boid))#{kind => server}) of
         ok ->
             %% The first tick comes after a random part of the period, so
-            %% the boids of a flock do not all move at the same time.
+            %% the boids of a space do not all move at the same time.
             Due =
                 case Tick of
                     manual -> undefined;
@@ -377,7 +377,7 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
                 %% and the steps from that search.
                 known => [],
                 steps => 0,
-                %% What the rules use to find a boid of the flock.
+                %% What the rules use to find a boid of the space.
                 tools => #{
                     lookup => fun(Other) -> boids_space:lookup(Space, Other) end,
                     related => fun(From, Label) -> boids_space:related(Space, From, Label) end
@@ -453,7 +453,7 @@ exported(Module, Function, Arity) -> erlang:function_exported(Module, Function, 
 
 %% --- One step ---------------------------------------------------------
 
-%% Sense and decide, then the movement, with no write to the flock: the
+%% Sense and decide, then the movement, with no write to the space: the
 %% result is the boid after the movement.
 plan(State0 = #{space := Space, boid := Boid0 = #{id := Id}, mod := Module, tools := Tools}, Dt0) ->
     Env = #{time_scale := Scale} = boids_space:env(Space),
@@ -480,7 +480,7 @@ decide(Module, Seen, Boid) ->
         false -> {ok, Boid}
     end.
 
-%% The boid moved: its module acts, then the flock gets its row.
+%% The boid moved: its module acts, then the space gets its row.
 act(Moved = #{id := Id}, State = #{space := Space, mod := Module}) ->
     Acted =
         case exported(Module, handle_act, 1) of
@@ -519,7 +519,7 @@ result({noreply, Boid}, State) -> {noreply, keep(Boid, State)};
 result({stop, Reason, Reply, Boid}, State) -> {stop, Reason, Reply, State#{boid := Boid}};
 result({stop, Reason, Boid}, State) -> {stop, Reason, State#{boid := Boid}}.
 
-%% Keep the boid that a callback gave. When it changed, the flock gets
+%% Keep the boid that a callback gave. When it changed, the space gets
 %% its row, and a step that the boid calculated before is not good.
 keep(Boid, State = #{boid := Boid}) ->
     State;

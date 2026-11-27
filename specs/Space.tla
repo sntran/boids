@@ -1,20 +1,20 @@
 ---- MODULE Space ----
 (***************************************************************************)
-(* A write of a row against a read of the grid (boids_space). The space   *)
-(* has one row for each boid, and the grid has a copy of the row in the   *)
-(* cell of its position. Only the process of a boid writes its row, in    *)
-(* three steps: the row, the new copy in the grid, then the removal of    *)
-(* the old copy (put/2). A reader reads the cells one after the other,    *)
-(* while the boids write, and keeps one copy of each boid (near/3).       *)
+(* A write of a row against a read of the grid (boids_space). The space    *)
+(* has one row for each boid, and the grid has a copy of the row in the    *)
+(* cell of its position. Only the process of a boid writes its row, in     *)
+(* three steps: the row, the new copy in the grid, then the removal of     *)
+(* the old copy (put/2). A reader reads the cells one after the other,     *)
+(* while the boids write, and keeps one copy of each boid (near/3).        *)
 (*                                                                         *)
-(* The reader must find each boid one time at most. It must find a boid   *)
-(* that stays in its cell. A boid that changes its cell during the read   *)
-(* can be absent: the reader read its new cell before the boid came, and  *)
-(* its old cell after the boid went.                                      *)
+(* The reader must find each boid one time at most. It must find a boid    *)
+(* that stays in its cell. A boid that changes its cell during the read    *)
+(* can be absent: the reader read its new cell before the boid came, and   *)
+(* its old cell after the boid went.                                       *)
 (*                                                                         *)
-(* The process of a boid can stop at each moment, also in the middle of a *)
-(* write. The flock then removes the row and its copies (remove/2). No    *)
-(* copy must stay in the grid.                                            *)
+(* The process of a boid can stop at each moment, also in the middle of a  *)
+(* write. The space then removes the row and its copies (remove/2). No     *)
+(* copy must stay in the grid.                                             *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -24,7 +24,7 @@ CONSTANTS
     Writes,      \* the writes of each boid (a bound of the model)
     InsertFirst, \* FALSE: the fault model where a write removes the old copy first
     Dedupe,      \* FALSE: the fault model where the reader keeps each copy
-    RemoveLast   \* FALSE: the fault model where the flock removes only the copy of the row
+    RemoveLast   \* FALSE: the fault model where the space removes only the copy of the row
 
 VARIABLES
     row,         \* the row of each boid: its cell, and the number of its writes
@@ -32,7 +32,7 @@ VARIABLES
     old,         \* the row of each boid before its last write (the row keeps it)
     pc,          \* of the write of each boid: "idle", "row" (the row is written), "half"
     dead,        \* the boids whose process stopped, with their row
-    gone,        \* the boids whose row the flock removed
+    gone,        \* the boids whose row the space removed
     reader,      \* "idle", "reads", "done"
     todo,        \* the cells that the reader did not read
     seen,        \* the copies that the reader read
@@ -92,7 +92,7 @@ Kill(b) ==
     /\ dead' = dead \cup {b}
     /\ UNCHANGED <<row, grid, old, pc, gone, reader, todo, seen, moved, result>>
 
-\* The flock removes the row of a boid whose process stopped, with the
+\* The space removes the row of a boid whose process stopped, with the
 \* copy of the row and the copy before its last write.
 Remove(b) ==
     /\ b \in dead
@@ -156,7 +156,7 @@ Finds == reader = "done" => \A b \in Live \ moved : result[b] >= 1
 \* row, in the cell of the row: no old copy stays.
 Whole == \A b \in Live : pc[b] = "idle" => {x \in grid : x.boid = b} = {Copy(b, row[b])}
 
-\* The grid has no copy of a boid whose row the flock removed.
+\* The grid has no copy of a boid whose row the space removed.
 Gone == \A b \in gone : {x \in grid : x.boid = b} = {}
 
 \* --- Liveness ----------------------------------------------------------

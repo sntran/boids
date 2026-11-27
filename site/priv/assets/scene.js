@@ -1,5 +1,5 @@
-// A scene of the site of boids: a WebSocket to a flock on the server, and
-// a canvas that draws each moment of the flock.
+// A scene of the site of boids: a WebSocket to a space with boids on the
+// server, and a canvas that draws each moment of these boids.
 //
 //   var scene = Boids.scene({name: "game", canvas: element, readings: element, source: element});
 //   scene.send({keys: ["left"]});
@@ -230,7 +230,7 @@
       };
       socket.onclose = function () {
         // Try again 3 times, then wait for the visitor.
-        if (tries < 3) { tries++; note("Connecting again"); setTimeout(connect, 1500 * tries); } else { note("No connection to the flock"); }
+        if (tries < 3) { tries++; note("Connecting again"); setTimeout(connect, 1500 * tries); } else { note("No connection to the server"); }
       };
     }
 

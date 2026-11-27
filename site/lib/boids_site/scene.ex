@@ -1,15 +1,15 @@
 defmodule BoidsSite.Scene do
   @moduledoc """
-  A scene: one flock that one visitor sees. A module of a scene starts
-  the flock, and tells how the page draws its boids.
+  A scene: one space with its boids, which one visitor sees. A module of
+  a scene starts the space, and tells how the page draws its boids.
 
   The site has a limit of the scenes at one time (`BOIDS_SCENES`, default
   8), because all the scenes use the processor of one VM. A scene stops
   when the process of its visitor stops.
   """
 
-  @typedoc "A scene: its flock, the space of the flock, and what its module keeps."
-  @type t :: %{required(:flock) => pid(), required(:space) => map(), optional(atom()) => term()}
+  @typedoc "A scene: its space (the map of `boids:space/1`), and what its module keeps."
+  @type t :: %{required(:space) => map(), optional(atom()) => term()}
 
   @doc "Start the scene. The argument is the definition of a visitor, or nil."
   @callback start(term()) :: {:ok, t()} | {:error, String.t()}
@@ -58,7 +58,7 @@ defmodule BoidsSite.Scene do
             :stop -> :ok
           end
 
-          :boids.stop_flock(scene.flock)
+          :boids.stop_space(scene.space)
           :counters.sub(count, 1, 1)
         end)
         |> then(&{:ok, Map.merge(scene, %{module: module, guard: &1})})

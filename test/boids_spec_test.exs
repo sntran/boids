@@ -6,36 +6,36 @@ defmodule BoidsSpecTest do
 
   alias Accord.TLA.Checker
 
-  @flock Path.expand("../specs/MCFlock.tla", __DIR__)
+  @members Path.expand("../specs/MCMembers.tla", __DIR__)
   @space Path.expand("../specs/MCSpace.tla", __DIR__)
   @step Path.expand("../specs/MCStep.tla", __DIR__)
 
   defp config(model, name), do: [config: Path.rootname(model) <> name <> ".cfg"]
 
   # The checker of Accord can use a worker for each processor. That makes
-  # the models of Flock and of Step about two times faster, and the
+  # the models of Space and of Step about two times faster, and the
   # models of Space a little slower.
   @workers [workers: :auto]
 
-  describe "specs/Flock.tla: the members of a flock" do
+  describe "specs/Members.tla: the members of a space" do
     test "a boid that runs has its row, and no row of a process that stopped stays" do
-      assert {:ok, %{distinct_states: states}} = Checker.check(@flock, @workers)
+      assert {:ok, %{distinct_states: states}} = Checker.check(@members, @workers)
       assert states > 1000
     end
 
     test "the row of an id does not change with the messages for another id" do
-      assert {:ok, %{distinct_states: states}} = Checker.check(@flock, config(@flock, "Two") ++ @workers)
+      assert {:ok, %{distinct_states: states}} = Checker.check(@members, config(@members, "Two") ++ @workers)
       assert states > 1000
     end
 
-    test "a flock that keeps the row of a process that stopped refuses the process that starts again" do
+    test "a space that keeps the row of a process that stopped refuses the process that starts again" do
       assert {:error, %{kind: :invariant, property: "Fair"}, _} =
-               Checker.check(@flock, config(@flock, "Keep"))
+               Checker.check(@members, config(@members, "Keep"))
     end
 
     test "a leave with no check of its process takes the row of a new process" do
       assert {:error, %{kind: :invariant, property: "LiveHasRow"}, _} =
-               Checker.check(@flock, config(@flock, "Leave"))
+               Checker.check(@members, config(@members, "Leave"))
     end
   end
 
@@ -55,7 +55,7 @@ defmodule BoidsSpecTest do
                Checker.check(@space, config(@space, "Gap"))
     end
 
-    test "a flock that removes only the copy of the row leaves a copy of a boid that stopped in a write" do
+    test "a space that removes only the copy of the row leaves a copy of a boid that stopped in a write" do
       assert {:error, %{kind: :invariant, property: "Gone"}, _} =
                Checker.check(@space, config(@space, "Leak"))
     end
@@ -72,7 +72,7 @@ defmodule BoidsSpecTest do
       assert states > 1000
     end
 
-    test "a boid that moves when it calculates changes the flock for the next boid" do
+    test "a boid that moves when it calculates changes the space for the next boid" do
       assert {:error, %{kind: :invariant, property: "Quiet"}, _} =
                Checker.check(@step, config(@step, "OnePart"))
     end

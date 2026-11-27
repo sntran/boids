@@ -3,7 +3,7 @@
 #
 #     mix run examples/terminal.exs [SECONDS]
 #
-# Each bird and the hawk is a process. This script only reads the flock,
+# Each bird and the hawk is a process. This script only reads the space,
 # 20 times in a second, and draws it.
 
 defmodule Terminal do
@@ -14,9 +14,10 @@ defmodule Terminal do
   def run(seconds) do
     # One cell of the terminal is 1 unit wide and 2 units high.
     bounds = {{0, 0}, {@width, @height * 2}}
-    {:ok, flock} = :boids.start_flock(bounds: bounds, wrap: true)
-    :boids.set_obstacle(flock, :left, {30, 30}, 5)
-    :boids.set_obstacle(flock, :right, {70, 25}, 4)
+    {:ok, server} = :boids.start_space(bounds: bounds, wrap: true)
+    space = :boids.space(server)
+    :boids.set_obstacle(space, :left, {30, 30}, 5)
+    :boids.set_obstacle(space, :right, {70, 25}, 4)
 
     birds = [
       {:avoid, 4.0, lookahead: 1.5},
@@ -29,16 +30,15 @@ defmodule Terminal do
     hawk = [{:avoid, 4.0, lookahead: 1.5}, {:pursue, 1.0, target: {:group, :bird}}, {:wander, 0.5}]
 
     {:ok, _} =
-      :boids.populate(flock, 70, group: :bird, rules: birds, min_speed: 6, max_speed: 12, combine: :priority)
+      :boids.populate(space, 70, group: :bird, rules: birds, min_speed: 6, max_speed: 12, combine: :priority)
 
     {:ok, _} =
-      :boids.populate(flock, 1, group: :hawk, rules: hawk, max_speed: 14, perception: 25, combine: :priority)
+      :boids.populate(space, 1, group: :hawk, rules: hawk, max_speed: 14, perception: 25, combine: :priority)
 
     IO.write([IO.ANSI.clear(), "\e[?25l"])
-    space = :boids.space(flock)
     for _ <- 1..(seconds * 20), do: frame(space)
     IO.write("\e[?25h")
-    :boids.stop_flock(flock)
+    :boids.stop_space(space)
   end
 
   defp frame(space) do

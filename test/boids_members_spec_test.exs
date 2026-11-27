@@ -1,60 +1,60 @@
-defmodule BoidsFlockSpecTest do
-  # The replay of a real flock as a behavior of specs/Flock.tla.
+defmodule BoidsMembersSpecTest do
+  # The replay of a real space as a behavior of specs/Members.tla.
   use ExUnit.Case, async: true
   use ExUnitProperties
   import Boids.Helpers
 
-  alias Boids.FlockSpec
+  alias Boids.MembersSpec
 
   @moduletag :tmp_dir
   @moduletag :capture_log
 
   # A process of the test that is a boid: it joins, and leaves on request.
-  defp member(flock, id) do
+  defp member(space, id) do
     spawn(fn ->
-      case :boids.join(flock, id: id, pos: {0, 0}) do
-        {:ok, space, boid} -> member_loop(space, boid)
+      case :boids.join(space, id: id, pos: {0, 0}) do
+        {:ok, map, boid} -> member_loop(map, boid)
         {:error, _} -> member_loop(nil, nil)
       end
     end)
   end
 
-  defp member_loop(space, boid) do
+  defp member_loop(map, boid) do
     receive do
-      :leave when space != nil -> :boids.leave(space, boid)
+      :leave when map != nil -> :boids.leave(map, boid)
       {:ready?, from} -> send(from, {:ready, self()})
       _ -> :ok
     end
 
-    member_loop(space, boid)
+    member_loop(map, boid)
   end
 
-  # Do the acts on a real flock, and give its events and its last table.
+  # Do the acts on a real space, and give its events and its last table.
   # With `wait`, each act is done before the next act starts. Without it,
-  # the processes of the test and of the flock run at the same time.
+  # the processes of the test and of the space run at the same time.
   defp run(acts, wait \\ false) do
-    {:ok, flock} = :boids.start_flock()
-    recorder = FlockSpec.trace(flock)
+    {:ok, space} = :boids.start_space()
+    recorder = MembersSpec.trace(space)
 
     members =
       Enum.reduce(acts, [], fn act, members ->
-        members = act(flock, act, members)
-        if wait, do: settle(flock, members)
+        members = act(space, act, members)
+        if wait, do: settle(space, members)
         members
       end)
 
-    table = settle(flock, members)
-    events = FlockSpec.events(flock, recorder)
-    check_relations(flock, table)
-    :boids.stop_flock(flock)
+    table = settle(space, members)
+    events = MembersSpec.events(space, recorder)
+    check_relations(space, table)
+    :boids.stop_space(space)
     {events, table}
   end
 
   # The relations are not in the specification. After the acts, only the
   # boids of the table have relations, and the table of the relations
   # has the edges of the graph, in the two directions.
-  defp check_relations(flock, table) do
-    links = :boids.relations(flock)
+  defp check_relations(space, table) do
+    links = :boids.relations(space)
     edges = :graph.edges(links)
     ids = for {id, _pid} <- table, do: id
     assert :graph.vertices(links) -- ids == []
@@ -64,14 +64,14 @@ defmodule BoidsFlockSpecTest do
           row <- [{{:out, from, label}, [to]}, {{:in, to, label}, [from]}],
           do: row
 
-    assert Enum.sort(:ets.tab2list(:boids.space(flock).links)) == Enum.sort(rows)
+    assert Enum.sort(:ets.tab2list(:boids.space(space).links)) == Enum.sort(rows)
   end
 
-  defp act(flock, {:add, id}, members) do
+  defp act(space, {:add, id}, members) do
     # After many kills in one second, the supervisor of the boids stops,
     # and its supervisor starts it again. A call to it exits then.
     try do
-      :boids.add(flock, id: id, pos: {0, 0}, tick: :manual)
+      :boids.add(space, id: id, pos: {0, 0}, tick: :manual)
     catch
       :exit, _ -> :ok
     end
@@ -79,30 +79,30 @@ defmodule BoidsFlockSpecTest do
     members
   end
 
-  defp act(flock, {:remove, id}, members) do
-    :boids.remove(flock, id)
+  defp act(space, {:remove, id}, members) do
+    :boids.remove(space, id)
     members
   end
 
-  defp act(flock, {:kill, id}, members) do
-    with pid when is_pid(pid) <- :boids.whereis(flock, id), do: Process.exit(pid, :kill)
+  defp act(space, {:kill, id}, members) do
+    with pid when is_pid(pid) <- :boids.whereis(space, id), do: Process.exit(pid, :kill)
     members
   end
 
-  defp act(flock, {:join, id}, members), do: [{id, member(flock, id)} | members]
+  defp act(space, {:join, id}, members), do: [{id, member(space, id)} | members]
 
   # A relation from a boid to the other boid of the test, or to itself.
-  defp act(flock, {:relate, id}, members) do
-    :boids.relate(flock, id, :follows, other(id))
+  defp act(space, {:relate, id}, members) do
+    :boids.relate(space, id, :follows, other(id))
     members
   end
 
-  defp act(flock, {:unrelate, id}, members) do
-    :boids.unrelate(flock, id, :follows, other(id))
+  defp act(space, {:unrelate, id}, members) do
+    :boids.unrelate(space, id, :follows, other(id))
     members
   end
 
-  defp act(_flock, {:leave, id}, members) do
+  defp act(_space, {:leave, id}, members) do
     for {^id, pid} <- members, do: send(pid, :leave)
     members
   end
@@ -113,7 +113,7 @@ defmodule BoidsFlockSpecTest do
 
   # Wait until each process of the test did its calls, and the table
   # does not change. The result is the table.
-  defp settle(flock, members, last \\ nil, same \\ 0) do
+  defp settle(space, members, last \\ nil, same \\ 0) do
     for {_id, pid} <- members, Process.alive?(pid) do
       ref = Process.monitor(pid)
       send(pid, {:ready?, self()})
@@ -124,8 +124,8 @@ defmodule BoidsFlockSpecTest do
       end
     end
 
-    :sys.get_state(flock)
-    table = Enum.sort(for %{id: id, pid: pid} <- :boids.snapshot(flock), do: {id, pid})
+    :sys.get_state(space)
+    table = Enum.sort(for %{id: id, pid: pid} <- :boids.snapshot(space), do: {id, pid})
 
     cond do
       table == last and same >= 3 ->
@@ -133,15 +133,15 @@ defmodule BoidsFlockSpecTest do
 
       table == last ->
         Process.sleep(5)
-        settle(flock, members, table, same + 1)
+        settle(space, members, table, same + 1)
 
       true ->
         Process.sleep(5)
-        settle(flock, members, table, 0)
+        settle(space, members, table, 0)
     end
   end
 
-  test "a flock with boids that start, stop, start again, leave and go", %{tmp_dir: dir} do
+  test "a space with boids that start, stop, start again, leave and go", %{tmp_dir: dir} do
     acts = [
       add: :a,
       add: :a,
@@ -165,7 +165,7 @@ defmodule BoidsFlockSpecTest do
     assert Enum.any?(events, &match?({:down, _, _}, &1))
     assert Enum.any?(events, &match?({:leave, _, _}, &1))
     assert [{:a, _}, {:b, _}] = table
-    assert FlockSpec.replay(events, table, dir) == :ok
+    assert MembersSpec.replay(events, table, dir) == :ok
   end
 
   test "a new boid with the id of a boid that stopped takes its row before or after its 'DOWN'", %{
@@ -175,16 +175,16 @@ defmodule BoidsFlockSpecTest do
     acts = Enum.flat_map(1..20, fn _ -> [add: :a, kill: :a, join: :b, kill: :b, add: :a, kill: :a] end)
     {events, table} = run(acts)
     assert Enum.count(events, &match?({:join, _, _, :ok}, &1)) >= 20
-    assert FlockSpec.replay(events, table, dir) == :ok
+    assert MembersSpec.replay(events, table, dir) == :ok
   end
 
-  property "each real flock is a behavior of the specification", %{tmp_dir: dir} do
+  property "each real space is a behavior of the specification", %{tmp_dir: dir} do
     kinds = [:add, :add, :remove, :kill, :join, :leave, :relate, :relate, :unrelate]
     act = tuple({member_of(kinds), member_of([:a, :b])})
 
     check all(acts <- list_of(act, max_length: 25), max_runs: 40) do
       {events, table} = run(acts)
-      assert FlockSpec.replay(events, table, dir) == :ok
+      assert MembersSpec.replay(events, table, dir) == :ok
     end
   end
 
@@ -212,10 +212,10 @@ defmodule BoidsFlockSpecTest do
     {events, table} = run(acts, true)
     assert Enum.all?(events, &(elem(&1, 0) in [:join, :leave, :down]))
     assert [{:a, _}, {:b, _}] = table
-    assert FlockSpec.replay(events, table, dir) == :ok
+    assert MembersSpec.replay(events, table, dir) == :ok
   end
 
-  describe "a flock that is not a behavior of the specification" do
+  describe "a space that is not a behavior of the specification" do
     setup do
       first = spawn(fn -> :ok end)
       second = spawn(fn -> Process.sleep(:infinity) end)
@@ -223,27 +223,27 @@ defmodule BoidsFlockSpecTest do
     end
 
     test "a leave that takes the row of a new process diverges", %{tmp_dir: dir, first: first, second: second} do
-      # The flock before the check of the process of a leave: specs/MCFlockLeave.cfg.
+      # The space before the check of the process of a leave: specs/MCMembersLeave.cfg.
       events = [{:join, first, :a, :ok}, {:down, first, :a}, {:join, second, :a, :ok}, {:leave, first, :a}]
-      assert FlockSpec.replay(events, [{:a, second}], dir) == :ok
-      assert FlockSpec.replay(events, [], dir) == {:error, {:diverged, {:no_row, :a}}}
+      assert MembersSpec.replay(events, [{:a, second}], dir) == :ok
+      assert MembersSpec.replay(events, [], dir) == {:error, {:diverged, {:no_row, :a}}}
     end
 
-    test "a flock that refuses an id whose process stopped diverges", %{
+    test "a space that refuses an id whose process stopped diverges", %{
       tmp_dir: dir,
       first: first,
       second: second
     } do
-      # The flock with no check of the process of a row: specs/MCFlockKeep.cfg.
+      # The space with no check of the process of a row: specs/MCMembersKeep.cfg.
       taken = [{:join, first, :a, :ok}, {:join, second, :a, :ok}]
-      assert FlockSpec.replay(taken, [{:a, second}], dir) == :ok
-      # After that, the flock does not watch the first process.
+      assert MembersSpec.replay(taken, [{:a, second}], dir) == :ok
+      # After that, the space does not watch the first process.
       watched = taken ++ [{:down, first, :a}]
-      assert FlockSpec.replay(watched, [{:a, second}], dir) == {:error, {:diverged, {:down, first, :a}}}
+      assert MembersSpec.replay(watched, [{:a, second}], dir) == {:error, {:diverged, {:down, first, :a}}}
       refused = [{:join, first, :a, :ok}, {:join, second, :a, {:error, {:exists, :a}}}, {:down, first, :a}]
-      assert FlockSpec.replay(refused, [], dir) == :ok
+      assert MembersSpec.replay(refused, [], dir) == :ok
       late = [{:join, first, :a, :ok}, {:down, first, :a}, {:join, second, :a, {:error, {:exists, :a}}}]
-      assert FlockSpec.replay(late, [], dir) == {:error, {:diverged, List.last(late)}}
+      assert MembersSpec.replay(late, [], dir) == {:error, {:diverged, List.last(late)}}
     end
 
     test "a wrong answer, a lost row and a row from nothing diverge", %{
@@ -252,13 +252,13 @@ defmodule BoidsFlockSpecTest do
       second: second
     } do
       two = [{:join, first, :a, :ok}, {:join, second, :a, :ok}]
-      assert FlockSpec.replay(two, [{:a, second}], dir) == :ok
-      assert FlockSpec.replay(two, [{:a, first}], dir) == {:error, {:diverged, {:row, :a, first}}}
-      assert FlockSpec.replay([{:join, first, :a, :ok}], [], dir) == {:error, {:diverged, {:no_row, :a}}}
-      assert FlockSpec.replay([], [{:a, first}], dir) == {:error, {:diverged, {:row, :a, first}}}
-      assert FlockSpec.replay([{:down, first, :a}], [], dir) == {:error, {:diverged, {:down, first, :a}}}
+      assert MembersSpec.replay(two, [{:a, second}], dir) == :ok
+      assert MembersSpec.replay(two, [{:a, first}], dir) == {:error, {:diverged, {:row, :a, first}}}
+      assert MembersSpec.replay([{:join, first, :a, :ok}], [], dir) == {:error, {:diverged, {:no_row, :a}}}
+      assert MembersSpec.replay([], [{:a, first}], dir) == {:error, {:diverged, {:row, :a, first}}}
+      assert MembersSpec.replay([{:down, first, :a}], [], dir) == {:error, {:diverged, {:down, first, :a}}}
       first_refused = [{:join, first, :a, {:error, {:exists, :a}}}]
-      assert FlockSpec.replay(first_refused, [], dir) == {:error, {:diverged, hd(first_refused)}}
+      assert MembersSpec.replay(first_refused, [], dir) == {:error, {:diverged, hd(first_refused)}}
     end
 
     test "events that change nothing are permitted", %{tmp_dir: dir, first: first} do
@@ -270,27 +270,27 @@ defmodule BoidsFlockSpecTest do
         {:leave, first, :a}
       ]
 
-      assert FlockSpec.replay(events, [], dir) == :ok
-      assert FlockSpec.replay([], [], dir) == :ok
+      assert MembersSpec.replay(events, [], dir) == :ok
+      assert MembersSpec.replay([], [], dir) == :ok
     end
   end
 
-  test "the record has each message of the flock, with the answers", %{tmp_dir: dir} do
-    {:ok, flock} = :boids.start_flock()
-    recorder = FlockSpec.trace(flock)
-    {:ok, :a} = :boids.add(flock, id: :a, pos: {0, 0}, tick: :manual)
-    pid = :boids.whereis(flock, :a)
-    {:error, _} = :boids.add(flock, id: :a, pos: {1, 1}, tick: :manual)
-    {:error, _} = :boids.add(flock, id: :b, pos: {1, 1, 1}, tick: :manual)
+  test "the record has each message of the space, with the answers", %{tmp_dir: dir} do
+    {:ok, space} = :boids.start_space()
+    recorder = MembersSpec.trace(space)
+    {:ok, :a} = :boids.add(space, id: :a, pos: {0, 0}, tick: :manual)
+    pid = :boids.whereis(space, :a)
+    {:error, _} = :boids.add(space, id: :a, pos: {1, 1}, tick: :manual)
+    {:error, _} = :boids.add(space, id: :b, pos: {1, 1, 1}, tick: :manual)
     # The record does not have the messages of the relations.
-    :ok = :boids.relate(flock, :a, :follows, :a)
-    [{:a, :a, :follows}] = :graph.edges(:boids.relations(flock))
-    :ok = :boids.unrelate(flock, :a, :follows, :a)
-    :ok = :boids.remove(flock, :a)
-    send(flock, {:DOWN, make_ref(), :process, self(), :normal})
-    assert eventually(fn -> :boids.count(flock) == 0 end)
-    events = FlockSpec.events(flock, recorder)
-    :boids.stop_flock(flock)
+    :ok = :boids.relate(space, :a, :follows, :a)
+    [{:a, :a, :follows}] = :graph.edges(:boids.relations(space))
+    :ok = :boids.unrelate(space, :a, :follows, :a)
+    :ok = :boids.remove(space, :a)
+    send(space, {:DOWN, make_ref(), :process, self(), :normal})
+    assert eventually(fn -> :boids.count(space) == 0 end)
+    events = MembersSpec.events(space, recorder)
+    :boids.stop_space(space)
 
     assert [
              {:join, ^pid, :a, :ok},
@@ -301,8 +301,8 @@ defmodule BoidsFlockSpecTest do
 
     assert {:leave, pid, :a} in rest
     assert {:down, self(), :unknown} in rest
-    # A 'DOWN' that the flock does not know is not in the specification.
-    assert FlockSpec.replay(events, [], dir) == {:error, {:diverged, {:down, self(), :unknown}}}
-    assert FlockSpec.replay(events -- [{:down, self(), :unknown}], [], dir) == :ok
+    # A 'DOWN' that the space does not know is not in the specification.
+    assert MembersSpec.replay(events, [], dir) == {:error, {:diverged, {:down, self(), :unknown}}}
+    assert MembersSpec.replay(events -- [{:down, self(), :unknown}], [], dir) == :ok
   end
 end

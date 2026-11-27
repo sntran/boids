@@ -65,11 +65,11 @@ then deploys at each push.
 ## How it works
 
 - A page opens one WebSocket for its scene (`/ws/flock`, `/ws/game`,
-  `/ws/playground`). The server starts one flock for that socket, and
-  sends one moment of the flock at each tick: the position, the
+  `/ws/playground`). The server starts one space with its boids for
+  that socket, and sends one moment of it at each tick: the position, the
   direction and the kind of each boid. The page draws the moments.
 - A scene stops when its socket closes. With no visitor, the VM has no
-  flock and does no work.
+  space and does no work.
 - A scene is a module with the behavior `BoidsSite.Scene`
   ([`lib/boids_site/scene.ex`](lib/boids_site/scene.ex)). The scenes are
   in [`lib/boids_site/scenes`](lib/boids_site/scenes).
@@ -87,7 +87,7 @@ keys.
 - A name of a visitor never becomes an atom. The names of the rules and
   of their options come from a fixed list, and a group is a string.
 - The library checks the options and the rules. A bad definition gives a
-  text for the visitor, and starts no flock.
+  text for the visitor, and starts no space.
 
 ## The settings
 

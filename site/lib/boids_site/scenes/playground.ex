@@ -1,6 +1,7 @@
 defmodule BoidsSite.Scenes.Playground do
   @moduledoc """
-  The scene of the playground: a flock from the definition of a visitor.
+  The scene of the playground: a space with the boids of the definition
+  of a visitor.
 
   A definition is data (JSON), and not code: the site runs no code of a
   visitor. It has the box, the rocks, and the kinds of boids. Each kind
@@ -80,14 +81,15 @@ defmodule BoidsSite.Scenes.Playground do
       end
     end
 
-    {:ok, flock} =
-      :boids.start_flock(
+    {:ok, server} =
+      :boids.start_space(
         bounds: {{0, 0}, {width, height}},
         wrap: Map.get(definition, "wrap", true) == true,
         defaults: %{tick: BoidsSite.Scene.tick()}
       )
 
-    for {{x, y, radius}, number} <- Enum.with_index(rocks), do: :ok = :boids.set_obstacle(flock, number, {x, y}, radius)
+    space = :boids.space(server)
+    for {{x, y, radius}, number} <- Enum.with_index(rocks), do: :ok = :boids.set_obstacle(space, number, {x, y}, radius)
 
     for kind <- kinds do
       ids =
@@ -95,17 +97,17 @@ defmodule BoidsSite.Scenes.Playground do
           pos = {:rand.uniform() * width, :rand.uniform() * height}
           state = %{rules: kind.rules, others: kind.others, mode: nil}
           options = Map.merge(kind.options, %{pos: pos, vel: velocity(kind), rules: kind.rules, state: state})
-          {:ok, pid} = :gen_boid.start(Kind, options, flock: flock)
+          {:ok, pid} = :gen_boid.start(Kind, options, space: space)
           pid
         end
 
       # A chain: each boid follows the boid before it.
       if kind.chain do
-        for {from, to} <- Enum.zip(tl(ids), ids), do: :ok = :boids.relate(flock, from, :follows, to)
+        for {from, to} <- Enum.zip(tl(ids), ids), do: :ok = :boids.relate(space, from, :follows, to)
       end
     end
 
-    %{flock: flock, space: :boids.space(flock), kinds: kinds}
+    %{space: space, kinds: kinds}
   end
 
   defp build(_definition), do: throw({:bad, "A scene needs a list of kinds."})
@@ -220,12 +222,12 @@ defmodule BoidsSite.Scenes.Playground do
   @impl true
   def look(_scene, %{data: number, vel: vel}), do: {number, BoidsSite.Scene.angle(vel), 1}
 
-  # Each second: the number of boids and of groups, from the flock as a graph.
+  # Each second: the number of boids, and of flocks (the groups of boids
+  # that see each other).
   @impl true
   def more(%{space: space}, number) do
     if rem(number * BoidsSite.Scene.tick(), 1000) < BoidsSite.Scene.tick() do
-      graph = :boids.graph(space, 8)
-      %{r: [["Boids", :graph.no_vertices(graph)], ["Groups", length(:graph.components(graph))]]}
+      %{r: [["Boids", :boids.count(space)], ["Flocks", length(:boids.flocks(space, 8))]]}
     else
       %{}
     end

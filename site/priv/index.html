@@ -45,7 +45,7 @@
     </div>
     <div>
       <h3>A boid has relations</h3>
-      <p>A boid follows a leader, or fears an enemy. The flock keeps the relations as a graph.</p>
+      <p>A boid follows a leader, or fears an enemy. The space keeps the relations as a graph.</p>
     </div>
     <div>
       <h3>No dependency</h3>
@@ -56,12 +56,12 @@
   <section class="two">
     <div>
       <h2>A first flock</h2>
-      <pre>{ok, Flock} = boids:start_flock(#{
+      <pre>{ok, Space} = boids:start_space(#{
     bounds =&gt; {{0, 0}, {100, 100}},
     wrap =&gt; true
 }),
-{ok, Ids} = boids:populate(Flock, 200, #{}),
-boids:snapshot(Flock).</pre>
+{ok, Ids} = boids:populate(Space, 200, #{}),
+boids:snapshot(Space).</pre>
       <p class="lead">The 200 boids now move in real time. <code>snapshot/1</code> reads their positions.</p>
     </div>
     <div>
@@ -96,7 +96,7 @@ handle_decide(_Seen, Boid) -&gt;
     </div>
     <div>
       <h3><a href="https://github.com/sntran/boids#readme">Read the documentation</a></h3>
-      <p>The rules, the callbacks, the relations, the flock as a graph, and the speed.</p>
+      <p>The rules, the callbacks, the relations, the flocks of a space, and the speed.</p>
     </div>
   </section>
 
