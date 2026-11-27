@@ -122,9 +122,9 @@ defmodule BoidsReadmeTest do
   end
 
   test "a rule of your own", %{environment: environment} do
-    gravity = fn _boid, _neighbors, _env -> {0, -9.81} end
+    gravity = fn _boid, _neighbors, _seen -> {0, -9.81} end
 
-    fear = fn boid, neighbors, _env ->
+    fear = fn boid, neighbors, _seen ->
       case Enum.filter(neighbors, &(&1.group == :cats)) do
         [%{pos: pos} | _] -> :boids_steer.flee(boid, pos)
         [] -> {0, 0}

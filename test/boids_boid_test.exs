@@ -8,9 +8,9 @@ defmodule BoidsBoidTest do
   defp boid(opts \\ %{}), do: :boids_boid.new(Map.merge(%{pos: {0, 0}, rules: []}, Map.new(opts)))
 
   # The force of one rule with the weight 1 and a large maximum.
-  defp force(rule, opts, neighbors \\ [], env \\ %{}) do
+  defp force(rule, opts, neighbors \\ [], seen \\ %{}) do
     boid = boid(Map.merge(%{rules: [rule], max_force: 1.0e9}, Map.new(opts)))
-    {force, _} = :boids_boid.force(boid, neighbors, env)
+    {force, _} = :boids_boid.force(boid, neighbors, seen)
     force
   end
 
@@ -507,14 +507,14 @@ defmodule BoidsBoidTest do
     end
 
     test "with wrap, the target is at its nearest position" do
-      env = %{wrap: true, bounds: {{0, 0}, {100, 100}}}
+      seen = %{wrap: true, bounds: {{0, 0}, {100, 100}}}
       opts = %{pos: {5, 50}}
-      assert_vec(force({:seek, 1, target: {95, 50}}, opts, [], env), {-10.0, 0.0})
+      assert_vec(force({:seek, 1, target: {95, 50}}, opts, [], seen), {-10.0, 0.0})
       assert_vec(force({:seek, 1, target: {95, 50}}, opts, [], %{}), {10.0, 0.0})
       lookup = fn :far -> {:ok, %{pos: {50, 98}, vel: {0, 0}}} end
 
       assert_vec(
-        force({:seek, 1, target: {:boid, :far}}, %{pos: {50, 2}}, [], Map.put(env, :lookup, lookup)),
+        force({:seek, 1, target: {:boid, :far}}, %{pos: {50, 2}}, [], Map.put(seen, :lookup, lookup)),
         {0.0, -10.0}
       )
     end
@@ -579,20 +579,20 @@ defmodule BoidsBoidTest do
     end
 
     test "with wrap, avoid sees an obstacle across a side" do
-      env = %{obstacles: [%{id: :rock, pos: {98, 50}, radius: 2}], wrap: true, bounds: {{0, 0}, {100, 100}}}
-      {_, y} = force({:avoid, 1, lookahead: 4}, %{pos: {5, 51}, vel: {-5, 0}}, [], env)
+      seen = %{obstacles: [%{id: :rock, pos: {98, 50}, radius: 2}], wrap: true, bounds: {{0, 0}, {100, 100}}}
+      {_, y} = force({:avoid, 1, lookahead: 4}, %{pos: {5, 51}, vel: {-5, 0}}, [], seen)
       assert y > 0
 
-      assert force({:avoid, 1, lookahead: 4}, %{pos: {5, 51}, vel: {-5, 0}}, [], %{env | wrap: false}) ==
+      assert force({:avoid, 1, lookahead: 4}, %{pos: {5, 51}, vel: {-5, 0}}, [], %{seen | wrap: false}) ==
                {0.0, 0.0}
     end
 
     test "contain uses the box of the environment, or its own box" do
       opts = %{pos: {1, 50}, vel: {-1, 0}}
-      env = %{bounds: {{0, 0}, {100, 100}}}
-      assert force({:contain, 1}, opts, [], env) == {11.0, 0.0}
-      assert force({:contain, 1, margin: 0.5}, opts, [], env) == {0.0, 0.0}
-      assert force({:contain, 1, bounds: {{2, 0}, {100, 100}}, margin: 0}, opts, [], env) == {11.0, 0.0}
+      seen = %{bounds: {{0, 0}, {100, 100}}}
+      assert force({:contain, 1}, opts, [], seen) == {11.0, 0.0}
+      assert force({:contain, 1, margin: 0.5}, opts, [], seen) == {0.0, 0.0}
+      assert force({:contain, 1, bounds: {{2, 0}, {100, 100}}, margin: 0}, opts, [], seen) == {11.0, 0.0}
       assert force({:contain, 1}, opts, [], %{}) == {0.0, 0.0}
       assert force({:contain, 1}, opts, [], %{bounds: :undefined}) == {0.0, 0.0}
     end
@@ -659,19 +659,19 @@ defmodule BoidsBoidTest do
     test "a function gets the boid, the neighbors and the environment" do
       me = self()
 
-      rule = fn boid, neighbors, env ->
-        send(me, {boid.id, neighbors, env})
+      rule = fn boid, neighbors, seen ->
+        send(me, {boid.id, neighbors, seen})
         {1, 2}
       end
 
       assert force({rule, 1}, %{id: :a}, [:n], %{dt: 0.5, more: 1}) == {1, 2}
-      assert_received {:a, [:n], env}
-      assert env == %{dt: 0.5, more: 1}
+      assert_received {:a, [:n], seen}
+      assert seen == %{dt: 0.5, more: 1}
     end
 
     test "each function is a rule of the boid, with its weight" do
-      up = fn _boid, _neighbors, _env -> {0, 1} end
-      right = fn _boid, _neighbors, _env -> {1, 0} end
+      up = fn _boid, _neighbors, _seen -> {0, 1} end
+      right = fn _boid, _neighbors, _seen -> {1, 0} end
       boid = boid(rules: [{up, 2}, {right, 3}, {up, 0.5}], max_force: 100)
       {force, same} = :boids_boid.force(boid, [], %{})
       assert_vec(force, {3.0, 2.5})
@@ -686,7 +686,40 @@ defmodule BoidsBoidTest do
   end
 
   @doc false
-  def push(_boid, _neighbors, _env), do: {0, 0, 1}
+  def push(_boid, _neighbors, _seen), do: {0, 0, 1}
+
+  describe "forces/3" do
+    test "gives the force of each rule with its weight, in the order of the rules" do
+      up = fn _boid, _neighbors, _seen -> {0, 1} end
+      rules = [{:seek, 2, target: {10, 0}}, {up, 3}, {{:seek, :home}, 1, target: {0, 10}}]
+      boid = boid(rules: rules, max_speed: 5, max_force: 1)
+      assert {forces, ^boid} = :boids_boid.forces(boid, [], %{dt: 0.1})
+      assert forces == [{:seek, {10.0, 0.0}}, {up, {0, 3}}, {{:seek, :home}, {0.0, 5.0}}]
+    end
+
+    test "force/3 makes one force of these forces" do
+      rules = [{:seek, 2, target: {10, 0}}, {{:seek, :home}, 1, target: {0, 10}}]
+      sum = boid(rules: rules, max_speed: 5, max_force: 100)
+      assert :boids_boid.force(sum, [], %{}) == {{10.0, 5.0}, sum}
+      # The order has an effect only with the priority.
+      first = boid(rules: rules, max_speed: 5, max_force: 4, combine: :priority)
+      last = boid(rules: Enum.reverse(rules), max_speed: 5, max_force: 4, combine: :priority)
+      assert :boids_boid.force(first, [], %{}) == {{4.0, 0.0}, first}
+      assert :boids_boid.force(last, [], %{}) == {{0.0, 4.0}, last}
+      reversed = boid(rules: Enum.reverse(rules), max_speed: 5, max_force: 100)
+      assert elem(:boids_boid.force(reversed, [], %{}), 0) == {10.0, 5.0}
+    end
+
+    test "gives the boid with the memory of its rules" do
+      boid = boid(rules: [wander: 1])
+      assert {[{:wander, force}], moved} = :boids_boid.forces(boid, [], %{dt: 0.1})
+      assert tuple_size(force) == 2
+      assert %{wander: {_, _}} = moved.memory
+      # A boid with no rule has no force.
+      none = boid()
+      assert :boids_boid.forces(none, [], %{}) == {[], none}
+    end
+  end
 
   describe "the sum of the forces" do
     test "each force is multiplied by its weight" do
@@ -736,8 +769,8 @@ defmodule BoidsBoidTest do
 
         boid = boid(pos: pos, vel: vel, max_speed: 7.07, rules: rules, max_force: max_force, combine: combine)
         neighbors = for {other, velocity} <- others, do: neighbor(pos, other, velocity)
-        env = %{obstacles: [%{id: 1, pos: {0, 0}, radius: 5}], bounds: {{-40, -40}, {40, 40}}}
-        {force, _} = :boids_boid.force(boid, neighbors, env)
+        seen = %{obstacles: [%{id: 1, pos: {0, 0}, radius: 5}], bounds: {{-40, -40}, {40, 40}}}
+        {force, _} = :boids_boid.force(boid, neighbors, seen)
         assert :boids_vec.norm(force) <= max_force + 1.0e-9
       end
     end
@@ -773,8 +806,8 @@ defmodule BoidsBoidTest do
     end
 
     test "with wrap, the position stays in the box" do
-      env = %{wrap: true, bounds: {{0, 0}, {10, 10}}}
-      moved = :boids_boid.integrate(boid(pos: {9, 1}, vel: {4, -4}), {0, 0}, env, 0.5)
+      seen = %{wrap: true, bounds: {{0, 0}, {10, 10}}}
+      moved = :boids_boid.integrate(boid(pos: {9, 1}, vel: {4, -4}), {0, 0}, seen, 0.5)
       assert_vec(moved.pos, {1.0, 9.0})
 
       free =
@@ -815,8 +848,8 @@ defmodule BoidsBoidTest do
     test "gives the time of the step to the rules" do
       me = self()
 
-      rule = fn _, _, env ->
-        send(me, env)
+      rule = fn _, _, seen ->
+        send(me, seen)
         {0, 0}
       end
 

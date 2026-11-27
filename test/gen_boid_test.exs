@@ -172,9 +172,9 @@ defmodule GenBoidTest do
         def handle_decide(%{food: food}, boid), do: {:ok, %{boid | data: {:goes_to, food}}}
       end
 
-      to_food = fn boid, _neighbors, env ->
-        send(me, {:rule, env.food})
-        :boids_steer.seek(boid, env.food)
+      to_food = fn boid, _neighbors, seen ->
+        send(me, {:rule, seen.food})
+        :boids_steer.seek(boid, seen.food)
       end
 
       {:ok, _} =

@@ -291,7 +291,7 @@ Neighbors = boids:sense(boids:space(Environment), Boid),
 ## A rule of your own
 
 A rule of your own is a function. It gets the boid, the neighbors that
-the boid sees (the nearest first) and the environment of the
+the boid sees (the nearest first) and what the boid perceives of its
 environment, and it gives a force:
 
 ```erlang

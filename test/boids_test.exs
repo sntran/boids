@@ -372,8 +372,8 @@ defmodule BoidsTest do
       environment = environment()
       me = self()
 
-      push = fn boid, neighbors, env ->
-        send(me, {:rule, boid.id, length(neighbors), env.dt})
+      push = fn boid, neighbors, seen ->
+        send(me, {:rule, boid.id, length(neighbors), seen.dt})
         {3, 0}
       end
 
@@ -650,7 +650,7 @@ defmodule BoidsTest do
     test "a boid with an error at each step does not stop the environment" do
       environment = environment()
       {:ok, good} = :boids.populate(environment, 20, area: @box, tick: 5)
-      bad = fn _boid, _neighbors, _env -> raise "a fault of a rule" end
+      bad = fn _boid, _neighbors, _seen -> raise "a fault of a rule" end
       for _ <- 1..15, do: {:ok, _} = :boids.add(environment, pos: {1, 1}, rules: [{bad, 1}], tick: 5)
       assert eventually(fn -> :boids.count(environment) == 20 end)
       assert Process.alive?(environment)
@@ -914,7 +914,7 @@ defmodule BoidsTest do
       environment = environment()
       me = self()
 
-      rule = fn boid, neighbors, _env ->
+      rule = fn boid, neighbors, _seen ->
         send(me, {boid.id, Enum.map(neighbors, & &1.pos)})
         {0, 0}
       end

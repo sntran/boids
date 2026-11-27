@@ -275,7 +275,7 @@ defmodule BoidsSite.Scenes.Game do
 
     # The force of the ship with the keys of a person: thrust in its
     # direction, and a small force against its movement.
-    def engine(%{vel: vel, state: %{keys: keys, heading: heading}}, _neighbors, _env) do
+    def engine(%{vel: vel, state: %{keys: keys, heading: heading}}, _neighbors, _seen) do
       thrust = if keys[:thrust], do: 32.0, else: 0.0
       :boids_vec.add(:boids_vec.scale(Game.direction(heading), thrust), :boids_vec.scale(vel, -0.5))
     end

@@ -45,7 +45,7 @@
     </div>
     <div>
       <h3>A boid has relations</h3>
-      <p>A boid follows a leader, or fears an enemy. The space keeps the relations as a graph.</p>
+      <p>A boid follows a leader, or fears an enemy. The environment keeps the relations as a graph.</p>
     </div>
     <div>
       <h3>No dependency</h3>
@@ -56,12 +56,12 @@
   <section class="two">
     <div>
       <h2>A first flock</h2>
-      <pre>{ok, Space} = boids:start_space(#{
+      <pre>{ok, Environment} = boids:start_environment(#{
     bounds =&gt; {{0, 0}, {100, 100}},
     wrap =&gt; true
 }),
-{ok, Ids} = boids:populate(Space, 200, #{}),
-boids:snapshot(Space).</pre>
+{ok, Ids} = boids:populate(Environment, 200, #{}),
+boids:snapshot(Environment).</pre>
       <p class="lead">The 200 boids now move in real time. <code>snapshot/1</code> reads their positions.</p>
     </div>
     <div>
