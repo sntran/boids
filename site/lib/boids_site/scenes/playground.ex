@@ -1,7 +1,7 @@
 defmodule BoidsSite.Scenes.Playground do
   @moduledoc """
-  The scene of the playground: a space with the boids of the definition
-  of a visitor.
+  The scene of the playground: an environment with the boids of the
+  definition of a visitor.
 
   A definition is data (JSON), and not code: the site runs no code of a
   visitor. It has the box, the rocks, and the kinds of boids. Each kind
@@ -81,14 +81,14 @@ defmodule BoidsSite.Scenes.Playground do
       end
     end
 
-    {:ok, server} =
-      :boids.start_space(
+    {:ok, environment} =
+      :boids.start_environment(
         bounds: {{0, 0}, {width, height}},
         wrap: Map.get(definition, "wrap", true) == true,
         defaults: %{tick: BoidsSite.Scene.tick()}
       )
 
-    space = :boids.space(server)
+    space = :boids.space(environment)
     for {{x, y, radius}, number} <- Enum.with_index(rocks), do: :ok = :boids.set_obstacle(space, number, {x, y}, radius)
 
     for kind <- kinds do
@@ -97,7 +97,7 @@ defmodule BoidsSite.Scenes.Playground do
           pos = {:rand.uniform() * width, :rand.uniform() * height}
           state = %{rules: kind.rules, others: kind.others, mode: nil}
           options = Map.merge(kind.options, %{pos: pos, vel: velocity(kind), rules: kind.rules, state: state})
-          {:ok, pid} = :gen_boid.start(Kind, options, space: space)
+          {:ok, pid} = :gen_boid.start(space, Kind, options)
           pid
         end
 

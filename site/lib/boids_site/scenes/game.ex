@@ -1,7 +1,7 @@
 defmodule BoidsSite.Scenes.Game do
   @moduledoc """
   Rock Patrol: a small game. A ship flies in a field of rocks. A queen
-  and its drones hunt the ship.
+  and its drones hunt the ship, and the drones shoot at it.
 
   Each thing in the game is a boid: one process with the behavior
   `gen_boid`.
@@ -11,16 +11,17 @@ defmodule BoidsSite.Scenes.Game do
   - `Rock`: a boid that gets a message when a shot hits it. It starts two
     smaller rocks, and stops.
   - `Shot`: a boid that lives for a short time. It senses what it hits,
-    and sends a message to that boid.
-  - `Drone`: it follows its queen by a relation (`boids:relate/4`), and
-    it hunts the ship when it sees the ship.
+    and sends a message to that boid. A shot of the ship hits the rocks,
+    the drones and the queen. A bolt of a drone hits the ship.
+  - `Drone`: it follows its queen by a relation (`boids:relate/4`). When
+    it sees the ship, it hunts the ship and shoots bolts at it.
   - `Queen`: it starts new drones.
   """
   @behaviour BoidsSite.Scene
 
   @width 160
   @height 90
-  @kinds [:ship, :rocks, :drones, :queen, :shots]
+  @kinds [:ship, :rocks, :drones, :queen, :shots, :bolts]
 
   @doc "The steps of a boid in a time in milliseconds."
   def steps(milliseconds), do: max(div(milliseconds, BoidsSite.Scene.tick()), 1)
@@ -69,7 +70,7 @@ defmodule BoidsSite.Scenes.Game do
             space: space
           }
 
-          {:ok, _} = :gen_boid.start(Rock, part, space: space)
+          {:ok, _} = :gen_boid.start(space, Rock, part)
         end
       end
 
@@ -78,30 +79,35 @@ defmodule BoidsSite.Scenes.Game do
   end
 
   defmodule Shot do
-    @moduledoc "A shot moves in a line for 1.2 seconds. It tells the boid that it hits, and stops."
+    @moduledoc """
+    A shot moves in a line for a short time. It tells the boid that it
+    hits, and stops. Its arguments tell the groups that it hits (`hits`),
+    the process that gets the score or `nil` (`scorer`), and its life in
+    milliseconds (`life`).
+    """
     @behaviour :gen_boid
     alias BoidsSite.Scenes.Game
 
     @impl true
-    def init(%{pos: pos, vel: vel, ship: ship}) do
+    def init(%{pos: pos, vel: vel, group: group, hits: hits, scorer: scorer, life: life}) do
       speed = :boids_vec.norm(vel)
-      state = %{ship: ship, steps: Game.steps(1200)}
+      state = %{hits: hits, scorer: scorer, steps: Game.steps(life)}
 
       {:ok,
-       %{pos: pos, vel: vel, group: :shots, perception: 9, rules: [], min_speed: speed, max_speed: speed, state: state}}
+       %{pos: pos, vel: vel, group: group, perception: 9, rules: [], min_speed: speed, max_speed: speed, state: state}}
     end
 
     # Decide: a target at the distance of its radius is hit.
     @impl true
-    def handle_decide(%{neighbors: neighbors}, %{state: %{ship: ship}} = boid) do
-      case Enum.find(neighbors, &(&1.group in [:rocks, :drones, :queen] and &1.dist <= Game.radius(&1) + 1.0)) do
+    def handle_decide(%{neighbors: neighbors}, %{state: %{hits: hits, scorer: scorer}} = boid) do
+      case Enum.find(neighbors, &(&1.group in hits and &1.dist <= Game.radius(&1) + 1.0)) do
         nil ->
           {:ok, boid}
 
         target ->
           # The id of a boid is its process.
           :gen_boid.cast(target.id, :hit)
-          :gen_boid.cast(ship, {:scored, target.group})
+          if scorer, do: :gen_boid.cast(scorer, {:scored, target.group})
           {:stop, :normal, boid}
       end
     end
@@ -112,8 +118,12 @@ defmodule BoidsSite.Scenes.Game do
   end
 
   defmodule Drone do
-    @moduledoc "A drone stays near its queen. It hunts the ship when it sees the ship."
+    @moduledoc """
+    A drone stays near its queen. When it sees the ship, it hunts the
+    ship, and it shoots a bolt at the ship each 1.8 seconds.
+    """
     @behaviour :gen_boid
+    alias BoidsSite.Scenes.Game
 
     @swarm [
       {{:separation, :rocks}, 3.0, %{radius: 7, groups: [:rocks]}},
@@ -124,19 +134,56 @@ defmodule BoidsSite.Scenes.Game do
     @escort [{:leader, 1.5, %{target: {:related, :guards}, distance: 6}} | @swarm]
     @hunt [{:pursue, 2.5, %{target: {:group, :ship}}} | @swarm]
 
+    # A drone shoots at a ship at this distance or less, and at this
+    # angle or less from the direction of the drone (0.35 rad).
+    @range 25
+    @front :math.cos(0.35)
+
+    # The state: the mode (escorts or hunts), the steps before the next
+    # bolt, the space (to start a bolt), and where the ship is (to aim).
     @impl true
-    def init(pos) do
-      {:ok, %{pos: pos, group: :drones, perception: 26, max_speed: 13, min_speed: 4, rules: @escort, state: :escorts}}
+    def init(%{pos: pos, space: space}) do
+      state = %{mode: :escorts, wait: Game.steps(1800), space: space, aim: nil}
+      {:ok, %{pos: pos, group: :drones, perception: 26, max_speed: 13, min_speed: 4, rules: @escort, state: state}}
     end
 
+    # Decide: hunt the ship while the drone sees it.
     @impl true
-    def handle_decide(%{neighbors: neighbors}, %{state: mode} = boid) do
-      case {Enum.any?(neighbors, &(&1.group == :ship)), mode} do
-        {true, :escorts} -> {:ok, %{:boids_boid.update(boid, %{rules: @hunt}) | state: :hunts}}
-        {false, :hunts} -> {:ok, %{:boids_boid.update(boid, %{rules: @escort}) | state: :escorts}}
-        _ -> {:ok, boid}
+    def handle_decide(%{neighbors: neighbors}, %{state: %{mode: mode} = state} = boid) do
+      ship = Enum.find(neighbors, &(&1.group == :ship))
+      state = %{state | aim: ship && {ship.offset, ship.dist}}
+
+      case {ship != nil, mode} do
+        {true, :escorts} -> {:ok, %{:boids_boid.update(boid, %{rules: @hunt}) | state: %{state | mode: :hunts}}}
+        {false, :hunts} -> {:ok, %{:boids_boid.update(boid, %{rules: @escort}) | state: %{state | mode: :escorts}}}
+        _ -> {:ok, %{boid | state: state}}
       end
     end
+
+    # Act: shoot a bolt at a ship that is near and in front of the drone.
+    @impl true
+    def handle_act(%{pos: pos, vel: vel, state: %{aim: {offset, dist}, wait: 0, space: space} = state} = boid)
+        when dist > 0 and dist <= @range do
+      if :boids_vec.dot(vel, offset) >= @front * :boids_vec.norm(vel) * dist do
+        direction = :boids_vec.scale(offset, 1 / dist)
+
+        bolt = %{
+          pos: :boids_vec.add(pos, :boids_vec.scale(direction, 2.0)),
+          vel: :boids_vec.scale(direction, 30.0),
+          group: :bolts,
+          hits: [:ship],
+          scorer: nil,
+          life: 1000
+        }
+
+        {:ok, _} = :gen_boid.start(space, Shot, bolt)
+        {:ok, %{boid | state: %{state | wait: Game.steps(1800)}}}
+      else
+        {:ok, boid}
+      end
+    end
+
+    def handle_act(%{state: state} = boid), do: {:ok, %{boid | state: %{state | wait: max(state.wait - 1, 0)}}}
 
     @impl true
     def handle_cast(:hit, boid), do: {:stop, :normal, boid}
@@ -174,7 +221,8 @@ defmodule BoidsSite.Scenes.Game do
 
     @doc "Start a drone that guards a queen."
     def drone(space, queen, {x, y}) do
-      {:ok, drone} = :gen_boid.start(Drone, {x + :rand.uniform() * 4 - 2, y + :rand.uniform() * 4 - 2}, space: space)
+      pos = {x + :rand.uniform() * 4 - 2, y + :rand.uniform() * 4 - 2}
+      {:ok, drone} = :gen_boid.start(space, Drone, %{pos: pos, space: space})
       :boids.relate(space, drone, :guards, queen)
     end
   end
@@ -260,8 +308,17 @@ defmodule BoidsSite.Scenes.Game do
         if state.fire and state.wait == 0 do
           forward = Game.direction(state.heading)
           from = :boids_vec.add(pos, :boids_vec.scale(forward, 2.5))
-          shot = %{pos: from, vel: :boids_vec.add(:boids_vec.scale(forward, 45.0), vel), ship: self()}
-          {:ok, _} = :gen_boid.start(Shot, shot, space: state.space)
+
+          shot = %{
+            pos: from,
+            vel: :boids_vec.add(:boids_vec.scale(forward, 45.0), vel),
+            group: :shots,
+            hits: [:rocks, :drones, :queen],
+            scorer: self(),
+            life: 1200
+          }
+
+          {:ok, _} = :gen_boid.start(state.space, Shot, shot)
           %{state | wait: Game.steps(250)}
         else
           %{state | wait: max(state.wait - 1, 0)}
@@ -279,19 +336,28 @@ defmodule BoidsSite.Scenes.Game do
       {:noreply, %{boid | state: %{state | score: state.score + points}}}
     end
 
+    # A bolt of a drone hit the ship.
+    def handle_cast(:hit, %{state: state} = boid), do: {:noreply, %{boid | state: hit(state)}}
+
     # With no key for 5 seconds, the autopilot flies the ship.
     defp manual?(state), do: state.idle < Game.steps(5000)
 
-    # A hit removes one part of the shield. The ship is then safe for 3
-    # seconds. With no shield, the ship is a wreck: the score starts again.
+    # Each step, the safe time of the ship becomes shorter. A rock or a
+    # drone that touches the ship is a hit.
     defp damage(%{safe: safe} = state, _touched) when safe > 0, do: %{state | safe: safe - 1}
     defp damage(state, false), do: state
+    defp damage(state, true), do: hit(state)
 
-    defp damage(%{shield: 1} = state, true) do
+    # A hit removes one part of the shield. The ship is then safe for 3
+    # seconds, and a hit in that time does nothing. With no shield, the
+    # ship is a wreck: the score starts again.
+    defp hit(%{safe: safe} = state) when safe > 0, do: state
+
+    defp hit(%{shield: 1} = state) do
       %{state | shield: 3, score: 0, wrecks: state.wrecks + 1, safe: Game.steps(3000)}
     end
 
-    defp damage(state, true), do: %{state | shield: state.shield - 1, safe: Game.steps(3000)}
+    defp hit(state), do: %{state | shield: state.shield - 1, safe: Game.steps(3000)}
 
     # The autopilot turns to the nearest target, and shoots when the
     # target is in front of the ship.
@@ -320,16 +386,16 @@ defmodule BoidsSite.Scenes.Game do
 
   @impl true
   def start(_definition) do
-    {:ok, server} =
-      :boids.start_space(
+    {:ok, environment} =
+      :boids.start_environment(
         bounds: {{0, 0}, {@width, @height}},
         wrap: true,
         cell_size: 12,
         defaults: %{tick: BoidsSite.Scene.tick()}
       )
 
-    space = :boids.space(server)
-    {:ok, ship} = :gen_boid.start(Ship, space, space: space)
+    space = :boids.space(environment)
+    {:ok, ship} = :gen_boid.start(space, Ship, space)
     scene = %{space: space, ship: ship}
     for _ <- 1..5, do: rock(scene)
     queen(scene)
@@ -343,7 +409,8 @@ defmodule BoidsSite.Scenes.Game do
       %{name: "rocks", shape: "rock", color: "rock", size: 2.2},
       %{name: "drones", shape: "dart", color: "cool", size: 1.4},
       %{name: "queen", shape: "hex", color: "cool", size: 3.0},
-      %{name: "shots", shape: "dot", color: "warm", size: 0.55}
+      %{name: "shots", shape: "dot", color: "warm", size: 0.55},
+      %{name: "bolts", shape: "dot", color: "cool", size: 0.5}
     ]
   end
 
@@ -366,7 +433,7 @@ defmodule BoidsSite.Scenes.Game do
           ["Pilot", if(data.auto, do: "autopilot", else: "you")]
         ]
 
-        # Each second: the swarms of drones, from the space as a graph.
+        # Each second: the swarms of drones, from the environment as a graph.
         readings = if rem(number, steps(1000)) == 0, do: readings ++ [["Swarms", swarms(space)]], else: readings
         %{r: readings, x: %{thrust: data.thrust, safe: data.safe}}
 
@@ -410,13 +477,13 @@ defmodule BoidsSite.Scenes.Game do
 
     if :boids_vec.norm(:boids_space.offset(space, at, pos)) > 30 do
       vel = :boids_vec.scale(:boids_vec.random_unit(2), 3.0 + :rand.uniform() * 3.0)
-      {:ok, _} = :gen_boid.start(Rock, %{pos: pos, vel: vel, size: 3, space: space}, space: space)
+      {:ok, _} = :gen_boid.start(space, Rock, %{pos: pos, vel: vel, size: 3, space: space})
     end
   end
 
   defp queen(%{space: space}) do
     pos = {:rand.uniform() * @width, :rand.uniform() * 20.0}
-    {:ok, queen} = :gen_boid.start(Queen, %{pos: pos, space: space}, space: space)
+    {:ok, queen} = :gen_boid.start(space, Queen, %{pos: pos, space: space})
     for _ <- 1..5, do: Queen.drone(space, queen, pos)
   end
 end

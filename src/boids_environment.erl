@@ -1,9 +1,9 @@
--module(boids_space_server).
+-module(boids_environment).
 -moduledoc """
-The process of a space: the owner of its tables, the list of the
+The process of an environment: the owner of its tables, the list of the
 processes that have a boid in it, and the relations between the boids.
 
-The process of a boid writes its own row in the space, with no message
+The process of a boid writes its own row in the environment, with no message
 to this process. This process adds the row at the start, and it removes
 the row when the process of the boid stops.
 
@@ -12,8 +12,9 @@ is an edge with a label. This process has the graph, and it writes a
 copy of the relations of each boid to a table, where the boids read
 them with no message.
 
-Use the functions of `boids`. A space starts with `boids:start_space/1`,
-or as a child of your supervisor with `boids:child_spec/1`.
+Use the functions of `boids`. An environment starts with
+`boids:start_environment/1`, or as a child of your supervisor with
+`boids:child_spec/1`.
 """.
 -behavior(gen_server).
 
@@ -35,8 +36,8 @@ start_link(Sup, Opts0) ->
     end.
 
 -doc """
-Check the options of a space, and give them as a map. A bad option gives
-the error `{bad_option, {Key, Value}}`.
+Check the options of an environment, and give them as a map. A bad
+option gives the error `{bad_option, {Key, Value}}`.
 """.
 -spec options(map() | [{atom(), term()}]) -> map().
 options(Opts) when is_list(Opts) ->
@@ -62,7 +63,7 @@ options(Opts) when is_map(Opts) ->
 options(Opts) ->
     error({bad_option, Opts}).
 
-%% The option relations of a space, and the other options.
+%% The option relations of an environment, and the other options.
 kind(Opts) ->
     case maps:take(relations, Opts) of
         {Kind, Rest} when Kind =:= cyclic; Kind =:= acyclic -> {Kind, Rest};
@@ -70,7 +71,7 @@ kind(Opts) ->
         error -> {cyclic, Opts}
     end.
 
--doc "The map of a space, with its tables (`boids_space`).".
+-doc "The space of an environment: the map with its tables (`boids_space`).".
 -spec space(server()) -> boids_space:space().
 space(Server) ->
     gen_server:call(Server, space).
@@ -84,9 +85,9 @@ boid_sup(#{owner := Server}) ->
     gen_server:call(Server, boid_sup).
 
 -doc """
-Add the row of a boid of the process `Pid` to the space. The space
-removes the row when the process stops. All the boids of a space have
-positions of the same size: two numbers, or three.
+Add the row of a boid of the process `Pid` to the environment. The
+environment removes the row when the process stops. All the boids of an
+environment have positions of the same size: two numbers, or three.
 """.
 -spec join(boids_space:space(), pid(), boids_space:entry()) ->
     ok | {error, {exists, term()} | {bad_option, {pos, term()}}}.
@@ -94,7 +95,7 @@ join(#{owner := Server}, Pid, Entry) ->
     gen_server:call(Server, {join, Pid, Entry}).
 
 -doc """
-Remove the row of a boid of the process `Pid` from the space. When
+Remove the row of a boid of the process `Pid` from the environment. When
 another process has the id now, its row stays.
 """.
 -spec leave(boids_space:space(), term(), pid()) -> ok.
@@ -103,9 +104,9 @@ leave(#{owner := Server}, Id, Pid) ->
 
 -doc """
 Add the relation `Label` from the boid `From` to the boid `To`. The
-result is `{error, {not_found, Id}}` for an id that is not in the space,
-and `{error, cycle}` when the space has the option `relations =>
-acyclic` and the relation makes a cycle.
+result is `{error, {not_found, Id}}` for an id that is not in the
+environment, and `{error, cycle}` when the environment has the option
+`relations => acyclic` and the relation makes a cycle.
 """.
 -spec relate(boids_space:space(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
 relate(#{owner := Server}, From, Label, To) ->
@@ -124,14 +125,15 @@ each relation is an edge with its label.
 relations(#{owner := Server}) ->
     gen_server:call(Server, relations).
 
-%% --- gen_server -------------------------------------------------------
+%% --- gen_server ------------------------------------------------------
 
 -doc false.
 init({Sup, Opts, Name}) ->
-    %% The tools that show processes show that this process is a space.
-    proc_lib:set_label({boids, space, Name}),
-    %% The boids of a space that has too much work run all the time. The
-    %% space must answer then too.
+    %% The tools that show processes show that this process is an
+    %% environment.
+    proc_lib:set_label({boids, environment, Name}),
+    %% The boids of an environment that has too much work run all the
+    %% time. The environment must answer then too.
     process_flag(priority, high),
     {Relations, Rest} = kind(Opts),
     Links = graph:new([Relations]),
@@ -225,7 +227,7 @@ forget(Id, State0 = #{space := Space}) ->
             State
     end.
 
-%% A boid that goes from the space has no relation.
+%% A boid that goes from the environment has no relation.
 unrelate(Id, State = #{space := Space, links := Links0}) ->
     case graph:has_vertex(Links0, Id) of
         true ->
@@ -237,8 +239,9 @@ unrelate(Id, State = #{space := Space, links := Links0}) ->
             State
     end.
 
-%% Write the relations with a label of boids to the table of the space,
-%% in the two directions: the boids read them there at each step.
+%% Write the relations with a label of boids to the table of the
+%% environment, in the two directions: the boids read them there at each
+%% step.
 publish(Space, Links, Ids, Label) ->
     lists:foreach(
         fun(Id) ->

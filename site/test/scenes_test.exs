@@ -48,7 +48,7 @@ defmodule BoidsSite.ScenesTest do
 
   test "the game has a ship that takes the keys of a person" do
     {_pid, {:ok, scene}} = scene(BoidsSite.Scenes.Game)
-    assert Enum.map(Scene.header(scene).kinds, & &1.name) == ["ship", "rocks", "drones", "queen", "shots"]
+    assert Enum.map(Scene.header(scene).kinds, & &1.name) == ["ship", "rocks", "drones", "queen", "shots", "bolts"]
 
     [moment | _] = moments(scene, 3)
     assert [["Score", 0], ["Shield", 3], ["Wrecks", 0], ["Pilot", "autopilot"] | _] = moment.r
@@ -83,6 +83,69 @@ defmodule BoidsSite.ScenesTest do
     assert count.(:drones) == drones - 1
     assert Enum.sort(for %{group: :rocks, data: size} <- :boids.snapshot(space), do: size) |> Enum.take(2) == [2, 2]
     assert [_ | _] = moments(scene, 2)
+  end
+
+  # Wait until `fun` gives a true value, for `tries` times 50 ms at most.
+  defp eventually(fun, tries) do
+    case fun.() do
+      value when value in [false, nil] and tries > 0 ->
+        Process.sleep(50)
+        eventually(fun, tries - 1)
+
+      value ->
+        value
+    end
+  end
+
+  test "a drone that hunts the ship shoots a bolt at it" do
+    {_pid, {:ok, %{space: space, ship: ship} = scene}} = scene(BoidsSite.Scenes.Game)
+    {:ok, %{pos: {x, y}}} = :boids.lookup(space, ship)
+    {:ok, drone} = :gen_boid.start(space, BoidsSite.Scenes.Game.Drone, %{pos: {x - 12, y}, space: space})
+    # The drone does not move, so its bolt has a distance to go, and the test sees it.
+    :ok = :boids.update(space, drone, %{min_speed: 0, max_speed: 0})
+
+    bolt =
+      eventually(
+        fn ->
+          # The keys of a person: the ship does not shoot at the drone.
+          :ok = Scene.input(scene, %{"keys" => []})
+          Enum.find(:boids.snapshot(space), &(&1.group == :bolts))
+        end,
+        160
+      )
+
+    assert %{group: :bolts} = bolt
+    # The drone hunts: it has the rule of a hunt.
+    assert Process.alive?(drone)
+    assert :pursue in :gen_boid.which_rules(drone)
+    # The page gets the bolt as a kind of its own.
+    kinds = Scene.frame(scene, 1).b |> Enum.chunk_every(6) |> Enum.map(&Enum.at(&1, 4))
+    assert 5 in kinds or :boids.lookup(space, bolt.id) == :error
+  end
+
+  test "a hit takes one part of the shield of a ship that is not safe" do
+    {_pid, {:ok, %{space: space, ship: ship}}} = scene(BoidsSite.Scenes.Game)
+    status = fn -> elem(:boids.lookup(space, ship), 1).data end
+
+    # At the start, the ship is safe: a hit does nothing.
+    assert %{safe: true, shield: 3} = status.()
+    :gen_boid.cast(ship, :hit)
+    Process.sleep(150)
+    assert %{shield: 3, wrecks: 0} = status.()
+
+    # After the safe time, a hit takes one part. A drone of the game can
+    # also hit the ship: the ship is then safe, and the result is the same.
+    before = eventually(fn -> if(status.().safe, do: nil, else: status.()) end, 120)
+    assert %{safe: false, shield: shield, wrecks: wrecks} = before
+    :gen_boid.cast(ship, :hit)
+
+    after_hit =
+      eventually(fn -> if(status.().safe, do: status.(), else: nil) end, 40)
+
+    case shield do
+      1 -> assert %{shield: 3, wrecks: ^wrecks} = Map.update!(after_hit, :wrecks, &(&1 - 1))
+      _ -> assert after_hit.shield == shield - 1
+    end
   end
 
   describe "the playground" do
@@ -151,7 +214,7 @@ defmodule BoidsSite.ScenesTest do
       assert bad.(%{"kinds" => [Map.put(@hawks, "shape", "star")]}) =~ "shape"
       assert bad.(%{"box" => [10, 10], "kinds" => [@hawks]}) =~ "sides of the box"
       assert bad.(%{"rocks" => [[1, 2]], "kinds" => [@hawks]}) =~ "rock is"
-      # A scene that the site refuses starts no space.
+      # A scene that the site refuses starts no environment.
       assert :counters.get(:persistent_term.get(BoidsSite.Scene), 1) == 0
     end
   end

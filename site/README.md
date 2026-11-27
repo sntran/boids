@@ -7,7 +7,7 @@ its VM.
 | Page | What it shows |
 |---|---|
 | `/` | What the library is, with a flock of birds and a hawk that moves on the page. |
-| `/game` | Rock Patrol: a ship in a field of rocks, and a queen with drones that hunt it. A person flies the ship with the keys. |
+| `/game` | Rock Patrol: a ship in a field of rocks, and a queen with drones that hunt it and shoot at it. A person flies the ship with the keys. |
 | `/playground` | A visitor defines kinds of boids and their rules, and sees them move. |
 
 [beam.com](https://github.com/sntran/BEAM.com) makes one file of the
@@ -65,11 +65,11 @@ then deploys at each push.
 ## How it works
 
 - A page opens one WebSocket for its scene (`/ws/flock`, `/ws/game`,
-  `/ws/playground`). The server starts one space with its boids for
+  `/ws/playground`). The server starts one environment with its boids for
   that socket, and sends one moment of it at each tick: the position, the
   direction and the kind of each boid. The page draws the moments.
 - A scene stops when its socket closes. With no visitor, the VM has no
-  space and does no work.
+  environment and does no work.
 - A scene is a module with the behavior `BoidsSite.Scene`
   ([`lib/boids_site/scene.ex`](lib/boids_site/scene.ex)). The scenes are
   in [`lib/boids_site/scenes`](lib/boids_site/scenes).
@@ -87,7 +87,7 @@ keys.
 - A name of a visitor never becomes an atom. The names of the rules and
   of their options come from a fixed list, and a group is a string.
 - The library checks the options and the rules. A bad definition gives a
-  text for the visitor, and starts no space.
+  text for the visitor, and starts no environment.
 
 ## The settings
 

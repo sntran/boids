@@ -18,8 +18,8 @@ decides and acts.
   step. It answers messages, and it has its own state. A person, a
   vehicle or an animal of your program is such a module.
 - **A boid has relations.** A boid follows a leader, or fears an enemy.
-  The space keeps the relations as a graph.
-- **A boid that stops with an error goes from its space.** The other
+  The environment keeps the relations as a graph.
+- **A boid that stops with an error goes from its environment.** The other
   boids continue.
 - **No dependency.** The library is Erlang code. It uses only `kernel`
   and `stdlib`, from Erlang/OTP 29.
@@ -70,9 +70,9 @@ With rebar3:
 In Erlang:
 
 ```erlang
-1> {ok, Space} = boids:start_space(#{bounds => {{0, 0}, {100, 100}}, wrap => true}).
-2> {ok, Ids} = boids:populate(Space, 200, #{}).
-3> boids:snapshot(Space).
+1> {ok, Environment} = boids:start_environment(#{bounds => {{0, 0}, {100, 100}}, wrap => true}).
+2> {ok, Ids} = boids:populate(Environment, 200, #{}).
+3> boids:snapshot(Environment).
 [#{id => <0.153.0>, pos => {61.2, 8.9}, vel => {-3.1, 7.4},
    group => default, data => undefined, pid => <0.153.0>} | _]
 ```
@@ -81,9 +81,9 @@ In Elixir, the module is `:boids`, and the options can be a keyword
 list:
 
 ```elixir
-{:ok, space} = :boids.start_space(bounds: {{0, 0}, {100, 100}}, wrap: true)
-{:ok, ids} = :boids.populate(space, 200, max_speed: 12.0)
-:boids.snapshot(space)
+{:ok, environment} = :boids.start_environment(bounds: {{0, 0}, {100, 100}}, wrap: true)
+{:ok, ids} = :boids.populate(environment, 200, max_speed: 12.0)
+:boids.snapshot(environment)
 ```
 
 The 200 boids now move in real time: each is a process that makes a step
@@ -92,8 +92,9 @@ them.
 
 ## See a flock
 
-The directory [`site`](https://github.com/sntran/boids/tree/main/site) is a site for the library, made with the
-library: a home page with a flock, a game, and a playground.
+The directory [`site`](https://github.com/sntran/boids/tree/main/site)
+is a site for the library, made with the library: a home page with a
+flock, a game, and a playground.
 
 ```sh
 cd site
@@ -104,9 +105,9 @@ mix run --no-halt
 Then open `http://localhost:4000`.
 
 - **The game** (`/game`) is a ship in a field of rocks, and a queen with
-  drones that hunt the ship. The arrow keys turn the ship and give
-  thrust, and the space bar shoots. Each thing in the game is a module
-  with the behavior `gen_boid`: see
+  drones that hunt the ship and shoot at it. The arrow keys turn the
+  ship and give thrust, and the space bar shoots. Each thing in the game is a
+  module with the behavior `gen_boid`: see
   [`site/lib/boids_site/scenes/game.ex`](https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/game.ex).
 - **The playground** (`/playground`) starts boids from a definition
   that you write: kinds of boids, their rules, what they do when they
@@ -115,9 +116,9 @@ Then open `http://localhost:4000`.
 | Boid of the game | What it shows |
 |---|---|
 | The ship | A boid that a person controls. Its force is a rule of its own, a function that reads the keys. The autopilot is a list of rules of the library. |
-| A rock | A message to a boid: a rock that gets `hit` starts two smaller rocks, and stops. The space removes a boid that stops. |
+| A rock | A message to a boid: a rock that gets `hit` starts two smaller rocks, and stops. The environment removes a boid that stops. |
 | A shot | A boid that lives for a short time. It senses the boid that it touches, and sends `hit` to that process. |
-| A drone | A relation: each drone has the relation `guards` to its queen, and follows it. A drone that sees the ship changes its rules. |
+| A drone | A relation: each drone has the relation `guards` to its queen, and follows it. A drone that sees the ship changes its rules, hunts the ship, and shoots bolts at it. |
 | The queen | A boid that starts other boids. |
 
 The site also runs on Cloudflare Workers, with the BEAM in WebAssembly
@@ -164,7 +165,7 @@ handle_call(energy, _From, Boid = #{state := #{energy := Energy}}) ->
 ```
 
 ```erlang
-{ok, Hawk} = gen_boid:start(hawk, {50, 50}, #{space => Space}),
+{ok, Hawk} = gen_boid:start(Environment, hawk, {50, 50}),
 10.0 = gen_boid:call(Hawk, energy).
 ```
 
@@ -195,7 +196,7 @@ defmodule Hawk do
   def handle_call(:energy, _from, %{state: %{energy: energy}} = boid), do: {:reply, energy, boid}
 end
 
-{:ok, hawk} = :gen_boid.start(Hawk, {50, 50}, space: space)
+{:ok, hawk} = :gen_boid.start(environment, Hawk, {50, 50})
 10.0 = :gen_boid.call(hawk, :energy)
 ```
 
@@ -224,7 +225,7 @@ end
 - A module with only `init/1` is a boid that follows its rules. A boid
   of `boids:add/2` and `boids:populate/3` is a `gen_boid` with no module
   of yours.
-- `gen_boid:start/3` starts a boid below the supervisor of its space.
+- `gen_boid:start/3` starts a boid below the supervisor of its environment.
   `gen_boid:start_link/3` and `gen_boid:child_spec/1` are for a
   supervisor of yours (see "A boid that stops").
 - Two kinds of boid that share a part, for example a hawk and a wolf
@@ -243,62 +244,84 @@ Birds = [
     {alignment, 1.0},
     {cohesion, 1.0}
 ],
-{ok, _} = boids:populate(Space, 70, #{group => birds, rules => Birds, combine => priority}),
+{ok, _} = boids:populate(Environment, 70, #{group => birds, rules => Birds, combine => priority}),
 
 Hawk = [{avoid, 4.0}, {pursue, 1.0, #{target => {group, birds}}}, {wander, 0.5}],
-{ok, HawkId} = boids:add(Space, #{pos => {50, 50}, group => hawks, rules => Hawk, perception => 25}),
+{ok, HawkId} = boids:add(Environment, #{pos => {50, 50}, group => hawks, rules => Hawk, perception => 25}),
 
-ok = boids:set_obstacle(Space, rock, {30, 30}, 5).
+ok = boids:set_obstacle(Environment, rock, {30, 30}, 5).
 ```
 
 - `boids:update/3` changes the rules and the other options of a boid:
-  `boids:update(Space, HawkId, #{rules => [{arrive, 1.0, #{target =>
+  `boids:update(Environment, HawkId, #{rules => [{arrive, 1.0, #{target =>
   {10, 10}}}]})`.
 - `boids:add_rule/3` adds one rule to a boid, and `boids:delete_rule/3`
   removes one. `boids:which_rules/2` gives the names of its rules.
 - A boid can have a rule two times, with a name for each one:
   `{{seek, home}, 1.0, #{target => {0, 0}}}` and `{{seek, food}, 2.0,
-  #{target => {40, 10}}}`. `boids:delete_rule(Space, Id, {seek, food})`
+  #{target => {40, 10}}}`. `boids:delete_rule(Environment, Id, {seek, food})`
   removes the second one.
-- With `combine => sum` (the default), the force of a boid is the sum of
-  the forces of its rules. With `combine => priority`, the first rules
-  of the list use the force first.
 - `separation` sees all the groups. `alignment` and `cohesion` see only
   the group of the boid. The option `groups` of a rule changes this.
+
+### The order of the rules
+
+The rules of a boid are a list, and the list has an order.
+
+- With `combine => sum` (the default), the order has no effect on the
+  force. The force is the sum of the forces of all the rules, each
+  multiplied by its weight, with the length `max_force` at most.
+- With `combine => priority`, the order is the priority. Each rule, in
+  the order of the list, takes a part of `max_force`, and the last rules
+  get what stays. Put `avoid` first there.
+- The order is also the order of `boids:which_rules/2`, and
+  `boids:delete_rule/3` removes the first rule with a name.
+
+`boids_boid:forces/3` gives the force of each rule, before the forces
+become one force. Use it to see what each rule does, and to adjust the
+weights:
+
+```erlang
+{ok, Boid} = boids:boid(Environment, Id),
+Neighbors = boids:sense(boids:space(Environment), Boid),
+{Forces, _} = boids_boid:forces(Boid, Neighbors, #{dt => 0.05}),
+[{separation, _}, {alignment, _}, {cohesion, _}] = Forces.
+```
 
 ## A rule of your own
 
 A rule of your own is a function. It gets the boid, the neighbors that
-the boid sees (the nearest first) and the environment of the space, and
-it gives a force:
+the boid sees (the nearest first) and the environment of the
+environment, and it gives a force:
 
 ```erlang
 %% A force down, and a force away from the nearest boid of the group cats.
-Gravity = fun(_Boid, _Neighbors, _Env) -> {0, -9.81} end,
-Fear = fun(Boid, Neighbors, _Env) ->
+Gravity = fun(_Boid, _Neighbors, _Seen) -> {0, -9.81} end,
+Fear = fun(Boid, Neighbors, _Seen) ->
     case [Cat || Cat = #{group := cats} <- Neighbors] of
         [#{pos := Pos} | _] -> boids_steer:flee(Boid, Pos);
         [] -> {0, 0}
     end
 end,
-boids:add(Space, #{pos => {0, 50}, rules => [{Gravity, 1.0}, {Fear, 3.0}, {wander, 0.5}]}).
+boids:add(Environment, #{pos => {0, 50}, rules => [{Gravity, 1.0}, {Fear, 3.0}, {wander, 0.5}]}).
 ```
 
 ```elixir
-gravity = fn _boid, _neighbors, _env -> {0, -9.81} end
-:boids.add(space, pos: {0, 50}, rules: [{gravity, 1.0}, {:wander, 0.5}])
+gravity = fn _boid, _neighbors, _seen -> {0, -9.81} end
+:boids.add(environment, pos: {0, 50}, rules: [{gravity, 1.0}, {:wander, 0.5}])
 ```
 
 - The boid and each neighbor are maps: `maps:get(pos, Boid)`,
-  `maps:get(dist, Neighbor)`. `Env` has `dt` (the seconds of the step),
-  `obstacles`, `bounds` and `wrap`.
+  `maps:get(dist, Neighbor)`. `Seen` is what the boid perceives in this
+  step: `dt` (the seconds of the step), `obstacles`, `bounds` and
+  `wrap`.
 - The functions of `boids_steer` and `boids_vec` are the parts of a new
   rule: for example `boids_steer:seek/2` to a point that the rule
   calculates.
 - Use `fun Module:Function/3` for a rule that stays when the code of
   its module changes.
 - A function that has an error stops the process of its boid, and the
-  space removes the boid.
+  environment removes the boid.
 
 ## The relations between the boids
 
@@ -307,68 +330,68 @@ fears an enemy, it has a mate. A relation has a direction and a label,
 which is a term of yours.
 
 ```erlang
-ok = boids:relate(Space, Bird, follows, Leader),
-ok = boids:update(Space, Bird, #{rules => [{leader, 1.0, #{target => {related, follows}}}]}),
+ok = boids:relate(Environment, Bird, follows, Leader),
+ok = boids:update(Environment, Bird, #{rules => [{leader, 1.0, #{target => {related, follows}}}]}),
 
-[Leader] = boids:related(Space, Bird, follows),
-[Bird] = boids:related_to(Space, Leader, follows).
+[Leader] = boids:related(Environment, Bird, follows),
+[Bird] = boids:related_to(Environment, Leader, follows).
 ```
 
 - A rule with the target `{related, Label}` uses the relation at each
   step. The boid reads it from a table, with no message.
-- The relations of a boid go when the boid goes from its space.
-- The space keeps the relations as a graph, with the module `graph` of
+- The relations of a boid go when the boid goes from its environment.
+- The environment keeps the relations as a graph, with the module `graph` of
   Erlang/OTP. `boids:relations/1` gives it, and the functions of `graph`
   answer questions about it:
 
   ```erlang
-  Relations = boids:relations(Space),
+  Relations = boids:relations(Environment),
   Chain = graph:get_path(Relations, Bird, TopLeader),
   true = graph:is_acyclic(Relations).
   ```
 
-- With `boids:start_space(#{relations => acyclic})`, a relation that
+- With `boids:start_environment(#{relations => acyclic})`, a relation that
   makes a cycle gives `{error, cycle}`. Use it for a hierarchy: the
   order of a formation is then `graph:topsort/1`.
 
-## The flocks of a space
+## The flocks of an environment
 
 A flock is a group of boids that see each other. No process makes a
 flock: it comes from the rules of the boids. `boids:flocks/2` gives the
-flocks of a space, as lists of ids:
+flocks of an environment, as lists of ids:
 
 ```erlang
-Flocks = boids:flocks(Space, 10),
+Flocks = boids:flocks(Environment, 10),
 Largest = lists:max([length(Flock) || Flock <- Flocks]).
 ```
 
 Two boids are in one flock when a chain of boids goes from one to the
 other, each at the distance 10 or less from the next.
 
-`boids:graph/2` gives all the space as a graph for the module `graph`:
+`boids:graph/2` gives all the environment as a graph for the module `graph`:
 each boid is a vertex with its row as the label, and an edge goes from a
 boid to each boid at a distance or less.
 
 ```erlang
-Graph = boids:graph(Space, 10),
+Graph = boids:graph(Environment, 10),
 Alone = [Id || Id <- graph:vertices(Graph), graph:out_degree(Graph, Id) =:= 0],
 true = graph:has_path(Graph, BoidA, BoidB).
 ```
 
 Use it to find the boids that are alone, or if a signal can go from one
 boid to another from neighbor to neighbor. The two functions read all
-the space, and take 50 µs to 200 µs for each boid: they are for a view,
-and not for each step of a boid.
+the environment, and take 50 µs to 200 µs for each boid: they are for a
+view, and not for each step of a boid.
 
-## The space
+## The environment
 
-- `bounds => {Min, Max}` is the box of the space. The rule `contain`
+- `bounds => {Min, Max}` is the box of the environment. The rule `contain`
   keeps a boid in it.
 - With `wrap => true`, each side of the box continues at the opposite
   side. A boid sees the boids across a side as its neighbors.
 - An obstacle is a circle, or a sphere in three dimensions:
   `boids:set_obstacle/4`. Call it again to move the obstacle.
-- All the boids of a space have two dimensions, or all have three.
+- All the boids of an environment have two dimensions, or all have three.
 - The library has no unit of length. A speed is in units for each
   second.
 
@@ -377,15 +400,15 @@ and not for each step of a boid.
 - A boid makes a step each `tick` milliseconds of its own clock (the
   default is 50). The time of a step is the time that passed on the
   clock.
-- `boids:set_time_scale/2` makes the time of a space faster or slower.
-  With 0, the boids stop.
-- With `search => 4`, a boid searches the space for its neighbors at
+- `boids:set_time_scale/2` makes the time of an environment faster or
+  slower. With 0, the boids stop.
+- With `search => 4`, a boid searches the environment for its neighbors at
   one step of 4. In the other steps, it reads only the neighbors that it
   knows, where they are now. The search is the largest part of a step,
   so such boids make more steps in a second (see "The speed"). A boid
   does not see a boid that came near after its last search.
 - With `tick => manual`, the boids move only with `boids:step/2`. First
-  each boid calculates its step from the same state of the space, then
+  each boid calculates its step from the same state of the environment, then
   they all move. With a `seed` for each boid, such a run always gives
   the same result. Use it for a test, or for a simulation that is faster
   than the clock.
@@ -393,12 +416,12 @@ and not for each step of a boid.
 ## A process with another behavior as a boid
 
 Use `gen_boid` for a new boid. A process that has another behavior, for
-example a `gen_statem`, can be a boid of a space too. It calls `join/2`
-one time, and `advance/3` at each step:
+example a `gen_statem`, can be a boid of an environment too. It calls
+`join/2` one time, and `advance/3` at each step:
 
 ```erlang
-init(Name) ->
-    {ok, Space, Boid} = boids:join(Name, #{pos => {0, 0}, vel => {1, 0}}),
+init(Environment) ->
+    {ok, Space, Boid} = boids:join(Environment, #{pos => {0, 0}, vel => {1, 0}}),
     erlang:send_after(50, self(), tick),
     {ok, #{space => Space, boid => Boid}}.
 
@@ -411,8 +434,8 @@ handle_info(tick, State = #{space := Space, boid := Boid0}) ->
 The same in Elixir:
 
 ```elixir
-def init(name) do
-  {:ok, space, boid} = :boids.join(name, pos: {0, 0}, vel: {1, 0})
+def init(environment) do
+  {:ok, space, boid} = :boids.join(environment, pos: {0, 0}, vel: {1, 0})
   Process.send_after(self(), :tick, 50)
   {:ok, %{space: space, boid: boid}}
 end
@@ -425,37 +448,38 @@ end
 
 The boid is a map: `maps:get(pos, Boid)` is its position.
 `boids_boid:update/2` changes its rules, and `boids:commit/2` writes the
-change to the space. The other boids see it as they see each boid. The
-space removes it when the process stops.
+change to the environment. The other boids see it as they see each
+boid. The environment removes it when the process stops.
 
 The functions of the rules have no state and no process: `boids_boid`
 (one step of one boid), `boids_steer` (each rule) and `boids_vec`
 (vectors) work alone, with data of your own.
 
-## A space below a supervisor of yours
+## An environment below a supervisor of yours
 
-`boids:start_space/1` starts a space below the supervisor of the
-application `boids`. For a space in your supervision tree, use the child
-specification, with a name:
+`boids:start_environment/1` starts an environment below the supervisor
+of the application `boids`. For an environment in your supervision tree,
+use the child specification, with a name:
 
 ```erlang
 init([]) ->
-    {ok, {#{}, [boids:child_spec(#{name => my_space, bounds => {{0, 0}, {100, 100}}})]}}.
+    {ok, {#{}, [boids:child_spec(#{name => my_environment, bounds => {{0, 0}, {100, 100}}})]}}.
 ```
 
 ```elixir
-children = [{:boids, name: :my_space, bounds: {{0, 0}, {100, 100}}}]
+children = [{:boids, name: :my_environment, bounds: {{0, 0}, {100, 100}}}]
 ```
 
 ## How it works
 
-A space has ETS tables with one row for each boid, and a grid of cells
-as the index of the rows. A boid reads the cells around it: it sends no
-message, and it does not read all the space. Only the process of a boid
-writes its row, so there is no lock in the library. The process of the
-space only adds a row when a boid starts, and removes it when the
-process of the boid stops. It also keeps the graph of the relations,
-and writes the relations of each boid to a table that the boids read.
+An environment has ETS tables with one row for each boid, and a grid of
+cells as the index of the rows. A boid reads the cells around it: it
+sends no message, and it does not read all the environment. Only the
+process of a boid writes its row, so there is no lock in the library.
+The process of the environment only adds a row when a boid starts, and
+removes it when the process of the boid stops. It also keeps the graph
+of the relations, and writes the relations of each boid to a table that
+the boids read.
 
 A boid reads the rows while the other boids write them. Thus the
 neighbors that it sees are not all of the same moment, as for a bird.
@@ -464,12 +488,12 @@ neighbors that it sees are not all of the same moment, as for a bird.
 ## The specifications
 
 The flows where the order of the processes can change the result have a
-specification in TLA+ (`specs/`): the members of a space, a write
-against a read of the space, and the step in two parts. The tests check
-a small model of each one, and fault models that must fail, with the
-native checker of [Accord](https://github.com/sntran/accord). They also
-replay the messages of the process of a real space as a behavior of
-`specs/Members.tla`. See [`docs/specs.md`](docs/specs.md).
+specification in TLA+ (`specs/`): the members of an environment, a write
+against a read of the environment, and the step in two parts. The tests
+check a small model of each one, and fault models that must fail, with
+the native checker of [Accord](https://github.com/sntran/accord). They
+also replay the messages of the process of a real environment as a
+behavior of `specs/Members.tla`. See [`docs/specs.md`](docs/specs.md).
 
 ## The speed
 
@@ -507,8 +531,8 @@ mix run examples/speed.exs 6000
 
 ## A boid that stops
 
-- The space is the supervisor of the boids of `boids:add/2`: they stop
-  with it. It does not start a boid again after an error: the space
+- The environment is the supervisor of the boids of `boids:add/2`: they stop
+  with it. It does not start a boid again after an error: the environment
   removes the row of the boid, and its id is free. A boid with an error
   at each step would start again without end. `boids:whereis/2` gives
   the process of a boid, for a monitor.
@@ -519,30 +543,31 @@ mix run examples/speed.exs 6000
 
   ```erlang
   {ok, {#{strategy => rest_for_one}, [
-      boids:child_spec(#{name => my_space}),
-      gen_boid:child_spec({hawk, {50, 50}, #{space => my_space}})
+      boids:child_spec(#{name => my_environment}),
+      gen_boid:child_spec({my_environment, hawk, {50, 50}})
   ]}}
   ```
 
 - A process that starts again with the id of its last process gets its
-  row again, also before the space saw the end of the old process. That
-  is true for a `gen_boid` and for a process with `boids:join/2`.
-- Each process of a space and of a boid has a label (`proc_lib`), so
+  row again, also before the environment saw the end of the old process.
+  That is true for a `gen_boid` and for a process with `boids:join/2`.
+- Each process of an environment and of a boid has a label (`proc_lib`), so
   the observer and a crash report show which boid a process is.
-- When the process of a space stops with an error, all the space stops.
-  A space below a supervisor of yours starts again, with no boid.
+- When the process of an environment stops with an error, all the
+  environment stops. An environment below a supervisor of yours starts
+  again, with no boid.
 - Each number of an option is 1.0e100 at most.
 
 ## The limits
 
-- A space is on one node: the tables are local.
+- An environment is on one node: the tables are local.
 - An obstacle is a circle or a sphere. There are no walls and no
   polygons. A rule of your own can add them.
 - The rule `follow` does not use `wrap`.
 - The steps of the boids are not at the same moment, except with
   `boids:step/2`.
 - The size of the vectors of the first boid (two numbers, or three)
-  stays for the life of the space.
+  stays for the life of the environment.
 
 ## Development
 

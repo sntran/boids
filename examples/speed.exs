@@ -32,13 +32,13 @@ defmodule Speed do
     IO.puts("|---|---|---|")
 
     for search <- [1, 4] do
-      {:ok, space} = :boids.start_space(bounds: {{0, 0}, {side, side}}, wrap: true)
+      {:ok, environment} = :boids.start_environment(bounds: {{0, 0}, {side, side}}, wrap: true)
       steps = :counters.new(1, [:write_concurrency])
 
       for _ <- 1..count do
         pos = {:rand.uniform() * side, :rand.uniform() * side}
         vel = :boids_vec.scale(:boids_vec.random_unit(2), 5.0)
-        {:ok, _} = :gen_boid.start(Counter, %{pos: pos, vel: vel, search: search, state: steps}, space: space)
+        {:ok, _} = :gen_boid.start(environment, Counter, %{pos: pos, vel: vel, search: search, state: steps})
       end
 
       # The first seconds move the boids from random positions to flocks.
@@ -47,7 +47,7 @@ defmodule Speed do
       Process.sleep(5000)
       rate = (:counters.get(steps, 1) - before) / 5
       IO.puts("| each #{search} steps | #{round(rate)} | #{Float.round(rate / count, 1)} |")
-      :ok = :boids.stop_space(space)
+      :ok = :boids.stop_environment(environment)
     end
   end
 end

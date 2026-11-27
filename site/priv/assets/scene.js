@@ -1,5 +1,5 @@
-// A scene of the site of boids: a WebSocket to a space with boids on the
-// server, and a canvas that draws each moment of these boids.
+// A scene of the site of boids: a WebSocket to an environment with boids
+// on the server, and a canvas that draws each moment of these boids.
 //
 //   var scene = Boids.scene({name: "game", canvas: element, readings: element, source: element});
 //   scene.send({keys: ["left"]});

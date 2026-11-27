@@ -14,7 +14,7 @@ for a process with another behavior.
 |---|---|---|
 | `pos` | (necessary) | The position: `{X, Y}` or `{X, Y, Z}`. |
 | `vel` | zero | The velocity, in units for each second. |
-| `id` | a reference | The name of the boid in its space. |
+| `id` | a reference | The name of the boid in its environment. |
 | `group` | `default` | The group of the boid: an atom, or another term. |
 | `data` | `undefined` | A term of yours. The neighbors see it. |
 | `max_speed` | `10.0` | The maximum speed. |
@@ -47,8 +47,8 @@ is the three rules of a flock:
 | `pursue` | `target`, `max_time` (`infinity`) | Move to where the target will be. |
 | `evade` | `target`, `radius` (`infinity`), `max_time` (`infinity`) | Move away from where the target will be. |
 | `wander` | `distance` (`2.0`), `radius` (`1.0`), `jitter` (`2.0`) | Move in a direction that changes slowly. |
-| `avoid` | `lookahead` (`1.0` second), `clearance` (a tenth of `perception`) | Move around the obstacles of the space. |
-| `contain` | `margin` (`perception`), `bounds` (those of the space) | Stay in the box. |
+| `avoid` | `lookahead` (`1.0` second), `clearance` (a tenth of `perception`) | Move around the obstacles of the environment. |
+| `contain` | `margin` (`perception`), `bounds` (those of the environment) | Stay in the box. |
 | `follow` | `path`, `ahead` (`perception`), `predict` (`0.5` second), `loop` (`false`) | Move along a list of points. |
 | `cruise` | `speed` (`max_speed`) | Keep a speed in the direction of the movement. |
 | `leader` | `target`, `distance` (half of `perception`), `slow_radius` (`perception`) | Stay behind a leader, and move out of its way. |
@@ -57,33 +57,45 @@ is the three rules of a flock:
 
 `groups` is `all`, `same` (the group of the boid) or a list of groups.
 
-`target` is a point, `{boid, Id}` (a boid of the space), `{group,
+`target` is a point, `{boid, Id}` (a boid of the environment), `{group,
 Group}` (the nearest neighbor of that group) or `{related, Label}` (the
 boid that this boid has the relation `Label` to, see `boids:relate/4`).
 A target that does not exist gives no force.
 
 A rule of your own is a function: `{Fun, Weight}`, where `Fun(Boid,
-Neighbors, Env)` gives the force. `Neighbors` are the boids that the
-boid sees, the nearest first. `Env` has `dt` (the seconds of the step),
-`obstacles`, `bounds` and `wrap`. Use `fun Module:Function/3` for a rule
-that stays when the code of the module changes.
+Neighbors, Seen)` gives the force. `Neighbors` are the boids that the
+boid sees, the nearest first. `Seen` is what the boid perceives in this
+step: `dt` (the seconds of the step), `obstacles`, `bounds` and `wrap`.
+Use `fun Module:Function/3` for a rule that stays when the code of the
+module changes.
 
 A boid can have a rule of the library two times, for example two
 targets of `seek`. Give a name to each one: `{{seek, home}, 1.0,
 #{target => {0, 0}}}`. The name of a rule is its first part: `seek`,
 `{seek, home}` or the function. `add_rule/2` and `delete_rule/2` use it.
 
-With `combine => sum`, the force is the sum of the forces, each
-multiplied by its weight, with the length `max_force` at most. With
-`combine => priority`, each rule in the order of the list uses a part of
-`max_force`, and the last rules get what stays. Put `avoid` first there.
+## The order of the rules
+
+The rules of a boid are a list, and the list has an order.
+
+- With `combine => sum` (the default), the order has no effect on the
+  force. The force is the sum of the forces of all the rules, each
+  multiplied by its weight, with the length `max_force` at most.
+- With `combine => priority`, the order is the priority. Each rule, in
+  the order of the list, takes a part of `max_force`, and the last rules
+  get what stays. Put `avoid` first there.
+- The order is also the order of `which_rules/1`, and `delete_rule/2`
+  removes the first rule with a name.
+
+`forces/3` gives the force of each rule, before the forces become one
+force. Use it to see what each rule does, and to adjust the weights.
 """.
 
 -export([new/1, update/2, options/1, entry/1, to_map/1]).
 -export([add_rule/2, delete_rule/2, which_rules/1]).
--export([perceive/2, force/3, integrate/4, step/4]).
+-export([perceive/2, forces/3, force/3, integrate/4, step/4]).
 
--export_type([boid/0, rule/0, name/0, target/0, env/0]).
+-export_type([boid/0, rule/0, name/0, target/0, seen/0]).
 
 -type vec() :: boids_vec:vec().
 -type boid() :: #{
@@ -124,10 +136,11 @@ multiplied by its weight, with the length `max_force` at most. With
 -type name() ::
     rule_name()
     | {rule_name(), Id :: term()}
-    | fun((boid(), [boids_space:neighbor()], env()) -> vec()).
+    | fun((boid(), [boids_space:neighbor()], seen()) -> vec()).
 -type rule() :: {name(), number()} | {name(), number(), map() | [{atom(), term()}]}.
 -type target() :: vec() | {boid, term()} | {group, term()} | {related, term()}.
--type env() :: #{
+-type seen() :: #{
+    neighbors => [boids_space:neighbor()],
     dt => number(),
     bounds => {vec(), vec()} | undefined,
     wrap => boolean(),
@@ -203,8 +216,8 @@ which_rules(#{rules := Rules}) ->
 
 -doc """
 Check options with no boid, and give them as a map: each value alone,
-and not the values together. `boids:start_space/1` checks the `defaults`
-of a space with this function.
+and not the values together. `boids:start_environment/1` checks the
+`defaults` of an environment with this function.
 """.
 -spec options(map() | [{atom(), term()}]) -> map().
 options(Opts) ->
@@ -269,7 +282,7 @@ ok(combine, Combine) -> Combine =:= sum orelse Combine =:= priority;
 ok(rules, Rules) when is_list(Rules) -> {ok, [rule(Rule) || Rule <- Rules]};
 ok(_, _) -> false.
 
-%% --- The rules: the check ---------------------------------------------
+%% --- The rules: the check --------------------------------------------
 
 rule({Name, Weight}) ->
     rule({Name, Weight, #{}});
@@ -337,7 +350,7 @@ opt(_, _, _) -> false.
 
 is_distance(N) -> N =:= infinity orelse boids_vec:is_size(N).
 
-%% --- One step ---------------------------------------------------------
+%% --- One step --------------------------------------------------------
 
 -doc """
 The neighbors that a boid sees, from the boids near it (the result of
@@ -360,33 +373,52 @@ in_view(#{dist := Dist}, _Heading, _Cos) when Dist == 0 -> true;
 in_view(#{offset := Offset, dist := Dist}, Heading, Cos) -> boids_vec:dot(Heading, Offset) / Dist >= Cos.
 
 -doc """
-The force of all the rules of a boid, and the boid with the memory of
-its rules (the point of `wander`). See the module for `Env`.
+The force of each rule of a boid, in the order of its rules: a list of
+`{Name, Force}`. Each force is multiplied by the weight of its rule. The
+result also has the boid with the memory of its rules (the point of
+`wander`).
+
+`force/3` makes one force of these forces. Use this function to see what
+each rule gives, for example to adjust the weights:
+
+```erlang
+{Forces, _Boid} = boids_boid:forces(Boid, Neighbors, #{dt => 0.05}),
+[{separation, {1.2, 0.0}}, {alignment, {0.0, 0.4}}, {cohesion, {-0.3, 0.1}}] = Forces.
+```
 """.
--spec force(boid(), [boids_space:neighbor()], env()) -> {vec(), boid()}.
-force(Boid = #{rules := Rules, memory := Memory0, combine := Combine, max_force := MaxForce, pos := Pos}, Neighbors, Env) ->
+-spec forces(boid(), [boids_space:neighbor()], seen()) -> {[{name(), vec()}], boid()}.
+forces(Boid = #{rules := Rules, memory := Memory0}, Neighbors, Seen) ->
     {Forces, Memory} =
         lists:mapfoldl(
             fun({Name, Weight, Opts}, Memory1) ->
-                case apply_rule(base(Name), Opts, Boid, Neighbors, Env, Memory1, Name) of
+                case apply_rule(base(Name), Opts, Boid, Neighbors, Seen, Memory1, Name) of
                     %% A force is a tuple of numbers. Only a rule of the
                     %% library keeps a memory.
                     {Force, Kept} when is_tuple(Force), not is_function(Name) ->
-                        {boids_vec:scale(Force, Weight), Memory1#{Name => Kept}};
+                        {{Name, boids_vec:scale(Force, Weight)}, Memory1#{Name => Kept}};
                     Force ->
-                        {boids_vec:scale(Force, Weight), Memory1}
+                        {{Name, boids_vec:scale(Force, Weight)}, Memory1}
                 end
             end,
             Memory0,
             Rules
         ),
-    Zero = boids_vec:zero(boids_vec:dim(Pos)),
-    Force = combine(Combine, Forces, MaxForce, Zero),
     %% Most boids have no rule with a memory: the boid does not change.
     case Memory =:= Memory0 of
-        true -> {Force, Boid};
-        false -> {Force, Boid#{memory := Memory}}
+        true -> {Forces, Boid};
+        false -> {Forces, Boid#{memory := Memory}}
     end.
+
+-doc """
+The force of all the rules of a boid, and the boid with the memory of
+its rules (the point of `wander`). See the module for `Seen`, and for
+how the forces of the rules become one force (`combine`).
+""".
+-spec force(boid(), [boids_space:neighbor()], seen()) -> {vec(), boid()}.
+force(Boid0 = #{combine := Combine, max_force := MaxForce, pos := Pos}, Neighbors, Seen) ->
+    {Forces, Boid} = forces(Boid0, Neighbors, Seen),
+    Zero = boids_vec:zero(boids_vec:dim(Pos)),
+    {combine(Combine, [Force || {_Name, Force} <- Forces], MaxForce, Zero), Boid}.
 
 combine(sum, Forces, MaxForce, Zero) ->
     boids_vec:limit(lists:foldl(fun boids_vec:add/2, Zero, Forces), MaxForce);
@@ -398,15 +430,15 @@ combine(priority, _Forces, _Left, Acc) ->
 
 -doc """
 Move a boid for `Dt` seconds with a force. The speed stays in the limits
-of the boid. With `wrap` in `Env`, the position stays in the box.
+of the boid. With `wrap` in `Seen`, the position stays in the box.
 """.
--spec integrate(boid(), vec(), env(), number()) -> boid().
-integrate(Boid, _Force, _Env, Dt) when Dt =< 0 ->
+-spec integrate(boid(), vec(), seen(), number()) -> boid().
+integrate(Boid, _Force, _Seen, Dt) when Dt =< 0 ->
     Boid;
-integrate(Boid = #{pos := Pos, vel := Vel, mass := Mass}, Force, Env, Dt) ->
+integrate(Boid = #{pos := Pos, vel := Vel, mass := Mass}, Force, Seen, Dt) ->
     Vel1 = speed(boids_vec:add(Vel, boids_vec:scale(Force, Dt / Mass)), Boid),
     Pos1 = boids_vec:add(Pos, boids_vec:scale(Vel1, Dt)),
-    Boid#{pos := place(Env, Pos1), vel := Vel1}.
+    Boid#{pos := place(Seen, Pos1), vel := Vel1}.
 
 speed(Vel, #{min_speed := Min, max_speed := Max}) ->
     case boids_vec:norm(Vel) of
@@ -416,43 +448,43 @@ speed(Vel, #{min_speed := Min, max_speed := Max}) ->
     end.
 
 place(#{wrap := true, bounds := {Min, Max}}, Pos) -> boids_vec:wrap(Pos, Min, Max);
-place(_Env, Pos) -> Pos.
+place(_Seen, Pos) -> Pos.
 
 -doc """
 One step of a boid: the force of its rules, then the movement for `Dt`
 seconds. `Neighbors` is the result of `perceive/2`.
 """.
--spec step(boid(), [boids_space:neighbor()], env(), number()) -> boid().
-step(Boid, _Neighbors, _Env, Dt) when Dt =< 0 ->
+-spec step(boid(), [boids_space:neighbor()], seen(), number()) -> boid().
+step(Boid, _Neighbors, _Seen, Dt) when Dt =< 0 ->
     Boid;
-step(Boid, Neighbors, Env, Dt) ->
-    {Force, Boid1} = force(Boid, Neighbors, Env#{dt => Dt}),
-    integrate(Boid1, Force, Env, Dt).
+step(Boid, Neighbors, Seen, Dt) ->
+    {Force, Boid1} = force(Boid, Neighbors, Seen#{dt => Dt}),
+    integrate(Boid1, Force, Seen, Dt).
 
-%% --- The rules: the forces --------------------------------------------
+%% --- The rules: the forces -------------------------------------------
 
 %% The force of one rule, or {Force, Kept} for a rule that keeps a
 %% memory: the boid has it for the name of the rule at the next step.
-apply_rule(separation, Opts, B = #{perception := Perception}, Ns, _Env, _Memory, _Name) ->
+apply_rule(separation, Opts, B = #{perception := Perception}, Ns, _Seen, _Memory, _Name) ->
     boids_steer:separation(B, select(Ns, B, Opts, Perception / 2, all));
-apply_rule(alignment, Opts, B, Ns, _Env, _Memory, _Name) ->
+apply_rule(alignment, Opts, B, Ns, _Seen, _Memory, _Name) ->
     boids_steer:alignment(B, select(Ns, B, Opts, infinity, same));
-apply_rule(cohesion, Opts, B, Ns, _Env, _Memory, _Name) ->
+apply_rule(cohesion, Opts, B, Ns, _Seen, _Memory, _Name) ->
     boids_steer:cohesion(B, select(Ns, B, Opts, infinity, same));
-apply_rule(seek, Opts, B, Ns, Env, _Memory, _Name) ->
-    to_target(Opts, B, Ns, Env, fun(Pos, _Vel) -> boids_steer:seek(B, Pos) end);
-apply_rule(flee, Opts, B, Ns, Env, _Memory, _Name) ->
-    to_target(Opts, B, Ns, Env, fun(Pos, _Vel) -> boids_steer:flee(B, Pos) end);
-apply_rule(arrive, Opts, B = #{perception := Perception}, Ns, Env, _Memory, _Name) ->
+apply_rule(seek, Opts, B, Ns, Seen, _Memory, _Name) ->
+    to_target(Opts, B, Ns, Seen, fun(Pos, _Vel) -> boids_steer:seek(B, Pos) end);
+apply_rule(flee, Opts, B, Ns, Seen, _Memory, _Name) ->
+    to_target(Opts, B, Ns, Seen, fun(Pos, _Vel) -> boids_steer:flee(B, Pos) end);
+apply_rule(arrive, Opts, B = #{perception := Perception}, Ns, Seen, _Memory, _Name) ->
     Slow = maps:get(slow_radius, Opts, Perception),
-    to_target(Opts, B, Ns, Env, fun(Pos, _Vel) -> boids_steer:arrive(B, Pos, Slow) end);
-apply_rule(pursue, Opts, B, Ns, Env, _Memory, _Name) ->
+    to_target(Opts, B, Ns, Seen, fun(Pos, _Vel) -> boids_steer:arrive(B, Pos, Slow) end);
+apply_rule(pursue, Opts, B, Ns, Seen, _Memory, _Name) ->
     Time = maps:get(max_time, Opts, infinity),
-    to_target(Opts, B, Ns, Env, fun(Pos, Vel) -> boids_steer:pursue(B, Pos, Vel, Time) end);
-apply_rule(evade, Opts, B, Ns, Env, _Memory, _Name) ->
+    to_target(Opts, B, Ns, Seen, fun(Pos, Vel) -> boids_steer:pursue(B, Pos, Vel, Time) end);
+apply_rule(evade, Opts, B, Ns, Seen, _Memory, _Name) ->
     Time = maps:get(max_time, Opts, infinity),
-    to_target(Opts, B, Ns, Env, fun(Pos, Vel) -> boids_steer:evade(B, Pos, Vel, Time) end);
-apply_rule(wander, Opts, B = #{pos := Pos}, _Ns, Env, Memory, Name) ->
+    to_target(Opts, B, Ns, Seen, fun(Pos, Vel) -> boids_steer:evade(B, Pos, Vel, Time) end);
+apply_rule(wander, Opts, B = #{pos := Pos}, _Ns, Seen, Memory, Name) ->
     Dim = boids_vec:dim(Pos),
     Point0 =
         case Memory of
@@ -461,44 +493,44 @@ apply_rule(wander, Opts, B = #{pos := Pos}, _Ns, Env, Memory, Name) ->
         end,
     %% The square root makes the change in a second the same for each
     %% length of step.
-    Step = maps:get(jitter, Opts, 2.0) * math:sqrt(maps:get(dt, Env, 0.0)),
+    Step = maps:get(jitter, Opts, 2.0) * math:sqrt(maps:get(dt, Seen, 0.0)),
     Point = wander_point(Point0, boids_vec:scale(boids_vec:random_unit(Dim), Step)),
     {boids_steer:wander(B, Point, maps:get(distance, Opts, 2.0), maps:get(radius, Opts, 1.0)), Point};
-apply_rule(avoid, Opts, B = #{pos := Pos, vel := Vel, perception := Perception}, _Ns, Env, _Memory, _Name) ->
+apply_rule(avoid, Opts, B = #{pos := Pos, vel := Vel, perception := Perception}, _Ns, Seen, _Memory, _Name) ->
     %% A boid does not see an obstacle with a center of another size.
     Obstacles = [
-        O#{pos := seen_at(Env, Pos, At)}
-     || O = #{pos := At} <- maps:get(obstacles, Env, []), tuple_size(At) =:= tuple_size(Pos)
+        O#{pos := seen_at(Seen, Pos, At)}
+     || O = #{pos := At} <- maps:get(obstacles, Seen, []), tuple_size(At) =:= tuple_size(Pos)
     ],
     Ahead = boids_vec:norm(Vel) * maps:get(lookahead, Opts, 1.0),
     boids_steer:avoid(B, Obstacles, Ahead, maps:get(clearance, Opts, Perception / 10));
-apply_rule(contain, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Env, _Memory, _Name) ->
-    case maps:get(bounds, Opts, maps:get(bounds, Env, undefined)) of
+apply_rule(contain, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Seen, _Memory, _Name) ->
+    case maps:get(bounds, Opts, maps:get(bounds, Seen, undefined)) of
         undefined -> boids_vec:zero(boids_vec:dim(Pos));
         Bounds -> boids_steer:contain(B, Bounds, maps:get(margin, Opts, Perception))
     end;
-apply_rule(follow, Opts = #{path := Path}, B = #{perception := Perception}, _Ns, _Env, _Memory, _Name) ->
+apply_rule(follow, Opts = #{path := Path}, B = #{perception := Perception}, _Ns, _Seen, _Memory, _Name) ->
     Ahead = maps:get(ahead, Opts, Perception),
     Predict = maps:get(predict, Opts, 0.5),
     boids_steer:follow(B, Path, Ahead, Predict, maps:get(loop, Opts, false));
-apply_rule(cruise, Opts, B = #{max_speed := Max}, _Ns, _Env, _Memory, _Name) ->
+apply_rule(cruise, Opts, B = #{max_speed := Max}, _Ns, _Seen, _Memory, _Name) ->
     boids_steer:cruise(B, maps:get(speed, Opts, Max));
-apply_rule(leader, Opts, B = #{perception := Perception}, Ns, Env, _Memory, _Name) ->
+apply_rule(leader, Opts, B = #{perception := Perception}, Ns, Seen, _Memory, _Name) ->
     Distance = maps:get(distance, Opts, Perception / 2),
     Slow = maps:get(slow_radius, Opts, Perception),
-    to_target(Opts, B, Ns, Env, fun(Pos, Vel) -> boids_steer:leader(B, Pos, Vel, Distance, Slow) end);
-apply_rule(dodge, Opts, B = #{perception := Perception}, Ns, _Env, _Memory, _Name) ->
+    to_target(Opts, B, Ns, Seen, fun(Pos, Vel) -> boids_steer:leader(B, Pos, Vel, Distance, Slow) end);
+apply_rule(dodge, Opts, B = #{perception := Perception}, Ns, _Seen, _Memory, _Name) ->
     Near = select(Ns, B, maps:remove(radius, Opts), infinity, all),
     boids_steer:dodge(B, Near, maps:get(radius, Opts, Perception / 4), maps:get(horizon, Opts, 2.0));
-apply_rule(flow, Opts = #{field := Field}, B = #{pos := Pos, vel := Vel}, _Ns, _Env, _Memory, _Name) ->
+apply_rule(flow, Opts = #{field := Field}, B = #{pos := Pos, vel := Vel}, _Ns, _Seen, _Memory, _Name) ->
     Direction =
         case is_function(Field) of
             true -> Field(boids_vec:add(Pos, boids_vec:scale(Vel, maps:get(predict, Opts, 0.5))));
             false -> Field
         end,
     boids_steer:flow(B, Direction);
-apply_rule(Fun, _Opts, B, Ns, Env, _Memory, _Name) ->
-    Fun(B, Ns, Env).
+apply_rule(Fun, _Opts, B, Ns, Seen, _Memory, _Name) ->
+    Fun(B, Ns, Seen).
 
 %% Move the point of wander a step on its circle. A step that moves the
 %% point to the center changes nothing.
@@ -523,9 +555,9 @@ in_groups(Group, Groups, _Own) -> lists:member(Group, Groups).
 
 %% The force of a rule with a target. No target, or a target out of the
 %% radius of the rule, gives no force.
-to_target(Opts = #{target := Target}, B = #{pos := Pos}, Ns, Env, Force) ->
+to_target(Opts = #{target := Target}, B = #{pos := Pos}, Ns, Seen, Force) ->
     Radius = maps:get(radius, Opts, infinity),
-    case target(Target, B, Ns, Env) of
+    case target(Target, B, Ns, Seen) of
         {At, Vel} ->
             case boids_vec:dist(Pos, At) =< Radius of
                 true -> Force(At, Vel);
@@ -535,35 +567,35 @@ to_target(Opts = #{target := Target}, B = #{pos := Pos}, Ns, Env, Force) ->
             boids_vec:zero(boids_vec:dim(Pos))
     end.
 
-target({boid, Id}, #{id := Id}, _Ns, _Env) ->
+target({boid, Id}, #{id := Id}, _Ns, _Seen) ->
     none;
-target({boid, Id}, #{pos := Pos}, Ns, Env) ->
+target({boid, Id}, #{pos := Pos}, Ns, Seen) ->
     case [N || N = #{id := Other} <- Ns, Other =:= Id] of
         [#{pos := At, vel := Vel} | _] ->
             {At, Vel};
         [] ->
-            Lookup = maps:get(lookup, Env, fun(_) -> error end),
+            Lookup = maps:get(lookup, Seen, fun(_) -> error end),
             case Lookup(Id) of
-                {ok, #{pos := At, vel := Vel}} -> {seen_at(Env, Pos, At), Vel};
+                {ok, #{pos := At, vel := Vel}} -> {seen_at(Seen, Pos, At), Vel};
                 error -> none
             end
     end;
-target({related, Label}, B = #{id := Id}, Ns, Env) ->
-    Related = maps:get(related, Env, fun(_, _) -> [] end),
+target({related, Label}, B = #{id := Id}, Ns, Seen) ->
+    Related = maps:get(related, Seen, fun(_, _) -> [] end),
     case Related(Id, Label) of
-        [To | _] -> target({boid, To}, B, Ns, Env);
+        [To | _] -> target({boid, To}, B, Ns, Seen);
         [] -> none
     end;
-target({group, Group}, _B, Ns, _Env) ->
+target({group, Group}, _B, Ns, _Seen) ->
     case [N || N = #{group := Other} <- Ns, Other =:= Group] of
         [#{pos := At, vel := Vel} | _] -> {At, Vel};
         [] -> none
     end;
-target(Point, #{pos := Pos}, _Ns, Env) ->
-    {seen_at(Env, Pos, Point), boids_vec:zero(boids_vec:dim(Pos))}.
+target(Point, #{pos := Pos}, _Ns, Seen) ->
+    {seen_at(Seen, Pos, Point), boids_vec:zero(boids_vec:dim(Pos))}.
 
 %% With wrap, a boid sees a point at the nearest of its positions.
 seen_at(#{wrap := true, bounds := {Min, Max}}, From, To) ->
     boids_vec:add(From, boids_vec:shortest(boids_vec:sub(To, From), Min, Max));
-seen_at(_Env, _From, To) ->
+seen_at(_Seen, _From, To) ->
     To.

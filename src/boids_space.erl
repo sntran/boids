@@ -1,6 +1,7 @@
 -module(boids_space).
 -moduledoc """
-A space as data: the ETS tables that tell where each boid is.
+The space of an environment: the ETS tables that tell where each boid
+is.
 
 Each boid has one row with its position and its velocity. A grid of
 cells is the index of the rows, so a boid finds its neighbors with no
@@ -9,9 +10,10 @@ process writes its own row, and all the processes read all the rows at
 the same time.
 
 A space is a map. Its process (the owner of the tables) makes it with
-`new/1`, and other processes get a copy of it. `boids_space_server` is
-the owner for `boids:start_space/1`, but a space also works alone, in
-one process.
+`new/1`, and other processes get a copy of it. The process of an
+environment (`boids_environment`) is the owner for
+`boids:start_environment/1`, but a space also works alone, in one
+process.
 
 With `wrap`, each side of the box `bounds` continues at the opposite
 side. Then `near/3` gives each neighbor at its nearest position, which
@@ -392,8 +394,8 @@ offset(_Space, From, To) ->
     boids_vec:sub(To, From).
 
 -doc """
-The environment of the boids: the box, the obstacles and the scale of
-the time. `boids_boid:step/4` uses it.
+The facts of the environment that each boid perceives: the box, the
+obstacles and the scale of the time. `boids_boid:step/4` uses them.
 """.
 -spec env(space()) -> env().
 env(Space = #{bounds := Bounds, wrap := Wrap, meta := Meta}) ->
@@ -447,8 +449,8 @@ set_time_scale(#{meta := Meta}, Scale) when is_number(Scale), Scale >= 0, Scale 
 -doc """
 Write the boids that the boid `From` has the relation `Label` to, and
 the same for the opposite direction of each of them. Only the owner of
-the space calls this function: `boids_space_server` keeps the relations, and
-writes here what the boids read at each step.
+the space calls this function: `boids_environment` keeps the relations,
+and writes here what the boids read at each step.
 """.
 -spec relate(space(), out | in, {term(), term()}, [term()]) -> ok.
 relate(#{links := Links}, Direction, {Id, Label}, []) ->
