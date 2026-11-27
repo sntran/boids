@@ -1,0 +1,392 @@
+<title>Rock Patrol</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one field (the canvas) with a narrow instrument strip below it, as the panel of a patrol ship. */
+  :root {
+    --field: #e8eff5;
+    --panel: #f7fafc;
+    --ink: #142230;
+    --muted: #586b7c;
+    --line: #cfdbe5;
+    --rock: #93a6b7;
+    --ship: #b4481c;
+    --drone: #0d7a78;
+    --display: "Space Grotesk", "Inter", system-ui, sans-serif;
+    --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --data: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --field: #0c151e; --panel: #131f2b; --ink: #e4edf4; --muted: #8fa3b5; --line: #26384a;
+      --rock: #44586c; --ship: #f08c4e; --drone: #4fcabf;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --field: #0c151e; --panel: #131f2b; --ink: #e4edf4; --muted: #8fa3b5; --line: #26384a;
+    --rock: #44586c; --ship: #f08c4e; --drone: #4fcabf;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  body { background: var(--panel); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+  .page {
+    max-width: 1120px; margin: 0 auto; padding-block: 28px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; }
+  h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  header p { margin: 0; color: var(--muted); max-width: 64ch; min-width: 0; }
+  .field { position: relative; background: var(--field); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  canvas { display: block; width: 100%; height: auto; }
+  .source {
+    position: absolute; left: 10px; top: 10px;
+    font-family: var(--data); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px;
+  }
+  .strip { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: flex-start; }
+  dl { margin: 0; display: contents; }
+  .reading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .reading dt { font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+  .reading dd { margin: 0; font-family: var(--data); font-size: 1.05rem; font-variant-numeric: tabular-nums; min-height: 1.5em; display: flex; align-items: center; gap: 5px; }
+  .pip { width: 14px; height: 8px; border-radius: 2px; background: var(--line); }
+  .pip.on { background: var(--ship); }
+  .controls { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  button {
+    font: 500 0.85rem var(--body); color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; cursor: pointer;
+    touch-action: manipulation; user-select: none;
+  }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible { outline: 2px solid var(--drone); outline-offset: 2px; }
+  button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--muted); font-size: 0.9rem; }
+  .keys button { min-width: 64px; padding: 10px 12px; }
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px 28px; border-top: 1px solid var(--line); padding-top: 18px; }
+  .notes h2 { font-family: var(--display); font-size: 0.95rem; font-weight: 600; margin: 0 0 4px; }
+  .notes p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+  code { font-family: var(--data); font-size: 0.85em; color: var(--ink); }
+</style>
+
+<div class="page">
+  <header>
+    <h1>Rock Patrol</h1>
+    <p>A ship in a field of rocks, and a queen with drones that hunt it. Each thing is one Erlang process that senses, decides and acts.</p>
+  </header>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A ship that shoots rocks and drones in a field of rocks"></canvas>
+    <span class="source" id="source">Loading</span>
+  </div>
+
+  <div class="strip">
+    <dl>
+      <div class="reading"><dt>Score</dt><dd id="score">0</dd></div>
+      <div class="reading"><dt>Shield</dt><dd><span class="pip" id="pip1"></span><span class="pip" id="pip2"></span><span class="pip" id="pip3"></span></dd></div>
+      <div class="reading"><dt>Wrecks</dt><dd id="wrecks">0</dd></div>
+      <div class="reading"><dt>Rocks</dt><dd id="rocks">0</dd></div>
+      <div class="reading"><dt>Drones</dt><dd id="drones">0</dd></div>
+      <div class="reading"><dt>Swarms</dt><dd id="swarms">0</dd></div>
+      <div class="reading"><dt>Pilot</dt><dd id="pilot">autopilot</dd></div>
+    </dl>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+      <button id="links" type="button" aria-pressed="true">Relations</button>
+    </div>
+  </div>
+
+  <div class="keys" id="keys" hidden>
+    <button type="button" data-key="left">Left</button>
+    <button type="button" data-key="thrust">Thrust</button>
+    <button type="button" data-key="right">Right</button>
+    <button type="button" data-key="fire">Shoot</button>
+    <span>Or use the arrow keys and the space bar. With no key for 5 seconds, the autopilot flies the ship.</span>
+  </div>
+
+  <section class="notes">
+    <div>
+      <h2>The ship is a boid that you control</h2>
+      <p>Its module has the behavior <code>gen_boid</code>. Its force is a rule of its own: a function that reads your keys. The autopilot is a list of rules of the library.</p>
+    </div>
+    <div>
+      <h2>A shot sends a message</h2>
+      <p>A shot senses the rock that it touches, and sends <code>hit</code> to that process. The rock starts two smaller rocks, and stops. The flock removes a boid that stops.</p>
+    </div>
+    <div>
+      <h2>The drones have a relation</h2>
+      <p>Each drone has the relation <code>guards</code> to its queen, and follows it. A drone that sees the ship changes its rules, and hunts. The lines show the relations.</p>
+    </div>
+    <div>
+      <h2>The flock is a graph</h2>
+      <p>The number of swarms comes from <code>boids:graph/2</code> and <code>graph:components/1</code>, one time each second.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("field");
+  var ctx = canvas.getContext("2d");
+  var el = function (id) { return document.getElementById(id); };
+  var run = null;        // the box and the kinds
+  var before = {};       // the boids of the moment before the last moment, by their number
+  var last = null;       // the last moment
+  var links = [];        // the relations, as pairs of numbers
+  var lastAt = 0;
+  var frames = null;     // the moments of a recorded run
+  var cursor = 0;
+  var paused = false;
+  var showLinks = true;
+  var PERIOD = 50;       // the milliseconds between two moments
+  var SHIP = 0, ROCK = 1, DRONE = 2, QUEEN = 3, SHOT = 4;
+
+  function colors() {
+    var style = getComputedStyle(document.documentElement);
+    var read = function (name) { return style.getPropertyValue(name).trim(); };
+    return { rock: read("--rock"), ship: read("--ship"), drone: read("--drone"), panel: read("--panel") };
+  }
+
+  function start(header) {
+    run = header;
+    canvas.width = 1600;
+    canvas.height = Math.round(1600 * run.box[1] / run.box[0]);
+  }
+
+  function byNumber(moment) {
+    var map = {};
+    for (var i = 0; i < moment.b.length; i += 6) { map[moment.b[i]] = [moment.b[i + 1], moment.b[i + 2], moment.b[i + 3]]; }
+    return map;
+  }
+
+  function take(moment) {
+    before = last ? byNumber(last) : {};
+    last = moment;
+    lastAt = performance.now();
+    if (moment.l) { links = moment.l; }
+    if (moment.g !== undefined) { el("swarms").textContent = moment.g; }
+    var rocks = 0, drones = 0;
+    for (var i = 4; i < moment.b.length; i += 6) {
+      if (moment.b[i] === ROCK) { rocks++; } else if (moment.b[i] === DRONE) { drones++; }
+    }
+    el("rocks").textContent = rocks;
+    el("drones").textContent = drones;
+    el("score").textContent = moment.s[0];
+    for (var pip = 1; pip <= 3; pip++) { el("pip" + pip).className = pip <= moment.s[1] ? "pip on" : "pip"; }
+    el("wrecks").textContent = moment.s[2];
+    el("pilot").textContent = moment.s[3] ? "autopilot" : "you";
+  }
+
+  // The position between two moments. A boid that went across a side of
+  // the box is at its new position.
+  function between(a, b, size, part) {
+    return Math.abs(b - a) > size / 2 ? b : a + (b - a) * part;
+  }
+
+  function turn(a, b, part) {
+    var d = b - a;
+    if (d > Math.PI) { d -= 2 * Math.PI; } else if (d < -Math.PI) { d += 2 * Math.PI; }
+    return a + d * part;
+  }
+
+  // A rock has a shape of its own, from its number.
+  function rock(number, radius, time) {
+    var spin = ((number % 7) - 3) * 0.00012 * time;
+    ctx.beginPath();
+    for (var k = 0; k < 9; k++) {
+      var r = radius * (0.78 + 0.3 * (((number * (k + 3) * 2654435761) >>> 0) % 100) / 100);
+      var a = spin + k * 2 * Math.PI / 9;
+      if (k === 0) { ctx.moveTo(r * Math.cos(a), r * Math.sin(a)); } else { ctx.lineTo(r * Math.cos(a), r * Math.sin(a)); }
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function dart(size) {
+    ctx.beginPath();
+    ctx.moveTo(size, 0);
+    ctx.lineTo(-size * 0.8, size * 0.6);
+    ctx.lineTo(-size * 0.4, 0);
+    ctx.lineTo(-size * 0.8, -size * 0.6);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function draw(now) {
+    requestAnimationFrame(draw);
+    if (!run || !last) { return; }
+    if (frames && !paused && now - lastAt >= PERIOD) {
+      cursor = (cursor + 1) % frames.length;
+      if (cursor === 0) { last = null; }
+      take(frames[cursor]);
+    }
+    var part = paused ? 1 : Math.min((now - lastAt) / PERIOD, 1);
+    var scale = canvas.width / run.box[0];
+    var height = run.box[1];
+    var c = colors();
+    var at = {};
+    var list = [];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (var i = 0; i < last.b.length; i += 6) {
+      var was = before[last.b[i]] || [last.b[i + 1], last.b[i + 2], last.b[i + 3]];
+      var boid = {
+        x: between(was[0], last.b[i + 1], run.box[0], part) * scale,
+        y: (height - between(was[1], last.b[i + 2], height, part)) * scale,
+        angle: turn(was[2], last.b[i + 3], part),
+        kind: last.b[i + 4],
+        size: last.b[i + 5],
+        number: last.b[i]
+      };
+      at[boid.number] = boid;
+      list.push(boid);
+    }
+
+    if (showLinks) {
+      ctx.strokeStyle = c.drone;
+      ctx.globalAlpha = 0.4;
+      ctx.lineWidth = 1.5;
+      links.forEach(function (link) {
+        var from = at[link[0]], to = at[link[1]];
+        if (!from || !to) { return; }
+        if (Math.abs(from.x - to.x) > canvas.width / 2 || Math.abs(from.y - to.y) > canvas.height / 2) { return; }
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    // The rocks first, so that the ship and the shots are on top.
+    list.sort(function (a, b) { return (a.kind === ROCK ? 0 : 1) - (b.kind === ROCK ? 0 : 1); });
+    list.forEach(function (boid) {
+      ctx.save();
+      ctx.translate(boid.x, boid.y);
+      if (boid.kind === ROCK) {
+        ctx.fillStyle = c.rock;
+        rock(boid.number, boid.size * 2.2 * scale, now);
+      } else if (boid.kind === SHOT) {
+        ctx.fillStyle = c.ship;
+        ctx.beginPath();
+        ctx.arc(0, 0, 0.55 * scale, 0, 2 * Math.PI);
+        ctx.fill();
+      } else if (boid.kind === QUEEN) {
+        ctx.fillStyle = c.drone;
+        ctx.beginPath();
+        for (var k = 0; k < 6; k++) { ctx.lineTo(3 * scale * Math.cos(k * Math.PI / 3), 3 * scale * Math.sin(k * Math.PI / 3)); }
+        ctx.closePath();
+        ctx.fill();
+        // The hits that the queen can take.
+        ctx.fillStyle = c.panel;
+        ctx.font = "600 " + Math.round(2.6 * scale) + "px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(boid.size), 0, 0.2 * scale);
+      } else {
+        ctx.rotate(-boid.angle);
+        if (boid.kind === SHIP) {
+          if (last.s[4]) {
+            ctx.fillStyle = c.rock;
+            ctx.beginPath();
+            ctx.moveTo(-1.2 * scale, 0.7 * scale);
+            ctx.lineTo(-3.4 * scale, 0);
+            ctx.lineTo(-1.2 * scale, -0.7 * scale);
+            ctx.fill();
+          }
+          ctx.fillStyle = c.ship;
+          dart(2.4 * scale);
+          if (last.s[5]) {
+            ctx.strokeStyle = c.ship;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 6]);
+            ctx.beginPath();
+            ctx.arc(0, 0, 4 * scale, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        } else {
+          ctx.fillStyle = c.drone;
+          dart(1.4 * scale);
+        }
+      }
+      ctx.restore();
+    });
+  }
+
+  function play(recorded) {
+    start(recorded);
+    frames = recorded.frames;
+    cursor = 0;
+    take(frames[0]);
+    el("source").textContent = "Recorded run of " + Math.round(frames.length * PERIOD / 1000) + " s, with the autopilot";
+  }
+
+  // The keys of the person go to the ship: a list of the keys that are down.
+  function controls() {
+    var down = {};
+    var names = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "thrust", " ": "fire", a: "left", d: "right", w: "thrust" };
+    var send = function () {
+      var list = Object.keys(down);
+      fetch("keys", { method: "POST", body: JSON.stringify(list) }).catch(function () {});
+    };
+    var set = function (name, on) {
+      if (!name || !!down[name] === on) { return; }
+      if (on) { down[name] = true; } else { delete down[name]; }
+      send();
+    };
+    window.addEventListener("keydown", function (event) {
+      if (names[event.key]) { event.preventDefault(); set(names[event.key], true); }
+    });
+    window.addEventListener("keyup", function (event) { set(names[event.key], false); });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+      var name = button.getAttribute("data-key");
+      button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+      ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+        button.addEventListener(type, function () { set(name, false); });
+      });
+    });
+    // The ship gets the keys again each second, while a key is down.
+    setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+    el("keys").hidden = false;
+  }
+
+  function live() {
+    var events = new EventSource("events");
+    el("source").textContent = "Live";
+    events.addEventListener("start", function (event) { start(JSON.parse(event.data)); last = null; });
+    events.onmessage = function (event) { if (!paused) { take(JSON.parse(event.data)); } };
+    events.onerror = function () { el("source").textContent = "No connection to the game"; };
+    controls();
+  }
+
+  function toggle(id, change) {
+    el(id).addEventListener("click", function () {
+      el(id).setAttribute("aria-pressed", change() ? "true" : "false");
+    });
+  }
+  toggle("pause", function () { paused = !paused; el("pause").textContent = paused ? "Play" : "Pause"; lastAt = performance.now(); return paused; });
+  toggle("links", function () { showLinks = !showLinks; return showLinks; });
+
+  var given = window.BOIDS;
+  // A person who wants less movement starts a recorded run with the button.
+  if (!(given && given.live) && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    paused = true;
+    el("pause").textContent = "Play";
+    el("pause").setAttribute("aria-pressed", "true");
+  }
+  if (given && given.frames) {
+    play(given);
+  } else if (given && given.live) {
+    live();
+  } else {
+    fetch("frames.json")
+      .then(function (response) { return response.json(); })
+      .then(play)
+      .catch(function () { el("source").textContent = "No run to show"; });
+  }
+  requestAnimationFrame(draw);
+})();
+</script>

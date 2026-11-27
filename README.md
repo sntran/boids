@@ -92,30 +92,37 @@ them.
 
 ## See a flock
 
-`examples/web.exs` shows a flock in the browser: birds that flock, two
-hawks that hunt them and then rest, a convoy that follows its leader,
-and three rocks.
+`examples/game.exs` is a small game in the browser: a ship in a field of
+rocks, and a queen with drones that hunt the ship.
 
 ```sh
-mix run examples/web.exs
+mix run examples/game.exs
 ```
 
-Then open `http://localhost:4000`. The example has no dependency: it is
-a small server on top of the library, and a page that draws the boids.
-It uses each part of the library:
+Then open `http://localhost:4000`. The arrow keys turn the ship and give
+thrust, and the space bar shoots. With no key for 5 seconds, an
+autopilot flies the ship. The example has no dependency: it is a small
+server on top of the library, and a page that draws the boids.
 
-- The birds are boids of `boids:populate/3`, with rules only.
-- A hawk is a module with the behavior `gen_boid`. It senses its prey,
-  it decides to hunt or to rest, and it uses its energy.
-- Each boid of the convoy has the relation `follows` to the boid before
-  it, and a rule with that relation.
-- The number of the groups of the flock comes from `boids:graph/2`.
+Each thing in the game is a boid, with a module that has the behavior
+`gen_boid`:
 
-`mix run examples/web.exs record run.html` writes a run of 30 seconds to
-one page, which plays with no server.
+| Boid | What it shows |
+|---|---|
+| The ship | A boid that a person controls. Its force is a rule of its own, a function that reads the keys. The autopilot is a list of rules of the library. |
+| A rock | A message to a boid: a rock that gets `hit` starts two smaller rocks, and stops. The flock removes a boid that stops. |
+| A shot | A boid that lives for a short time. It senses the boid that it touches, and sends `hit` to that process. |
+| A drone | A relation: each drone has the relation `guards` to its queen, and follows it. A drone that sees the ship changes its rules. |
+| The queen | A boid that starts other boids. |
 
-`examples/terminal.exs` draws a smaller flock in the terminal, and
-`examples/speed.exs` measures the speed of a flock on your computer.
+The number of the swarms of drones comes from `boids:graph/2`.
+
+`mix run examples/game.exs record run.html` writes a run of 40 seconds
+with the autopilot to one page, which plays with no server.
+
+`examples/terminal.exs` draws a flock of birds and a hawk in the
+terminal, and `examples/speed.exs` measures the speed of a flock on your
+computer.
 
 ## A boid with a behavior
 
