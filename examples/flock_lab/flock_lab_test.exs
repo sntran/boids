@@ -247,7 +247,8 @@ defmodule BoidsExamples.LabTest do
     assert Enum.map(header.level.palette, & &1.name) == ~w(flag space friends wander)
     assert hd(header.level.palette).label == "Go to the flag"
     assert length(header.levels) == 8
-    assert [[136, 25, 158, 65, "cool"], [2, 25, 24, 65, "warm"] | _] = header.zones
+    assert [[136, 25, 158, 65, "cool", "Pen"], [2, 25, 24, 65, "warm", "Brown pen"]] = header.zones
+    assert header.ground == "grass"
     assert length(Lab.kinds(scene)) == 6
     assert BoidsExamples.Scene.waits?(Lab)
     assert is_binary(IO.iodata_to_binary(:json.encode(header)))

@@ -688,15 +688,15 @@ defmodule BoidsExamples.Games.LivingLand do
   @impl true
   def kinds(_scene) do
     [
-      %{name: "grazers", shape: "dart", color: "ink", size: 1.3},
-      %{name: "hunters", shape: "dart", color: "warm", size: 2.2}
+      %{name: "grazers", shape: "grazer", color: "fur", size: 1.5},
+      %{name: "hunters", shape: "wolf", color: "warm", size: 2.4}
     ]
   end
 
   # The first genes of each species, for the page: the genes of the
   # animals now show what changed.
   @impl true
-  def header(_scene), do: %{first: %{grazers: first(:grazers), hunters: first(:hunters)}}
+  def header(_scene), do: %{ground: "grass", first: %{grazers: first(:grazers), hunters: first(:hunters)}}
 
   @impl true
   def look(_scene, %{group: :hunters, vel: vel}), do: {1, BoidsExamples.Scene.angle(vel), 0}

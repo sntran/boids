@@ -418,7 +418,7 @@ defmodule BoidsExamples.Games.QuietHerd do
 
       status = %{
         r: [["Field", state.field], ["Time", seconds], ["Afraid", state.afraid], ["Most afraid", state.most]],
-        h: %{zones: zones(state)},
+        h: %{ground: "grass", zones: zones(state)},
         x: %{
           state: state.state,
           field: state.field,
@@ -545,8 +545,8 @@ defmodule BoidsExamples.Games.QuietHerd do
     end
 
     defp zones(state) do
-      grass = for {x0, y0, x1, y1} <- state.grass, do: [x0, y0, x1, y1, "cool"]
-      [[Herd.goal(), 0, 160, 90, "warm"] | grass]
+      grass = for {x0, y0, x1, y1} <- state.grass, do: [x0, y0, x1, y1, "leaf", "Tall grass"]
+      [[Herd.goal(), 0, 160, 90, "warm", "Far side"] | grass]
     end
 
     defp now, do: System.monotonic_time(:millisecond)
@@ -578,11 +578,11 @@ defmodule BoidsExamples.Games.QuietHerd do
   @impl true
   def kinds(_scene) do
     [
-      %{name: "calm deer", shape: "dart", color: "rock", size: 1.3},
-      %{name: "alert deer", shape: "dart", color: "ink", size: 1.4},
-      %{name: "afraid deer", shape: "dart", color: "warm", size: 1.4},
-      %{name: "fox", shape: "ship", color: "cool", size: 2.0},
-      %{name: "guards", shape: "hex", color: "ink", size: 2.0}
+      %{name: "calm deer", shape: "deer", color: "fur", size: 1.6},
+      %{name: "alert deer", shape: "deer", color: "gold", size: 1.7},
+      %{name: "afraid deer", shape: "deer", color: "plum", size: 1.7},
+      %{name: "fox", shape: "fox", color: "warm", size: 2.2},
+      %{name: "guards", shape: "dog", color: "ink", size: 2.3}
     ]
   end
 

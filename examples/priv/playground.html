@@ -54,6 +54,7 @@
       <div class="wide"><table>
         <tr><th>Key</th><th>Value</th></tr>
         <tr><td><code>box</code></td><td><code>[WIDTH, HEIGHT]</code>, each from 40 to 400</td></tr>
+        <tr><td><code>ground</code></td><td><code>grass</code>, <code>water</code>, <code>sand</code>, <code>floor</code>, <code>night</code> or <code>none</code></td></tr>
         <tr><td><code>wrap</code></td><td><code>true</code>: each side continues at the opposite side</td></tr>
         <tr><td><code>rocks</code></td><td>A list of <code>[X, Y, RADIUS]</code>. The rule <code>avoid</code> moves a boid around them.</td></tr>
         <tr><td><code>kinds</code></td><td>The kinds of boids: 6 kinds at most. The server has a limit of the boids of a scene, and tells it.</td></tr>
@@ -69,7 +70,8 @@
         <tr><td><code>when</code></td><td>A list of <code>{"sees": GROUP, "rules": RULES}</code>: the rules of a boid while it sees a boid of that group</td></tr>
         <tr><td><code>follows</code></td><td><code>"chain"</code>: each boid has the relation <code>follows</code> to the boid before it. The target <code>"leader"</code> of a rule is that boid.</td></tr>
         <tr><td><code>combine</code></td><td><code>"priority"</code>: the first rules use the force first</td></tr>
-        <tr><td><code>shape</code>, <code>color</code>, <code>size</code></td><td><code>dart</code>, <code>dot</code>, <code>hex</code> or <code>rock</code>; <code>ink</code>, <code>warm</code>, <code>cool</code> or <code>rock</code>; a number</td></tr>
+        <tr><td><code>shape</code></td><td>An animal: <code>bird</code>, <code>sheep</code>, <code>dog</code>, <code>wolf</code>, <code>fish</code>, <code>shark</code>, <code>deer</code>, <code>fox</code>, <code>bee</code>, <code>beetle</code>, <code>ant</code>, <code>duck</code>, <code>duckling</code>, <code>firefly</code>, <code>person</code> or <code>child</code>; or <code>leaf</code>, <code>spark</code>, <code>dart</code>, <code>dot</code>, <code>hex</code>, <code>rock</code></td></tr>
+        <tr><td><code>color</code>, <code>size</code></td><td><code>ink</code>, <code>warm</code>, <code>cool</code>, <code>rock</code>, <code>wool</code>, <code>fur</code>, <code>gold</code>, <code>leaf</code> or <code>plum</code>; a number</td></tr>
       </table></div>
     </div>
     <div>
@@ -103,40 +105,40 @@
   var el = function (id) { return document.getElementById(id); };
   var presets = {
     "Birds and a hawk": {
-      box: [160, 90], wrap: true, rocks: [[40, 60, 7], [118, 30, 9]],
+      box: [160, 90], wrap: true, ground: "grass", rocks: [[40, 60, 7], [118, 30, 9]],
       kinds: [
-        {name: "birds", count: 70, speed: [6, 12], combine: "priority", search: 2,
+        {name: "birds", count: 70, speed: [6, 12], shape: "bird", size: 1.4, combine: "priority", search: 2,
          rules: [["avoid", 4, {lookahead: 1.5}], ["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1]],
          when: [{sees: "hawks", rules: [["avoid", 4], ["evade", 3, {target: "hawks"}], ["separation", 1.5, {radius: 3}]]}]},
-        {name: "hawks", count: 2, speed: [4, 14], perception: 26, color: "warm", size: 2.4, combine: "priority",
+        {name: "hawks", count: 2, speed: [4, 14], perception: 26, shape: "bird", color: "warm", size: 2.8, combine: "priority",
          rules: [["avoid", 4], ["wander", 1], ["cruise", 0.5, {speed: 5}]],
          when: [{sees: "birds", rules: [["avoid", 4], ["pursue", 1, {target: "birds"}]]}]}
       ]
     },
-    "A convoy": {
-      box: [160, 90], wrap: true, rocks: [[80, 45, 10]],
+    "Ducklings in a line": {
+      box: [160, 90], wrap: true, ground: "water", rocks: [[80, 45, 10]],
       kinds: [
-        {name: "convoy", count: 12, speed: [3, 11], follows: "chain", color: "cool", size: 1.6, combine: "priority",
+        {name: "ducklings", count: 12, speed: [3, 11], follows: "chain", shape: "duckling", color: "gold", size: 1.6, combine: "priority",
          rules: [["avoid", 4], ["leader", 2, {target: "leader", distance: 3}], ["separation", 1, {radius: 2}], ["wander", 0.6], ["cruise", 0.4, {speed: 7}]]},
-        {name: "birds", count: 40, speed: [6, 12],
+        {name: "fish", count: 40, speed: [6, 12], shape: "fish", color: "cool", size: 1.3,
          rules: [["avoid", 4], ["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1]]}
       ]
     },
     "Two tribes": {
-      box: [140, 80], wrap: true,
+      box: [140, 80], wrap: true, ground: "floor",
       kinds: [
-        {name: "north", count: 40, speed: [5, 11], color: "cool",
+        {name: "north", count: 40, speed: [5, 11], shape: "person", color: "cool", size: 1.6,
          rules: [["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1], ["separation", 2.5, {radius: 9, groups: ["south"]}]]},
-        {name: "south", count: 40, speed: [5, 11], color: "warm",
+        {name: "south", count: 40, speed: [5, 11], shape: "person", color: "warm", size: 1.6,
          rules: [["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1], ["separation", 2.5, {radius: 9, groups: ["north"]}]]}
       ]
     },
     "Fish in a tank": {
-      box: [120, 70], wrap: false,
+      box: [120, 70], wrap: false, ground: "water",
       kinds: [
-        {name: "fish", count: 60, speed: [4, 9], shape: "dart", color: "cool",
+        {name: "fish", count: 60, speed: [4, 9], shape: "fish", color: "cool", size: 1.4,
          rules: [["contain", 3, {margin: 8}], ["separation", 1.5, {radius: 2.5}], ["alignment", 1], ["cohesion", 1], ["wander", 0.4]]},
-        {name: "food", count: 3, speed: [0, 1], shape: "dot", color: "warm", size: 1,
+        {name: "food", count: 3, speed: [0, 1], shape: "leaf", color: "leaf", size: 1.2,
          rules: [["contain", 3, {margin: 10}], ["wander", 1]]}
       ]
     }

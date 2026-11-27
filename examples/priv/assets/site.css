@@ -9,6 +9,10 @@
   --rock: #93a6b7;
   --warm: #b4481c;
   --cool: #0d7a78;
+  /* The colors of the animals, and of the grounds of the games. */
+  --wool: #f6f1e6; --fur: #8a5a33; --gold: #d49a12; --leaf: #4c8a3c; --plum: #7a4a8c;
+  --edge: rgba(20, 34, 48, 0.42); --shade: rgba(20, 34, 48, 0.16);
+  --grass: #dce8cf; --water: #d3e5ee; --sand: #efe5cf; --floor: #e6e3dd; --night: #1b2633;
   --display: "Space Grotesk", "Inter", system-ui, sans-serif;
   --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --data: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -17,6 +21,9 @@
   :root {
     --field: #0c151e; --panel: #131f2b; --ink: #e4edf4; --muted: #8fa3b5; --line: #26384a;
     --boid: #c3d3e1; --rock: #44586c; --warm: #f08c4e; --cool: #4fcabf;
+    --wool: #e8e0cd; --fur: #b98154; --gold: #f0c04a; --leaf: #7ab65c; --plum: #b88ad3;
+    --edge: rgba(0, 0, 0, 0.55); --shade: rgba(0, 0, 0, 0.32);
+    --grass: #1b2b1e; --water: #0e2130; --sand: #2c2517; --floor: #202126; --night: #070c13;
     color-scheme: dark;
   }
 }

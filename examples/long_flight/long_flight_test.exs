@@ -44,7 +44,8 @@ defmodule BoidsExamples.FlightTest do
     scene = run(@near)
     header = Scene.header(scene)
     assert header.box == [160, 90]
-    assert header.zones == [[150, 0, 160, 90, "cool"]]
+    assert header.zones == [[150, 0, 160, 90, "cool", "Exit"]]
+    assert header.ground == "grass"
     assert Enum.map(header.kinds, & &1.name) == ["birds", "hawks", "elders"]
 
     status = Director.status(scene.director)

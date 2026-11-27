@@ -442,15 +442,15 @@ defmodule BoidsExamples.Games.LongFlight do
   @impl true
   def kinds(_scene) do
     [
-      %{name: "birds", shape: "dart", color: "ink", size: 1.2},
-      %{name: "hawks", shape: "dart", color: "warm", size: 2.4},
-      %{name: "elders", shape: "dart", color: "cool", size: 1.6}
+      %{name: "birds", shape: "bird", color: "ink", size: 1.4},
+      %{name: "hawks", shape: "bird", color: "warm", size: 2.8},
+      %{name: "elders", shape: "bird", color: "plum", size: 1.8}
     ]
   end
 
   # The exit of a land, for the page.
   @impl true
-  def header(_scene), do: %{zones: [[@exit, 0, @width, @height, "cool"]]}
+  def header(_scene), do: %{ground: "grass", zones: [[@exit, 0, @width, @height, "cool", "Exit"]]}
 
   @impl true
   def look(_scene, %{group: :hawks, vel: vel}), do: {1, BoidsExamples.Scene.angle(vel), 0}

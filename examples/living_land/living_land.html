@@ -8,8 +8,6 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/assets/site.css">
 <style>
-  /* The food is on a canvas behind the canvas of the boids. */
-  .field canvas.food { position: absolute; inset: 0; width: 100%; height: 100%; }
   .field canvas#field { position: relative; z-index: 1; }
   .field canvas#field.placing { cursor: crosshair; }
   .field .source { z-index: 2; }
@@ -20,7 +18,7 @@
   .chart { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
   .legend { display: flex; gap: 16px; font-size: 0.85rem; color: var(--muted); }
   .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; }
-  .legend .g i { background: var(--boid); }
+  .legend .g i { background: var(--fur); }
   .legend .h i { background: var(--warm); }
   .genes td, .genes th { font-variant-numeric: tabular-nums; }
   .genes td.num { font-family: var(--data); }
@@ -46,7 +44,6 @@
   <section class="two">
     <div>
       <div class="field">
-        <canvas class="food" id="food" width="800" height="450" aria-hidden="true"></canvas>
         <canvas id="field" width="1600" height="900" role="img" aria-label="Grazers and hunters that move in a land with food"></canvas>
         <span class="source" id="source">Connecting</span>
       </div>
@@ -124,7 +121,7 @@
   var order = ["speed", "perception", "separation", "cohesion", "alignment", "flee", "food", "chase", "wander"];
 
   var scene = Boids.scene({
-    name: "living-land", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "living-land", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
     onStart: function (header) {
       box = header.box;
       first = header.first || first;
@@ -150,20 +147,18 @@
     el("facts").textContent = "Since the start: " + more.born + " born, " + more.eaten + " eaten, " + more.starved + " with no energy.";
   }
 
-  // The food: a small green dot for each food, on the canvas behind the boids.
-  function drawFood(food) {
-    var canvas = el("food");
-    var ctx = canvas.getContext("2d");
-    var scale = canvas.width / box[0];
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = color("--cool");
-    ctx.globalAlpha = 0.75;
+  // The food: a small leaf for each food, on the ground under the boids
+  // (the option beneath of Boids.scene).
+  var food = [];
+  function drawFood(list) { food = list; }
+
+  function beneath(ctx, scale, height, c, now, sprites) {
     for (var i = 0; i < food.length; i += 2) {
-      ctx.beginPath();
-      ctx.arc(food[i] * scale, (box[1] - food[i + 1]) * scale, 0.55 * scale, 0, 2 * Math.PI);
-      ctx.fill();
+      ctx.save();
+      ctx.translate(food[i] * scale, (height - food[i + 1]) * scale);
+      sprites.leaf(1.2 * scale, now, (i * 0.37) % 6.28, c.leaf, c);
+      ctx.restore();
     }
-    ctx.globalAlpha = 1;
   }
 
   // The numbers of grazers and hunters in each second: one line for each.
@@ -199,7 +194,7 @@
       });
       ctx.stroke();
     }
-    line(1, "--boid");
+    line(1, "--fur");
     line(2, "--warm");
   }
 

@@ -439,10 +439,13 @@ defmodule BoidsExamples.Games.RockPatrol do
       %{name: "rocks", shape: "rock", color: "rock", size: 2.2},
       %{name: "drones", shape: "dart", color: "cool", size: 1.4},
       %{name: "queen", shape: "hex", color: "cool", size: 3.0},
-      %{name: "shots", shape: "dot", color: "warm", size: 0.55},
-      %{name: "bolts", shape: "dot", color: "cool", size: 0.5}
+      %{name: "shots", shape: "spark", color: "warm", size: 0.55},
+      %{name: "bolts", shape: "spark", color: "cool", size: 0.5}
     ]
   end
+
+  @impl true
+  def header(_scene), do: %{ground: "night"}
 
   @impl true
   def look(_scene, %{group: :ship, data: %{heading: heading, shield: shield}}), do: {0, heading, shield}

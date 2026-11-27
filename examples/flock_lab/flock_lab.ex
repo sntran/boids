@@ -801,12 +801,12 @@ defmodule BoidsExamples.Games.FlockLab do
   @impl true
   def kinds(_scene) do
     [
-      %{name: "sheep", shape: "dot", color: "ink", size: 1.6},
-      %{name: "sheep in the pen", shape: "dot", color: "cool", size: 1.6},
-      %{name: "brown sheep", shape: "dot", color: "warm", size: 1.6},
-      %{name: "leader", shape: "hex", color: "cool", size: 1.7},
-      %{name: "wolf", shape: "dart", color: "warm", size: 2.4},
-      %{name: "dog", shape: "dart", color: "cool", size: 2.0}
+      %{name: "sheep", shape: "sheep", color: "wool", size: 1.8},
+      %{name: "sheep in the pen", shape: "sheep", color: "gold", size: 1.8},
+      %{name: "brown sheep", shape: "sheep", color: "fur", size: 1.8},
+      %{name: "leader", shape: "sheep", color: "plum", size: 2.0},
+      %{name: "wolf", shape: "wolf", color: "rock", size: 2.6},
+      %{name: "dog", shape: "dog", color: "fur", size: 2.2}
     ]
   end
 
@@ -814,8 +814,8 @@ defmodule BoidsExamples.Games.FlockLab do
   # program, for the page.
   @impl true
   def header(%{level: level, program: program}) do
-    colors = ["cool", "warm"]
-    pens = for {{x0, y0, x1, y1}, color} <- Enum.zip(level.pens, colors), do: [x0, y0, x1, y1, color]
+    colors = [{"cool", "Pen"}, {"warm", "Brown pen"}]
+    pens = for {{x0, y0, x1, y1}, {color, label}} <- Enum.zip(level.pens, colors), do: [x0, y0, x1, y1, color, label]
 
     info = %{
       n: level.n,
@@ -832,9 +832,9 @@ defmodule BoidsExamples.Games.FlockLab do
       dog: Map.has_key?(level, :dog)
     }
 
-    # The pens are two times in the list, so that they are darker on the page.
     %{
-      zones: pens ++ pens,
+      ground: "grass",
+      zones: pens,
       code: code(level, program),
       level: info,
       levels: for(%{n: n, title: title} <- levels(), do: %{n: n, title: title})

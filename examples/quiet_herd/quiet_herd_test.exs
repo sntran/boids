@@ -54,8 +54,9 @@ defmodule BoidsExamples.HerdTest do
     assert header.box == [160, 90]
     assert Enum.map(header.kinds, & &1.name) == ["calm deer", "alert deer", "afraid deer", "fox", "guards"]
     [goal | grass] = header.zones
-    assert goal == [152, 0, 160, 90, "warm"]
-    assert length(grass) == 4 and Enum.all?(grass, &(List.last(&1) == "cool"))
+    assert goal == [152, 0, 160, 90, "warm", "Far side"]
+    assert length(grass) == 4 and Enum.all?(grass, &(Enum.slice(&1, 4, 2) == ["leaf", "Tall grass"]))
+    assert header.ground == "grass"
 
     rows = :boids.snapshot(scene.space, :local)
     assert Enum.frequencies_by(rows, & &1.group) == %{deer: 22, guards: 2, fox: 1}

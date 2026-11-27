@@ -53,8 +53,9 @@ defmodule BoidsExamples.Scenes.Playground do
   # becomes an atom.
   @rules ~w(separation alignment cohesion seek flee arrive pursue evade wander avoid contain follow cruise leader dodge flow)
   @options ~w(radius groups target lookahead clearance margin speed distance slow_radius max_time horizon jitter path loop ahead predict field)
-  @shapes ~w(dart dot hex rock)
-  @colors ~w(ink warm cool rock)
+  @shapes ~w(bird sheep dog wolf fish shark deer fox bee beetle ant duck duckling firefly person child leaf spark dart dot hex rock)
+  @colors ~w(ink warm cool rock wool fur gold leaf plum)
+  @grounds ~w(none grass water sand floor night)
 
   @impl true
   def start(definition) do
@@ -112,7 +113,7 @@ defmodule BoidsExamples.Scenes.Playground do
       end
     end
 
-    %{space: space, kinds: kinds}
+    %{space: space, kinds: kinds, ground: one_of(Map.get(definition, "ground", "none"), @grounds, "ground")}
   end
 
   defp build(_definition), do: throw({:bad, "A scene needs a list of kinds."})
@@ -223,6 +224,10 @@ defmodule BoidsExamples.Scenes.Playground do
 
   @impl true
   def kinds(%{kinds: kinds}), do: for(kind <- kinds, do: Map.take(kind, [:name, :shape, :color, :size]))
+
+  @impl true
+  def header(%{ground: "none"}), do: %{}
+  def header(%{ground: ground}), do: %{ground: ground}
 
   @impl true
   def look(_scene, %{data: number, vel: vel}), do: {number, BoidsExamples.Scene.angle(vel), 1}

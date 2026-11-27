@@ -90,7 +90,7 @@ defmodule BoidsExamples.Scenes.Flock do
 
   @impl true
   def kinds(_scene) do
-    [%{name: "birds", shape: "dart", color: "ink", size: 1.2}, %{name: "hawk", shape: "dart", color: "warm", size: 2.4}]
+    [%{name: "birds", shape: "bird", color: "ink", size: 1.4}, %{name: "hawk", shape: "bird", color: "warm", size: 2.8}]
   end
 
   @impl true
