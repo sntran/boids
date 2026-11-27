@@ -57,6 +57,9 @@ defmodule BoidsExamples.Games.FireflyField do
   @most 5
   # A firefly that just flashed does not see the flashes of others.
   @rest 0.2
+  # A flash of a firefly that came near is new when it is this recent
+  # (milliseconds).
+  @fresh 500
   # The distance at which the fireflies fly to the lantern.
   @radius 24
 
@@ -91,6 +94,32 @@ defmodule BoidsExamples.Games.FireflyField do
     clock = clock + dt / period
     clock = if clock > @rest, do: clock * (1 + @nudge * min(flashes, @most)), else: clock
     if clock >= 1.0, do: {0.0, true}, else: {clock, false}
+  end
+
+  @doc """
+  The new flashes in the rows of some fireflies: `{count, known}`.
+  `known` has the last flash of each firefly that the caller saw before,
+  by its id, and the result has the new value of it.
+
+  A flash is new when its time is not the last flash that the caller
+  knows of that firefly. The time is not enough: a firefly takes the
+  time of its flash, and the world gets its row a short time after. The
+  flash of a firefly that the caller did not know is new when it is
+  recent (`@fresh` milliseconds or less before `now`).
+  """
+  def new_flashes(rows, known, now) do
+    flashes = for %{id: id, group: :fireflies, data: %{flash: f}} <- rows, is_integer(f), do: {id, f}
+
+    count =
+      Enum.count(flashes, fn {id, f} ->
+        case known do
+          %{^id => ^f} -> false
+          %{^id => _} -> true
+          _ -> now - f <= @fresh
+        end
+      end)
+
+    {count, Map.new(flashes)}
   end
 
   @doc """
@@ -176,7 +205,8 @@ defmodule BoidsExamples.Games.FireflyField do
       state = %{
         clock: Map.get(options, :clock, :rand.uniform()),
         period: Map.get(options, :period, Field.period() * factor * (0.97 + :rand.uniform() * 0.06)),
-        seen: now(),
+        known: %{},
+        time: now(),
         table: table,
         home: pos
       }
@@ -218,21 +248,19 @@ defmodule BoidsExamples.Games.FireflyField do
       {:ok, Map.put(seen, :lantern, lantern), boid}
     end
 
-    # Decide: the flashes of the neighbors since the last step move the
-    # clock forward. At the end of the clock, the firefly flashes.
+    # Decide: the new flashes of the neighbors move the clock forward. At
+    # the end of the clock, the firefly flashes. The clock goes with the
+    # time since the last step, not with `dt`: `dt` has a limit, and a
+    # late step on a busy computer then makes a clock late.
     @impl true
-    def handle_decide(%{neighbors: neighbors, dt: dt, lantern: lantern}, %{state: state, data: data} = boid) do
+    def handle_decide(%{neighbors: neighbors, lantern: lantern}, %{state: state, data: data} = boid) do
       now = now()
-      since = state.seen
-
-      flashes =
-        Enum.count(neighbors, &match?(%{group: :fireflies, data: %{flash: f}} when is_integer(f) and f > since, &1))
-
-      {clock, flashed} = Field.next_clock(state.clock, dt, state.period, flashes)
+      {flashes, known} = Field.new_flashes(neighbors, state.known, now)
+      {clock, flashed} = Field.next_clock(state.clock, (now - state.time) / 1000, state.period, flashes)
       data = if flashed, do: %{data | flash: now}, else: data
       # In the light of the lantern, the home of the firefly goes with it.
       home = if :boids_vec.dist(boid.pos, lantern) <= Field.radius(), do: boid.pos, else: state.home
-      {:ok, %{boid | data: data, state: %{state | clock: clock, seen: now, home: home}}}
+      {:ok, %{boid | data: data, state: %{state | clock: clock, known: known, time: now, home: home}}}
     end
 
     defp wind(table), do: :ets.lookup_element(table, :wind, 2, {0.0, 0.0})
@@ -284,7 +312,7 @@ defmodule BoidsExamples.Games.FireflyField do
         streak: 0,
         flashes: 0,
         groups: 0,
-        seen: now(),
+        known: %{},
         start: now(),
         time: 0,
         dawn: 0
@@ -418,8 +446,12 @@ defmodule BoidsExamples.Games.FireflyField do
     defp flashes(%{space: space} = state) do
       now = now()
       rows = :boids.snapshot(space, :local)
-      new = for %{id: id, data: %{flash: f}} <- rows, is_integer(f) and f > state.seen, do: {f, id}
-      state = %{state | seen: now, total: length(rows)}
+
+      new =
+        for %{id: id, data: %{flash: f}} <- rows, is_integer(f), Map.get(state.known, id) != f, do: {f, id}
+
+      known = Map.new(for %{id: id, data: %{flash: f}} <- rows, is_integer(f), do: {id, f})
+      state = %{state | known: known, total: length(rows)}
 
       state =
         Enum.reduce(Enum.sort(new), state, fn {time, id}, acc ->
@@ -435,8 +467,11 @@ defmodule BoidsExamples.Games.FireflyField do
         end)
 
       case state.burst do
-        {first, last, _ids} -> if Field.same_flash?(first, last, now), do: state, else: close(state)
-        nil -> state
+        {first, last, _ids} ->
+          if Field.same_flash?(first, last, now - BoidsExamples.Scene.tick()), do: state, else: close(state)
+
+        nil ->
+          state
       end
     end
 
@@ -482,7 +517,7 @@ defmodule BoidsExamples.Games.FireflyField do
           streak: 0,
           flashes: 0,
           groups: length(setting.groups),
-          seen: now(),
+          known: %{},
           start: now(),
           time: 0
       }

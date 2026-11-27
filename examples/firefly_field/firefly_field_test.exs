@@ -70,6 +70,20 @@ defmodule BoidsExamples.FireflyFieldTest do
       assert late - 0.8 > 1.5 * (early - 0.4)
     end
 
+    test "a new flash is a flash that the firefly did not see before, also when its row came late" do
+      row = fn id, flash -> %{id: id, group: :fireflies, data: %{flash: flash, slow: false}} end
+      now = 10_000
+      # A flash with a time before the last look is new, because it is
+      # not the last flash that the firefly knows of that neighbor.
+      {1, known} = Field.new_flashes([row.(:a, 9_990), row.(:b, nil)], %{a: 8_000}, now)
+      assert known == %{a: 9_990}
+      # A flash that the firefly saw before is not new.
+      assert {0, ^known} = Field.new_flashes([row.(:a, 9_990)], known, now + 100)
+      # A neighbor that came near: only a recent flash is new.
+      assert {1, _} = Field.new_flashes([row.(:c, now - 100)], known, now)
+      assert {0, _} = Field.new_flashes([row.(:c, now - 2_000)], known, now)
+    end
+
     test "a wave of flashes from neighbor to neighbor is one flash of the field, but a long chain is not" do
       w = Field.window()
       assert Field.same_flash?(0, 0, w)
@@ -191,6 +205,8 @@ defmodule BoidsExamples.FireflyFieldTest do
     assert status(scene).level == 2
   end
 
+  # Two levels of 40 seconds at most: more than the limit of a test.
+  @tag timeout: 120_000
   test "after a level that is done, the next level starts; after the last level, the first" do
     # The lantern is on the group, so the wind of level 5 does not move
     # the fireflies apart.
