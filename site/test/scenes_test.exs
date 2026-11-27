@@ -235,8 +235,8 @@ defmodule BoidsSite.ScenesTest do
     assert :counters.get(count, 1) == 0
     assert {_pid, {:ok, scene}} = scene(BoidsSite.Scenes.Playground, %{"kinds" => [@hawks]})
     # A visitor can stop a scene, for a new one.
-    Scene.stop(scene)
-    Process.sleep(200)
+    # The stop waits for the end of the world, so the count is right at once.
+    assert Scene.stop(scene) == :ok
     assert :counters.get(count, 1) == 0
   end
 end

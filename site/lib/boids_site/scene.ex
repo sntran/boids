@@ -82,7 +82,20 @@ defmodule BoidsSite.Scene do
     end
   end
 
-  def stop(%{guard: guard}), do: send(guard, :stop)
+  @doc """
+  Stop a scene, and wait until its world stopped. A new scene of the same
+  visitor then does not count the old scene against the limit.
+  """
+  def stop(%{guard: guard}) do
+    ref = Process.monitor(guard)
+    send(guard, :stop)
+
+    receive do
+      {:DOWN, ^ref, :process, _pid, _reason} -> :ok
+    after
+      5000 -> :ok
+    end
+  end
 
   @doc "What does not change in a scene: the box, the kinds and the rocks."
   def header(%{module: module, space: space} = scene) do
