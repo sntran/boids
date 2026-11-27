@@ -1,6 +1,6 @@
 name: Deploy the site
 
-# Deploy the site (site/) to Cloudflare Workers at each push to main that
+# Deploy the site (examples/) to Cloudflare Workers at each push to main that
 # changes the site or the library, and when a person starts the workflow.
 # It needs the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of
 # the repository. Without them, the workflow does nothing.
@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "site/**"
+      - "examples/**"
       - "src/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: site
+        working-directory: examples
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

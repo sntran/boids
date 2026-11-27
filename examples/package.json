@@ -1,0 +1,13 @@
+{
+  "name": "boids-examples",
+  "private": true,
+  "scripts": {
+    "build": "beam.com . -o app.com",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "beam.com": "0.1.0-rc.8",
+    "wrangler": "4.142.0"
+  }
+}

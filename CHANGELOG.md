@@ -59,7 +59,7 @@ The first version. It needs Erlang/OTP 29.
   models with the native checker of Accord, and replay the process of a
   real world against `specs/Members.tla`.
 - The processes of a world and of a boid have a label.
-- A site for the library, made with the library (`site/`): a home page,
+- A site for the library, made with the library (`examples/`): a home page,
   a playground, and five games in `/showcases`. It runs on a computer
   and on Cloudflare Workers.
   - Rock Patrol: a ship in a field of rocks, and drones that hunt it.

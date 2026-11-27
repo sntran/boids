@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boids Showcases</title>
+<meta name="description" content="Games made with the library boids: each boid is an Erlang process.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .games { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .games li { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 6px 20px; align-items: start; padding: 20px 0; border-top: 1px solid var(--line); }
+  .games li:last-child { border-bottom: 1px solid var(--line); }
+  .games svg { width: 56px; height: 56px; display: block; }
+  .games h2 { margin: 0 0 4px; }
+  .games h2 a { color: var(--ink); text-decoration: none; }
+  .games h2 a:hover { color: var(--cool); }
+  .games .pitch { color: var(--ink); max-width: 64ch; }
+  .games .shows { color: var(--muted); font-size: 0.9rem; max-width: 64ch; margin-top: 6px; }
+  .games .tag { font-family: var(--data); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 1px 7px; margin-left: 8px; vertical-align: 2px; }
+  .games .play { align-self: center; text-decoration: none; font-weight: 500; color: var(--panel); background: var(--ink); border-radius: 4px; padding: 8px 16px; white-space: nowrap; }
+  .games .play:focus-visible, .games h2 a:focus-visible { outline: 2px solid var(--cool); outline-offset: 2px; }
+  .mark-ink { fill: var(--boid); } .mark-warm { fill: var(--warm); } .mark-cool { fill: var(--cool); } .mark-rock { fill: var(--rock); }
+  @media (max-width: 560px) {
+    .games li { grid-template-columns: 40px minmax(0, 1fr); }
+    .games svg { width: 40px; height: 40px; }
+    .games .play { grid-column: 2; justify-self: start; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Showcases</h1>
+    <p class="lead">Games made with the library. In each game, each thing that moves is a boid: one Erlang process that senses, decides and acts. The server runs the game, and the page only draws it.</p>
+  </div>
+
+  <ul class="games">
+<!-- games -->
+  </ul>
+
+  <section class="notes">
+    <div>
+      <h3>One process for each boid</h3>
+      <p>Each rock, drone, bird, deer and grazer is a <code>gen_boid</code> process with its own clock. It reads its neighbors from the world, and asks no other process.</p>
+    </div>
+    <div>
+      <h3>The code of each game</h3>
+      <p>Each game is one module of the examples, in <a href="https://github.com/sntran/boids/tree/main/examples/lib/boids_examples/games"><code>examples/lib/boids_examples/games</code></a>. Read it to see how a game uses the library.</p>
+    </div>
+    <div>
+      <h3>One world for each visitor</h3>
+      <p>A game starts a world when you open its page, and stops it when you close the page. The site runs a small number of worlds at one time.</p>
+    </div>
+  </section>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+</body>
+</html>
