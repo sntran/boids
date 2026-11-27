@@ -28,6 +28,7 @@ world to the design.
 | `specs/Members.tla` | The members of a world: a process asks for the row of an id, the world watches it, and the row goes when the process stops, leaves, or is removed. | `boids_world`, `boids:add/2`, `boids:remove/2`, `boids:join/2`, `boids:leave/2` |
 | `specs/Space.tla` | A write of a row against a read of the grid. | `boids_space:put/2`, `boids_space:near/3` |
 | `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
+| `specs/Move.tla` | The move of a boid to another node of its world. | `gen_boid` (`settle`, `adopt/2`), `boids_world` (the join of a boid that comes, `moved/3`) |
 
 ### `specs/Members.tla`
 
@@ -140,6 +141,61 @@ violated. `MCStepClock.cfg` gives a clock to one boid: `Quiet` violated.
 Thus a run gives the same result each time only when each boid has
 `tick => manual`.
 
+### `specs/Move.tla`
+
+A world with a name is on several nodes, and each tile of the world is
+on one node. The process of a boid is on the node of its tile. A boid
+that goes into a tile of another node moves: a new process starts on
+that node, and the first process stops. The two nodes talk with a call
+that can fail, and a node can stop at each moment.
+
+The constants: the two nodes (`Nodes`), the times that a process crosses
+the border (`Crossings`), the calls and the answers that can be lost
+(`Losses`), the nodes that can stop (`Stops`), and two guards for the
+fault models. The model has one boid.
+
+Each process has an age: the number of moves of the boid before it. A
+node that has a process for the boid keeps it only when it is not older
+than the process that calls.
+
+| Action | When it can occur | In the code |
+|---|---|---|
+| `Cross(n)` | The process of `n` is in a tile of its node: its boid goes across the border. | A step of the boid |
+| `Show(n)` | The process of `n` runs: the other node gets a row of the boid. | `boids_world:settle/2`, the message `{show, Entry}` |
+| `Expire(n)` | `n` has a row of a boid of the other node: the row goes. | The sweep of `boids_world` |
+| `Call(n)` | The process of `n` is in a tile of the other node: it calls that node, with its age plus 1. | `erpc:call(Home, gen_boid, adopt, ...)` |
+| `Adopt(n)` | The call of `n` comes to the other node. With no process, or with an older process, that node starts a process for the boid, which takes the row: `ok`. If not: `exists`. | `gen_boid:adopt/2`, the join in `boids_world` |
+| `LoseCall(n)`, `LoseAnswer(n)` | The call or its answer does not come. | A time limit, or the end of a connection |
+| `Moved(n)` | The answer is `ok` or `exists`: `n` removes its row. | `boids_world:moved/3` |
+| `Stay(n)` | No answer: the process stays, and calls again at its next step. | |
+| `Stop(n)` | The process whose boid moved stops. | The reason `{shutdown, {moved, Node}}` |
+| `Down(n)` | The node `n` stops, with its process and its rows. Its tiles go to the other node. | |
+
+| Invariant or property | What it says | The fault that it stops |
+|---|---|---|
+| `RowOwner` | A node has its own row of the boid when it has a process of the boid, and only then. | A row with no process, and a process with no row. |
+| `NotLost` | While the two nodes run, the boid has a process. | Two processes that stop for each other. |
+| `OneProcess` | With no lost answer: after each move, the boid has a process on one node. | Two boids from one boid. |
+| `Lands` | Each move ends. | A process that calls a node without end. |
+
+The small model (`specs/MCMove.tla`): `MCMove.cfg` has no lost answer,
+six crossings and a node that can stop. `MCMoveLost.cfg` also loses
+three calls or answers: `RowOwner`, `NotLost` and `Lands` hold.
+
+- `MCMoveOlder.cfg` lets a node always keep its process: `NotLost`
+  violated. This was the first design of the move. After a lost answer,
+  the world has an old process and a new process for the boid. When the
+  new process comes back to the first node at that moment, each of the
+  two processes gets `exists`, and the two stop. The age of a process
+  stops that: the old process loses its row to the new process.
+- `MCMoveStays.cfg` lets a process stay when the other node has the
+  boid: `Lands` violated.
+- `MCMoveTwo.cfg` is not a fault model. It shows a limit of the move:
+  with a lost answer, `OneProcess` is violated. The old process can go
+  back into a tile of its node before it calls again, or its call can
+  come late to a node that the new process left. Then the world has two
+  boids with one id, until one of them comes to the node of the other.
+
 ## The replay: the code against the specification
 
 `Boids.MembersSpec` (`test/support/members_spec.ex`) does two things.
@@ -186,11 +242,18 @@ join, the process of the row stopped, or not. The result is `:ok`,
 
 ## What the checks do not prove
 
-- A model is small: three processes, two boids, two cells. A fault that
-  needs more is not found.
-- `Space.tla` and `Step.tla` have no replay. Their tie to the code is
-  the comments in `boids_space` and `gen_boid`, and the tests of the
-  behavior (`test/boids_space_test.exs`, `test/boids_test.exs`).
+- A model is small: three processes, two boids, two cells, two nodes. A
+  fault that needs more is not found.
+- `Space.tla`, `Step.tla` and `Move.tla` have no replay. Their tie to
+  the code is the comments in `boids_space`, `gen_boid` and
+  `boids_world`, and the tests of the behavior
+  (`test/boids_space_test.exs`, `test/boids_test.exs`,
+  `test/boids_nodes_test.exs`).
+- `Move.tla` has two nodes and one call of a node on its way at one
+  time. It does not have the relations of a boid, which move with it.
+- A boid that comes from another node, after more moves, takes the row
+  of a process of its id that runs (`Move.tla`, `Adopt`). `Members.tla`
+  does not have this: there, a process that runs keeps its row.
 - The replay sees the process of one world on one node. It follows
   the orders that the tests make.
 - The specifications say nothing about the forces of the rules, the
@@ -211,6 +274,7 @@ mix deps.get
 mix test test/boids_spec_test.exs test/boids_members_spec_test.exs
 ```
 
-A change of `boids_world`, of `boids_space:put/2` and `near/3`, or of
-the two parts of `boids:step/2` changes its specification in the same
-commit, and the tests of the models and the replay must pass.
+A change of `boids_world`, of `boids_space:put/2` and `near/3`, of the
+two parts of `boids:step/2`, or of the move of a boid to another node
+changes its specification in the same commit, and the tests of the
+models and the replay must pass.

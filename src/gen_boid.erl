@@ -118,6 +118,29 @@ and `child_spec/1` are for a supervisor of yours, which starts the boid
 again as you tell it. Give an `id` in the options of `init/1`, so that
 the process that starts again is the same boid.
 
+## A world on several nodes
+
+In a world on several nodes, the process of a boid is on the node of
+its tile (`boids:nodes/1`). After each step, a boid that sees a tile of
+another node shows its row to that node. A boid that is in a tile of
+another node moves: a process for the boid starts on that node, below
+the supervisor of the world of that node, and this process stops with
+the reason `{shutdown, {moved, Node}}`.
+
+- The boid keeps its id, its state, its rules, its relations and the
+  options of its process. The random numbers of the new process do not
+  continue those of the option `seed`.
+- `terminate/2` of the module runs on the first node. `init/1` does not
+  run on the new node. The node needs the code of the module.
+- The id of a boid is not its process. `boids:whereis/2` gives the
+  process of an id. In a callback, the function `lookup` of `Seen`
+  gives the row of a neighbor, with its process: `{ok, #{pid := Pid}} =
+  (maps:get(lookup, Seen))(Id)`.
+- A boid below a supervisor of yours needs `restart => transient`: the
+  end of its process at a move is not an error.
+- When the other node does not answer, the boid stays on its node, and
+  tries again at its next step.
+
 ## A world with too much work
 
 When the boids need more time than the computer has, each tick comes
@@ -354,9 +377,13 @@ check(Key, Value) -> error({bad_option, {Key, Value}}).
 
 -doc false.
 %% A boid that comes from another node, with all its state.
-init({World, '$adopt', #{boid := Boid = #{id := Id}, mod := Module, server := Server, relations := Relations}}) ->
+init({World, '$adopt', Moving = #{boid := Boid = #{id := Id}, mod := Module, server := Server}}) ->
+    #{moves := Moves, relations := Relations} = Moving,
     Space = boids:space(World),
-    case join(Space, Server#{mod => Module}, Boid) of
+    %% The callbacks of a module run only when the node has the module
+    %% in memory. On the first node, init/1 of the module did that.
+    _ = Module =:= undefined orelse code:ensure_loaded(Module),
+    case join(Space, Server#{mod => Module, moves => Moves}, Boid) of
         {ok, State} ->
             ok = boids_world:adopt(Space, Id, Relations),
             {ok, State};
@@ -377,7 +404,7 @@ init({World, Module, Args}) ->
                 {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
                 {Space, Server, boids_boid:new(BoidOpts)}
             of
-                {Space, Server, Boid} -> join(Space, Server#{mod => Module}, Boid)
+                {Space, Server, Boid} -> join(Space, Server#{mod => Module, moves => 0}, Boid)
             catch
                 error:{bad_option, _} = Reason -> {stop, {shutdown, Reason}}
             end;
@@ -394,7 +421,10 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
     end,
     %% The tools that show processes show which boid this process is.
     proc_lib:set_label({boids, boid, Id}),
-    case boids_world:join(Space, self(), (boids_boid:entry(Boid))#{kind => server}) of
+    %% The moves of the boid from node to node before this process: the
+    %% world of a node keeps the process with the most moves.
+    Entry = (boids_boid:entry(Boid))#{kind => server, moves => maps:get(moves, Server)},
+    case boids_world:join(Space, self(), Entry) of
         ok ->
             %% The first tick comes after a random part of the period, so
             %% the boids of a world do not all move at the same time.
@@ -473,6 +503,11 @@ handle_info(tick, State0 = #{tick := Tick, last := Last, max_dt := MaxDt}) ->
     else
         {stop, Reason, Stopped} -> {stop, Reason, Stopped}
     end;
+handle_info({'EXIT', _World, {shutdown, replaced}}, State) ->
+    %% Another process of the boid, with more moves, took the row of
+    %% this process (boids_world). A process that does not trap exits
+    %% stops without this message.
+    {stop, {shutdown, replaced}, State};
 handle_info(Info, State = #{mod := Module, boid := Boid}) ->
     case exported(Module, handle_info, 2) of
         true -> result(Module:handle_info(Info, Boid), State);
@@ -540,7 +575,8 @@ settle({away, Home}, State = #{space := Space = #{name := Name}, boid := Boid = 
         boid => Boid,
         mod => Module,
         server => maps:without([seed], maps:with(?KEYS, State)),
-        relations => boids_space:relations(Space, Id)
+        relations => boids_space:relations(Space, Id),
+        moves => maps:get(moves, State) + 1
     },
     try erpc:call(Home, ?MODULE, adopt, [Name, Moving], 5000) of
         Result when element(1, Result) =:= ok; Result =:= {error, {exists, Id}} ->

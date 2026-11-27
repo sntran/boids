@@ -58,10 +58,11 @@ defmodule BoidsReadmeTest do
     {:ok, ids} = :boids.populate(world, 200, max_speed: 12.0)
     assert length(ids) == 200
 
-    assert [%{id: id, pos: {_, _}, vel: {_, _}, group: :default, data: :undefined, pid: id} | _] =
+    assert [%{id: id, pos: {_, _}, vel: {_, _}, group: :default, data: :undefined, pid: pid} | _] =
              :boids.snapshot(world)
 
-    assert is_pid(id)
+    assert is_reference(id) and :boids.whereis(world, id) == pid
+
     before = Map.new(:boids.snapshot(world), &{&1.id, &1.pos})
     assert eventually(fn -> Enum.all?(:boids.snapshot(world), &(&1.pos != before[&1.id])) end)
   end

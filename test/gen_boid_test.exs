@@ -510,9 +510,9 @@ defmodule GenBoidTest do
     test "a module without it stops the boid at a cast, and other casts change nothing", %{
       world: world
     } do
-      {:ok, pid} = :gen_boid.start(world, Mouse, %{pos: {0, 0}})
+      {:ok, pid} = :gen_boid.start(world, Mouse, %{id: :mouse, pos: {0, 0}})
       GenServer.cast(pid, :hello)
-      assert {:ok, _} = :boids.boid(world, pid)
+      assert {:ok, _} = :boids.boid(world, :mouse)
       ref = Process.monitor(pid)
       :gen_boid.cast(pid, :hello)
       assert_receive {:DOWN, ^ref, _, _, {:bad_cast, :hello}}
@@ -534,9 +534,9 @@ defmodule GenBoidTest do
     end
 
     test "a module without it does not see the messages", %{world: world} do
-      {:ok, pid} = :gen_boid.start(world, Mouse, %{pos: {0, 0}})
+      {:ok, pid} = :gen_boid.start(world, Mouse, %{id: :mouse, pos: {0, 0}})
       send(pid, :hello)
-      assert {:ok, _} = :boids.boid(world, pid)
+      assert {:ok, _} = :boids.boid(world, :mouse)
     end
   end
 
@@ -601,7 +601,7 @@ defmodule GenBoidTest do
     assert :gen_boid.which_rules(hawk) == [:pursue]
     for _ <- 1..60, do: :boids.step(world, 0.05)
     # The hawk came to the bird, and it used energy.
-    {:ok, %{pos: pos}} = :boids.boid(world, hawk)
+    %{pos: pos} = Enum.find(:boids.snapshot(world), &(&1.pid == hawk))
     assert :boids_vec.dist(pos, {60, 50}) < 2
     energy = :gen_boid.call(hawk, :energy)
     assert energy < 10.0

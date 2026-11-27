@@ -118,6 +118,50 @@ defmodule Boids.TestBoids do
     end
   end
 
+  defmodule Traveler do
+    @moduledoc """
+    A boid for the tests of a world on several nodes. It counts its
+    steps in its state. With `stop_at` in its state, it stops its
+    movement when its x is that number or more. At its end, it keeps the
+    reason and its state where a test of another node can read them.
+    """
+    @behaviour :gen_boid
+
+    @impl true
+    def init(options), do: {:ok, options}
+
+    @impl true
+    def handle_decide(_seen, %{pos: pos, state: %{stop_at: stop}} = boid) when elem(pos, 0) >= stop do
+      {:ok, :boids_boid.update(boid, %{min_speed: 0, max_speed: 0, vel: {0, 0}})}
+    end
+
+    def handle_decide(_seen, boid), do: {:ok, boid}
+
+    @impl true
+    def handle_act(%{state: state} = boid), do: {:ok, %{boid | state: %{state | steps: state.steps + 1}}}
+
+    @impl true
+    def terminate(reason, boid), do: :persistent_term.put({__MODULE__, boid.id}, {reason, boid.state})
+  end
+
+  defmodule Person do
+    @moduledoc "A process with another behavior that is a boid (boids:join/2)."
+    use GenServer
+
+    @impl true
+    def init({world, options}) do
+      {:ok, space, boid} = :boids.join(world, options)
+      {:ok, {space, boid}}
+    end
+
+    # Put the boid at a position, and write it to the world.
+    @impl true
+    def handle_call({:go, pos}, _from, {space, boid}) do
+      boid = :boids_boid.update(boid, %{pos: pos})
+      {:reply, :boids.commit(space, boid), {space, boid}}
+    end
+  end
+
   defmodule Mouse do
     @moduledoc "A boid with only the necessary callback."
     @behaviour :gen_boid

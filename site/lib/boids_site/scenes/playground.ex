@@ -96,9 +96,11 @@ defmodule BoidsSite.Scenes.Playground do
         for _ <- 1..kind.count//1 do
           pos = {:rand.uniform() * width, :rand.uniform() * height}
           state = %{rules: kind.rules, others: kind.others, mode: nil}
-          options = Map.merge(kind.options, %{pos: pos, vel: velocity(kind), rules: kind.rules, state: state})
-          {:ok, pid} = :gen_boid.start(space, Kind, options)
-          pid
+          # A relation needs the id of a boid, which is not its process.
+          id = make_ref()
+          options = Map.merge(kind.options, %{id: id, pos: pos, vel: velocity(kind), rules: kind.rules, state: state})
+          {:ok, _} = :gen_boid.start(space, Kind, options)
+          id
         end
 
       # A chain: each boid follows the boid before it.

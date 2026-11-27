@@ -12,6 +12,24 @@ is an edge with a label. This process has the graph, and it writes a
 copy of the relations of each boid to a table, where the boids read
 them with no message.
 
+## A world on several nodes
+
+A world with a name that is an atom is one world on all the connected
+nodes that have a world with that name and the same options. The
+processes of these worlds are in one group (`pg`, the scope `boids`),
+and each of them keeps the list of the nodes for the boids of its node
+(`boids_space:nodes/1`).
+
+- A boid near a border of its node sends its row to the process of the
+  world of the other node (`settle/2`). That process writes it to its
+  tables, and removes a row that gets no update for half a second.
+- A boid that comes from another node joins with the number of its
+  moves. It takes the row that showed it. It also takes the row of a
+  `gen_boid` of this node with its id that made fewer moves, which
+  stops: after a lost answer of a move, a node can have an old process
+  of the boid (`specs/Move.tla`).
+- `find/2` finds a boid on this node or on the other nodes.
+
 Use the functions of `boids`. A world starts with
 `boids:start_world/1`, or as a child of your supervisor with
 `boids:child_spec/1`.
@@ -107,16 +125,24 @@ leave(#{owner := Server}, Id, Pid) ->
     gen_server:call(Server, {leave, Id, Pid}).
 
 -doc """
-Add the relation `Label` from the boid `From` to the boid `To`. The
-result is `{error, {not_found, Id}}` for an id that is not in the
-world, and `{error, cycle}` when the world has the option
-`relations => acyclic` and the relation makes a cycle.
+Add the relation `Label` from the boid `From` to the boid `To`. `From`
+is a boid of this node: a relation is on the node of the boid that has
+it. With `Found`, the caller found the boid `To` on this node or on
+another node (`find/2`). Without it, `To` must have a row on this node.
+
+The result is `{error, {not_found, Id}}` for an id that is not there,
+and `{error, cycle}` when the world has the option `relations =>
+acyclic` and the relation makes a cycle with the relations of this
+node.
 """.
 -spec relate(boids_space:space(), term(), term(), term(), boolean()) -> ok | {error, {not_found, term()} | cycle}.
 relate(#{owner := Server}, From, Label, To, Found) ->
     gen_server:call(Server, {relate, From, Label, To, Found}).
 
--doc "Remove the relation `Label` from the boid `From` to the boid `To`.".
+-doc """
+Remove the relation `Label` from the boid `From` to the boid `To`, on
+this node.
+""".
 -spec unrelate(boids_space:space(), term(), term(), term()) -> ok.
 unrelate(#{owner := Server}, From, Label, To) ->
     gen_server:call(Server, {unrelate, From, Label, To}).
@@ -140,11 +166,16 @@ settle(Space, Boid = #{pos := Pos}) ->
     end.
 
 show(#{name := Name} = Space, Nodes, Boid = #{id := Id}) ->
-    {Kind, Pid} = boids_space:owner(Space, Id),
-    Entry = (boids_boid:entry(Boid))#{pid => Pid, kind => Kind},
-    %% The boid shows its row to the worlds of other nodes. It does not
-    %% wait for a node that has no connection.
-    lists:foreach(fun(Node) -> erlang:send({Name, Node}, {show, Entry}, [noconnect]) end, Nodes).
+    case boids_space:owner(Space, Id) of
+        {Kind, Pid} when is_atom(Kind) ->
+            Entry = (boids_boid:entry(Boid))#{pid => Pid, kind => Kind},
+            %% The boid shows its row to the worlds of other nodes. It
+            %% does not wait for a node that has no connection.
+            lists:foreach(fun(Node) -> erlang:send({Name, Node}, {show, Entry}, [noconnect]) end, Nodes);
+        _ ->
+            %% Only a boid of this node shows itself.
+            ok
+    end.
 
 -doc """
 Find a boid of the world, on this node or on another node: `{Kind, Pid}`
@@ -206,7 +237,7 @@ init({Sup, Opts, Name}) ->
     {Relations, Rest} = kind(Opts),
     Links = graph:new([Relations]),
     Space0 = boids_space:new(Rest),
-    State = #{sup => Sup, ids => #{}, refs => #{}, links => Links, ghosts => #{}},
+    State = #{sup => Sup, ids => #{}, refs => #{}, ages => #{}, links => Links, ghosts => #{}},
     case is_atom(Name) andalso Name =/= undefined of
         true ->
             %% A world with a name is one world on all the nodes that
@@ -230,13 +261,15 @@ handle_call(boid_sup, _From, State = #{sup := Sup}) ->
     [Pid] = [Pid || {boids_boid_sup, Pid, _, _} <- supervisor:which_children(Sup)],
     {reply, Pid, State};
 handle_call({join, Pid, Entry = #{id := Id, pos := Pos}}, _From, State0 = #{space := Space}) ->
-    State = #{ids := Ids, refs := Refs} = forget_dead(Id, State0),
+    %% The moves of the boid before this process: 0 for a new boid.
+    Moves = maps:get(moves, Entry, 0),
+    State = #{ids := Ids, refs := Refs, ages := Ages} = forget_dead(Id, Moves, State0),
     case boids_space:fit(Space, Pos) of
         true ->
             case boids_space:insert_new(Space, Entry#{pid => Pid}) of
                 true ->
                     Ref = monitor(process, Pid),
-                    {reply, ok, State#{ids := Ids#{Id => Ref}, refs := Refs#{Ref => Id}}};
+                    {reply, ok, State#{ids := Ids#{Id => Ref}, refs := Refs#{Ref => Id}, ages := Ages#{Id => Moves}}};
                 false ->
                     {reply, {error, {exists, Id}}, State}
             end;
@@ -348,17 +381,28 @@ owner(Space, Id) ->
 
 %% A boid that starts again with its id can come before the message
 %% 'DOWN' of its last process (specs/Members.tla, TakeOver).
-forget_dead(Id, State = #{space := Space, ghosts := Ghosts}) ->
+forget_dead(Id, Moves, State = #{space := Space, ghosts := Ghosts, ages := Ages}) ->
     case boids_space:owner(Space, Id) of
         {{ghost, _}, _Pid} ->
             %% A boid that shows itself here from another node comes to
             %% this node: its row becomes the row of its new process.
             boids_space:remove(Space, Id),
             State#{ghosts := maps:remove(Id, Ghosts)};
-        {_Kind, Pid} when node(Pid) =:= node() ->
+        {Kind, Pid} when node(Pid) =:= node() ->
             case is_process_alive(Pid) of
-                true -> State;
-                false -> forget(Id, State)
+                true when Kind =:= server, Moves > map_get(Id, Ages) ->
+                    %% The process that comes made more moves than the
+                    %% process of this node: after a lost answer of a
+                    %% move, this node has an old process of the boid.
+                    %% The new process takes its place, so that two
+                    %% processes cannot stop for each other
+                    %% (specs/Move.tla, Adopt). The relations stay.
+                    exit(Pid, {shutdown, replaced}),
+                    forget_row(Id, State);
+                true ->
+                    State;
+                false ->
+                    forget(Id, State)
             end;
         _ ->
             State
@@ -367,12 +411,12 @@ forget_dead(Id, State = #{space := Space, ghosts := Ghosts}) ->
 forget(Id, State) ->
     forget_row(Id, unrelate(Id, State)).
 
-forget_row(Id, State = #{space := Space, ids := Ids, refs := Refs}) ->
+forget_row(Id, State = #{space := Space, ids := Ids, refs := Refs, ages := Ages}) ->
     boids_space:remove(Space, Id),
     case Ids of
         #{Id := Ref} ->
             demonitor(Ref, [flush]),
-            State#{ids := maps:remove(Id, Ids), refs := maps:remove(Ref, Refs)};
+            State#{ids := maps:remove(Id, Ids), refs := maps:remove(Ref, Refs), ages := maps:remove(Id, Ages)};
         _ ->
             State
     end.

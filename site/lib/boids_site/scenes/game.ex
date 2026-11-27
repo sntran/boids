@@ -99,14 +99,14 @@ defmodule BoidsSite.Scenes.Game do
 
     # Decide: a target at the distance of its radius is hit.
     @impl true
-    def handle_decide(%{neighbors: neighbors}, %{state: %{hits: hits, scorer: scorer}} = boid) do
+    def handle_decide(%{neighbors: neighbors, lookup: lookup}, %{state: %{hits: hits, scorer: scorer}} = boid) do
       case Enum.find(neighbors, &(&1.group in hits and &1.dist <= Game.radius(&1) + 1.0)) do
         nil ->
           {:ok, boid}
 
         target ->
-          # The id of a boid is its process.
-          :gen_boid.cast(target.id, :hit)
+          # The id of a boid is not its process: the row of the boid has it.
+          with {:ok, %{pid: pid}} <- lookup.(target.id), do: :gen_boid.cast(pid, :hit)
           if scorer, do: :gen_boid.cast(scorer, {:scored, target.group})
           {:stop, :normal, boid}
       end
@@ -142,9 +142,11 @@ defmodule BoidsSite.Scenes.Game do
     # The state: the mode (escorts or hunts), the steps before the next
     # bolt, the space (to start a bolt), and where the ship is (to aim).
     @impl true
-    def init(%{pos: pos, space: space}) do
+    def init(%{id: id, pos: pos, space: space}) do
       state = %{mode: :escorts, wait: Game.steps(1800), space: space, aim: nil}
-      {:ok, %{pos: pos, group: :drones, perception: 26, max_speed: 13, min_speed: 4, rules: @escort, state: state}}
+
+      {:ok,
+       %{id: id, pos: pos, group: :drones, perception: 26, max_speed: 13, min_speed: 4, rules: @escort, state: state}}
     end
 
     # Decide: hunt the ship while the drone sees it.
@@ -203,7 +205,16 @@ defmodule BoidsSite.Scenes.Game do
       ]
 
       {:ok,
-       %{pos: pos, group: :queen, data: 5, perception: 16, max_speed: 6, rules: rules, state: %{space: space, steps: 1}}}
+       %{
+         id: :queen,
+         pos: pos,
+         group: :queen,
+         data: 5,
+         perception: 16,
+         max_speed: 6,
+         rules: rules,
+         state: %{space: space, steps: 1}
+       }}
     end
 
     @impl true
@@ -222,7 +233,9 @@ defmodule BoidsSite.Scenes.Game do
     @doc "Start a drone that guards a queen."
     def drone(space, queen, {x, y}) do
       pos = {x + :rand.uniform() * 4 - 2, y + :rand.uniform() * 4 - 2}
-      {:ok, drone} = :gen_boid.start(space, Drone, %{pos: pos, space: space})
+      # The relation needs the id of the drone, which is not its process.
+      drone = make_ref()
+      {:ok, _} = :gen_boid.start(space, Drone, %{id: drone, pos: pos, space: space})
       :boids.relate(space, drone, :guards, queen)
     end
   end
@@ -262,6 +275,7 @@ defmodule BoidsSite.Scenes.Game do
 
       {:ok,
        %{
+         id: :ship,
          pos: {80, 45},
          group: :ship,
          perception: 34,
@@ -423,8 +437,8 @@ defmodule BoidsSite.Scenes.Game do
     do: {Enum.find_index(@kinds, &(&1 == group)), BoidsSite.Scene.angle(vel), 0}
 
   @impl true
-  def more(%{space: space, ship: ship}, number) do
-    case :boids.lookup(space, ship) do
+  def more(%{space: space}, number) do
+    case :boids.lookup(space, :ship) do
       {:ok, %{data: data}} ->
         readings = [
           ["Score", data.score],
@@ -471,8 +485,8 @@ defmodule BoidsSite.Scenes.Game do
   end
 
   # A large rock at a side of the box, not near the ship.
-  defp rock(%{space: space, ship: ship}) do
-    {:ok, %{pos: at}} = :boids.lookup(space, ship)
+  defp rock(%{space: space}) do
+    {:ok, %{pos: at}} = :boids.lookup(space, :ship)
     pos = Enum.random([{:rand.uniform() * @width, 0.0}, {0.0, :rand.uniform() * @height}])
 
     if :boids_vec.norm(:boids_space.offset(space, at, pos)) > 30 do
@@ -483,7 +497,7 @@ defmodule BoidsSite.Scenes.Game do
 
   defp queen(%{space: space}) do
     pos = {:rand.uniform() * @width, :rand.uniform() * 20.0}
-    {:ok, queen} = :gen_boid.start(space, Queen, %{pos: pos, space: space})
-    for _ <- 1..5, do: Queen.drone(space, queen, pos)
+    {:ok, _} = :gen_boid.start(space, Queen, %{pos: pos, space: space})
+    for _ <- 1..5, do: :ok = Queen.drone(space, :queen, pos)
   end
 end

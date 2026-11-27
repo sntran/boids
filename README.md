@@ -73,7 +73,7 @@ In Erlang:
 1> {ok, World} = boids:start_world(#{bounds => {{0, 0}, {100, 100}}, wrap => true}).
 2> {ok, Ids} = boids:populate(World, 200, #{}).
 3> boids:snapshot(World).
-[#{id => <0.153.0>, pos => {61.2, 8.9}, vel => {-3.1, 7.4},
+[#{id => #Ref<0.1.2.3>, pos => {61.2, 8.9}, vel => {-3.1, 7.4},
    group => default, data => undefined, pid => <0.153.0>} | _]
 ```
 
@@ -89,6 +89,11 @@ list:
 The 200 boids now move in real time: each is a process that makes a step
 each 50 ms. `snapshot/1` reads their positions, for example to draw
 them.
+
+The id of a boid is the option `id`, or a new reference. It is not the
+process of the boid, because that process changes when the boid moves
+to another node (see "A world on several nodes"). `boids:whereis/2`
+gives the process of an id.
 
 ## See a flock
 
@@ -470,6 +475,81 @@ init([]) ->
 children = [{:boids, name: :my_world, bounds: {{0, 0}, {100, 100}}}]
 ```
 
+## A world on several nodes
+
+A world can be on several nodes, so that a large world uses the
+processors of several computers. Give the world a name (an atom), and
+start it on each node with the same options:
+
+```erlang
+%% On each node of the cluster.
+{ok, _} = boids:start_world(#{name => sky, bounds => {{0, 0}, {4000, 4000}}, wrap => true}).
+```
+
+The worlds with that name on the connected nodes are one world.
+`boids:nodes(sky)` gives its nodes. With one node, nothing changes: a
+world on one node has no border and sends no message.
+
+- **Each node has a part of the world.** The world is cut into tiles
+  (the option `tile`, 16 cells by default: 160 units). The names of the
+  nodes give the node of each tile, with no configuration. A new node
+  takes its part of the tiles, and the tiles of a node that stops go to
+  the other nodes.
+- **A boid is a process on the node of its tile.** It reads the tables
+  of its node, as on one node. No process tells a boid what is near it.
+- **Near a border, a boid shows itself.** A boid that sees a tile of
+  another node sends its row to that node at each step. The boids of
+  that node then see it as a neighbor. A row that gets no update for
+  half a second goes.
+- **Across a border, a boid moves.** Its process starts on the other
+  node, and the first process stops with the reason `{shutdown, {moved,
+  Node}}`. The boid keeps its id, its state (the key `state`), its
+  rules, its relations and the options of its process. `terminate/2` of
+  its module runs on the first node, and `init/1` does not run on the
+  new node.
+
+```erlang
+%% From each node, for a boid on each node.
+Pid = boids:whereis(sky, Id),
+ok = boids:update(sky, Id, #{max_speed => 5}),
+{ok, Boid} = boids:boid(sky, Id).
+```
+
+What you must know:
+
+- The functions with an id find a boid on each node: `whereis/2`,
+  `boid/2`, `update/3`, `remove/2`, `add_rule/3`, `relate/4`.
+- The id of a boid is not its process. In a callback, the function
+  `lookup` of `Seen` gives the row of a neighbor, with its process:
+  `{ok, #{pid := Pid}} = (maps:get(lookup, Seen))(Id)`.
+- `snapshot/1`, `count/1`, `flocks/2` and `graph/2` are about the boids
+  of one node. For all the world, call them on each node of
+  `boids:nodes/1`. `near/3` and `lookup/2` also give the boids of other
+  nodes that show themselves near a border.
+- `boids:step/2` makes a step for the boids of one node.
+- A relation is on the node of the boid that has it, and it moves with
+  that boid. A rule with the target `{related, Label}` gives a force
+  only while the boid perceives the other boid: on its node, or near
+  the border. The option `relations => acyclic` checks the relations of
+  one node only.
+- A boid below a supervisor of yours (`gen_boid:start_link/3`) becomes a
+  child of the world of its new node when it moves. Give it `restart =>
+  transient`, so that your supervisor does not start it again.
+- A process of yours with `boids:join/2` does not move. It shows itself
+  to the node of the tile where it is.
+- The code of the modules of the boids is on each node, and the options
+  of the world are the same on each node. Worlds with one name and
+  other options are not one world.
+- Make a tile much larger than the distance that a boid sees. Then few
+  boids are near a border.
+- The ids of a world are for one boid each, on all the nodes. When a
+  boid comes to a node that has a boid with its id, one of the two
+  stops: the one whose boid made fewer moves from node to node.
+- When the answer of a move is lost (a connection that stops), a boid
+  can have a process on two nodes for some time. The process that made
+  more moves stays when the two come to one node. The specification
+  `specs/Move.tla` has this flow.
+
 ## How it works
 
 A world has ETS tables with one row for each boid, and a grid of
@@ -489,7 +569,8 @@ neighbors that it sees are not all of the same moment, as for a bird.
 
 The flows where the order of the processes can change the result have a
 specification in TLA+ (`specs/`): the members of a world, a write
-against a read of the world, and the step in two parts. The tests
+against a read of the world, the step in two parts, and the move of a
+boid to another node. The tests
 check a small model of each one, and fault models that must fail, with
 the native checker of [Accord](https://github.com/sntran/accord). They
 also replay the messages of the process of a real world as a
@@ -551,6 +632,8 @@ mix run examples/speed.exs 6000
 - A process that starts again with the id of its last process gets its
   row again, also before the world saw the end of the old process.
   That is true for a `gen_boid` and for a process with `boids:join/2`.
+- A boid that moves to another node stops on the first node with the
+  reason `{shutdown, {moved, Node}}`. That is not an error.
 - Each process of a world and of a boid has a label (`proc_lib`), so
   the observer and a crash report show which boid a process is.
 - When the process of a world stops with an error, all the
@@ -560,7 +643,8 @@ mix run examples/speed.exs 6000
 
 ## The limits
 
-- A world is on one node: the tables are local.
+- The tables of a world are local to a node. A world on several nodes
+  has a part on each node (see "A world on several nodes").
 - An obstacle is a circle or a sphere. There are no walls and no
   polygons. A rule of your own can add them.
 - The rule `follow` does not use `wrap`.

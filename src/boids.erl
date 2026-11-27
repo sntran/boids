@@ -43,6 +43,10 @@ In Elixir, the module is `:boids`:
   `near/3`, with no message to a boid.
 - The boids of a world can have relations (`relate/4`): a boid
   follows a leader, or fears an enemy.
+- A world with a name can be on several nodes (`nodes/1`). Each node
+  has a part of the tiles of the world. A boid is a process on the node
+  of its tile: it shows itself to another node near a border, and it
+  moves to that node across the border.
 - A flock is a group of boids that see each other. No process makes a
   flock: it comes from the rules of the boids. `flocks/2` gives the
   flocks of a world, and `graph/2` gives the world as a
@@ -96,7 +100,9 @@ The result has the process of the world.
 The options:
 
 - `name`: a name for the process of the world: an atom, `{global,
-  Term}` or `{via, Module, Term}`.
+  Term}` or `{via, Module, Term}`. With an atom, the worlds with that
+  name and the same options on the connected nodes are one world
+  (`nodes/1`).
 - `bounds`: `{Min, Max}`, the box of the world. The rule `contain`
   and `populate/3` use it.
 - `wrap`: `true` when each side of the box continues at the opposite
@@ -105,7 +111,11 @@ The options:
   best value is near the `perception` of the boids.
 - `defaults`: options for each boid of the world, as a map.
 - `relations`: `cyclic` (the default) or `acyclic`: with `acyclic`, the
-  relations between the boids cannot make a cycle (`relate/4`).
+  relations between the boids of a node cannot make a cycle
+  (`relate/4`).
+- `tile`: the side of a tile of the world (default: 16 cells). In a
+  world on several nodes, each tile is on one node. Make it much larger
+  than the `perception` of the boids.
 
 A bad option gives `{error, {bad_option, {Key, Value}}}`.
 """.
@@ -176,7 +186,9 @@ space(Server) -> boids_world:space(Server).
 
 -doc """
 Add a boid to a world: start its process. The result has the id
-of the boid. The id is the option `id`, or the pid of the process.
+of the boid. The id is the option `id`, or a new reference. It is not
+the process of the boid, which changes when the boid moves to another
+node: `whereis/2` gives the process.
 
 The options are those of a boid (`boids_boid`) and of its process
 (`gen_boid`), on top of the `defaults` of the world. `pos` is
@@ -268,7 +280,8 @@ random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}) ->
 Remove a boid from its world: stop its process. This is for a boid
 of `add/2`, `populate/3` and `gen_boid:start/3`. For another id, the
 result is `{error, not_found}`: a process of yours with `join/2`, or a
-boid below a supervisor of yours (`gen_boid:start_link/3`).
+boid below a supervisor of yours (`gen_boid:start_link/3`). In a world
+on several nodes, the node of the boid removes it.
 """.
 -spec remove(world(), term()) -> ok | {error, not_found}.
 remove(World, Id) ->
@@ -362,7 +375,9 @@ call(Pid, Request) ->
 
 -doc """
 The process of a boid, or `undefined` for an id that is not in the
-world.
+world. In a world on several nodes, the process can be on another
+node. The process of a boid changes when the boid moves to another
+node: ask again for it then.
 """.
 -spec whereis(world(), term()) -> pid() | undefined.
 whereis(World, Id) ->
@@ -550,6 +565,11 @@ The result is `{error, {not_found, Id}}` for an id that is not in the
 world. In a world with the option `relations => acyclic`, a
 relation that makes a cycle gives `{error, cycle}`: use it for a
 hierarchy.
+
+In a world on several nodes, a relation is on the node of the boid
+`From`, and it moves with that boid. The rule gives a force only while
+the boid perceives the boid `To`: on its node, or near a border. The
+option `acyclic` checks the relations of one node only.
 """.
 -spec relate(world(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
 relate(World, From, Label, To) ->
@@ -566,10 +586,17 @@ relate(World, From, Label, To) ->
             erpc:call(node(Pid), ?MODULE, relate, [maps:get(name, Space), From, Label, To], 5000)
     end.
 
--doc "Remove a relation of `relate/4`.".
+-doc "Remove a relation of `relate/4`, on the node of the boid `From`.".
 -spec unrelate(world(), term(), term(), term()) -> ok.
 unrelate(World, From, Label, To) ->
-    boids_world:unrelate(space(World), From, Label, To).
+    Space = space(World),
+    case boids_world:find(Space, From) of
+        {_Kind, Pid} when node(Pid) =/= node() ->
+            %% The relation is on the node of the boid that has it.
+            erpc:call(node(Pid), ?MODULE, unrelate, [maps:get(name, Space), From, Label, To], 5000);
+        _ ->
+            boids_world:unrelate(Space, From, Label, To)
+    end.
 
 -doc """
 All the relations of a world, as a graph (`graph`): each boid

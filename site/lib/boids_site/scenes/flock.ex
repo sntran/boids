@@ -15,7 +15,15 @@ defmodule BoidsSite.Scenes.Flock do
     @impl true
     def init(pos) do
       {:ok,
-       %{pos: pos, group: :hawks, perception: 28, rules: @rest, combine: :priority, state: %{mode: :rests, energy: 6.0}}}
+       %{
+         id: :hawk,
+         pos: pos,
+         group: :hawks,
+         perception: 28,
+         rules: @rest,
+         combine: :priority,
+         state: %{mode: :rests, energy: 6.0}
+       }}
     end
 
     # Sense: the prey are the birds that the hawk sees.
@@ -76,8 +84,8 @@ defmodule BoidsSite.Scenes.Flock do
         search: 2
       )
 
-    {:ok, hawk} = :gen_boid.start(space, Hawk, {20, 20})
-    {:ok, %{space: space, hawk: hawk}}
+    {:ok, _hawk} = :gen_boid.start(space, Hawk, {20, 20})
+    {:ok, %{space: space}}
   end
 
   @impl true
@@ -90,8 +98,8 @@ defmodule BoidsSite.Scenes.Flock do
   def look(_scene, %{vel: vel}), do: {0, BoidsSite.Scene.angle(vel), 0}
 
   @impl true
-  def more(%{space: space, hawk: hawk}, _number) do
-    case :boids.lookup(space, hawk) do
+  def more(%{space: space}, _number) do
+    case :boids.lookup(space, :hawk) do
       {:ok, %{data: {mode, energy}}} -> %{r: [["The hawk", to_string(mode)], ["Its energy", Float.round(energy, 1)]]}
       _ -> %{}
     end

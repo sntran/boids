@@ -9,6 +9,7 @@ defmodule BoidsSpecTest do
   @members Path.expand("../specs/MCMembers.tla", __DIR__)
   @space Path.expand("../specs/MCSpace.tla", __DIR__)
   @step Path.expand("../specs/MCStep.tla", __DIR__)
+  @move Path.expand("../specs/MCMove.tla", __DIR__)
 
   defp config(model, name), do: [config: Path.rootname(model) <> name <> ".cfg"]
 
@@ -80,6 +81,33 @@ defmodule BoidsSpecTest do
     test "a boid with its own clock moves during the step" do
       assert {:error, %{kind: :invariant, property: "Quiet"}, _} =
                Checker.check(@step, config(@step, "Clock"))
+    end
+  end
+
+  describe "specs/Move.tla: the move of a boid to another node" do
+    test "with no lost answer, the boid has one process after each move, and each move ends" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@move)
+      assert states > 100
+    end
+
+    test "with lost calls and answers, the boid keeps a process, and each move ends" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@move, config(@move, "Lost"))
+      assert states > 1000
+    end
+
+    test "a node that always keeps its process lets two processes stop for each other" do
+      assert {:error, %{kind: :invariant, property: "NotLost"}, _} =
+               Checker.check(@move, config(@move, "Older"))
+    end
+
+    test "a process that stays when the other node has the boid does not end its move" do
+      assert {:error, %{kind: :temporal, property: "Lands"}, _} =
+               Checker.check(@move, config(@move, "Stays"))
+    end
+
+    test "a limit: after a lost answer, the boid can have a process on each node" do
+      assert {:error, %{kind: :invariant, property: "OneProcess"}, _} =
+               Checker.check(@move, config(@move, "Two"))
     end
   end
 end

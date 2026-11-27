@@ -64,6 +64,8 @@ defmodule BoidsSite.ScenesTest do
 
     # Other messages change nothing.
     assert Scene.input(scene, %{"ping" => 1}) == :ok
+    # Each drone has the relation guards to the queen.
+    assert length(:boids.related_to(scene.space, :queen, :guards)) >= 5
     # The relations of the drones come with a moment of each second.
     assert Enum.any?(moments(scene, div(1000, Scene.tick()) + 1), &is_list(&1[:l]))
   end
@@ -71,8 +73,8 @@ defmodule BoidsSite.ScenesTest do
   test "a hit makes two smaller rocks of a rock, and removes a drone" do
     {_pid, {:ok, %{space: space} = scene}} = scene(BoidsSite.Scenes.Game)
     rows = :boids.snapshot(space)
-    [rock | _] = for %{group: :rocks, id: id} <- rows, do: id
-    [drone | _] = for %{group: :drones, id: id} <- rows, do: id
+    [rock | _] = for %{group: :rocks, pid: pid} <- rows, do: pid
+    [drone | _] = for %{group: :drones, pid: pid} <- rows, do: pid
     count = fn group -> Enum.count(:boids.snapshot(space), &(&1.group == group)) end
     {rocks, drones} = {count.(:rocks), count.(:drones)}
 
@@ -98,11 +100,12 @@ defmodule BoidsSite.ScenesTest do
   end
 
   test "a drone that hunts the ship shoots a bolt at it" do
-    {_pid, {:ok, %{space: space, ship: ship} = scene}} = scene(BoidsSite.Scenes.Game)
-    {:ok, %{pos: {x, y}}} = :boids.lookup(space, ship)
-    {:ok, drone} = :gen_boid.start(space, BoidsSite.Scenes.Game.Drone, %{pos: {x - 12, y}, space: space})
+    {_pid, {:ok, %{space: space} = scene}} = scene(BoidsSite.Scenes.Game)
+    {:ok, %{pos: {x, y}}} = :boids.lookup(space, :ship)
+    args = %{id: :hunter, pos: {x - 12, y}, space: space}
+    {:ok, drone} = :gen_boid.start(space, BoidsSite.Scenes.Game.Drone, args)
     # The drone does not move, so its bolt has a distance to go, and the test sees it.
-    :ok = :boids.update(space, drone, %{min_speed: 0, max_speed: 0})
+    :ok = :boids.update(space, :hunter, %{min_speed: 0, max_speed: 0})
 
     bolt =
       eventually(
@@ -125,7 +128,7 @@ defmodule BoidsSite.ScenesTest do
 
   test "a hit takes one part of the shield of a ship that is not safe" do
     {_pid, {:ok, %{space: space, ship: ship}}} = scene(BoidsSite.Scenes.Game)
-    status = fn -> elem(:boids.lookup(space, ship), 1).data end
+    status = fn -> elem(:boids.lookup(space, :ship), 1).data end
 
     # At the start, the ship is safe: a hit does nothing.
     assert %{safe: true, shield: 3} = status.()
@@ -176,7 +179,7 @@ defmodule BoidsSite.ScenesTest do
 
       # A bird that sees the hawk has the other rules.
       for _ <- 1..40, do: Process.sleep(Scene.tick())
-      rules = for %{group: "birds", id: id} <- :boids.snapshot(space), do: :gen_boid.which_rules(id)
+      rules = for %{group: "birds", pid: pid} <- :boids.snapshot(space), do: :gen_boid.which_rules(pid)
       assert Enum.all?(rules, &(&1 in [[:separation, :alignment, :cohesion], [:evade]]))
       assert [_ | _] = moments(scene, div(1000, Scene.tick()) + 1) |> Enum.filter(&(&1[:r] != nil))
     end

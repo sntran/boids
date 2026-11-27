@@ -34,6 +34,13 @@ The first version. It needs Erlang/OTP 29.
 - The flocks of a world: the groups of boids that see each other
   (`boids:flocks/2`). The world as a graph of these boids
   (`boids:graph/2`), for the functions of the module `graph`.
+- A world on several nodes: a world with a name is one world on the
+  connected nodes that start it. Each node has a part of the tiles of
+  the world. A boid shows itself to another node near a border, and its
+  process moves to that node across the border, with its state
+  (`boids:nodes/1`, the option `tile`).
+- The id of a boid is a reference, and `boids:whereis/2` gives its
+  process, on each node.
 - A process with another behavior as a boid (`boids:join/2`,
   `boids:advance/3`).
 - Steps of all the boids from one state of the world (`boids:step/2`),
@@ -41,8 +48,8 @@ The first version. It needs Erlang/OTP 29.
 - A boid that stops with an error does not start again, so a boid with
   an error at each step cannot stop its world.
 - Specifications of the flows in TLA+ (`specs/`, `docs/specs.md`): the
-  members of a world, a write against a read of its space,
-  and the step in two parts. The tests check the models and the fault
+  members of a world, a write against a read of its space, the step in
+  two parts, and the move of a boid to another node. The tests check the models and the fault
   models with the native checker of Accord, and replay the process of a
   real world against `specs/Members.tla`.
 - The processes of a world and of a boid have a label.

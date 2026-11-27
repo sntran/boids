@@ -18,6 +18,15 @@ process.
 With `wrap`, each side of the box `bounds` continues at the opposite
 side. Then `near/3` gives each neighbor at its nearest position, which
 can be out of the box.
+
+## Tiles and nodes
+
+A world can be on several nodes. The tables of a space are of one node.
+A space is cut into tiles (the option `tile`), and each tile is on one
+node of the world (`home/2`). The space of a node has the rows of the
+boids of that node. It also has rows of boids of other nodes that are
+near a border (`show/2`): `near/3` and `lookup/2` give them, and
+`all/1` and `count/1` do not.
 """.
 
 -export([new/1, options/1, delete/1]).

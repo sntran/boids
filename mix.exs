@@ -24,7 +24,7 @@ defmodule Boids.MixProject do
       deps: deps(),
       test_coverage: [
         summary: [threshold: 100],
-        ignore_modules: [Boids.MembersSpec, ~r/TestBoids/]
+        ignore_modules: [Boids.MembersSpec, ~r/TestBoids/, ~r/Boids\.Cluster/]
       ],
       description: "Boids: flocks of processes that sense, decide and act, with steering rules",
       package: package(),

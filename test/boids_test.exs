@@ -52,9 +52,9 @@ defmodule BoidsTest do
       assert Process.info(:boids_world.boid_sup(space), :priority) == {:priority, :high}
       # A boid has a low priority, or the priority of the other processes.
       {:ok, id} = :boids.add(world, still())
-      assert Process.info(id, :priority) == {:priority, :low}
+      assert Process.info(:boids.whereis(world, id), :priority) == {:priority, :low}
       {:ok, id} = :boids.add(world, still(priority: :normal))
-      assert Process.info(id, :priority) == {:priority, :normal}
+      assert Process.info(:boids.whereis(world, id), :priority) == {:priority, :normal}
     end
 
     test "the processes of a world and of a boid have a label" do
@@ -182,12 +182,14 @@ defmodule BoidsTest do
     test "starts the process of a boid" do
       world = world()
       {:ok, id} = :boids.add(world, still(pos: {1, 2}, vel: {3, 4}, group: :birds, data: :blue))
-      assert is_pid(id)
-      assert :boids.whereis(world, id) == id
+      # The id is not the process: a boid can move to another node.
+      assert is_reference(id)
+      pid = :boids.whereis(world, id)
+      assert is_pid(pid)
       assert :boids.count(world) == 1
 
       assert :boids.lookup(world, id) ==
-               {:ok, %{id: id, pos: {1, 2}, vel: {3, 4}, group: :birds, data: :blue, pid: id}}
+               {:ok, %{id: id, pos: {1, 2}, vel: {3, 4}, group: :birds, data: :blue, pid: pid}}
 
       assert :boids.snapshot(world) == [elem(:boids.lookup(world, id), 1)]
       assert {:ok, %{id: ^id, pos: {1, 2}, max_speed: 10.0, rules: []}} = :boids.boid(world, id)
@@ -281,12 +283,13 @@ defmodule BoidsTest do
       world = world()
       {:ok, id} = :boids.add(world, still())
       {:ok, other} = :boids.add(world, still())
+      pid = :boids.whereis(world, id)
       assert :boids.remove(world, id) == :ok
-      refute Process.alive?(id)
+      refute Process.alive?(pid)
       assert :boids.lookup(world, id) == :error
       assert :boids.count(world) == 1
       assert :boids.remove(world, id) == {:error, :not_found}
-      assert Process.alive?(other)
+      assert Process.alive?(:boids.whereis(world, other))
     end
 
     test "a late leave for a process that stopped does not take the row of a new process" do
@@ -438,8 +441,9 @@ defmodule BoidsTest do
     test "stops at a call or a cast of gen_boid" do
       world = world()
       {:ok, first} = :boids.add(world, still())
-      assert {{:bad_call, :hello}, _} = catch_exit(:gen_boid.call(first, :hello))
+      assert {{:bad_call, :hello}, _} = catch_exit(:gen_boid.call(:boids.whereis(world, first), :hello))
       {:ok, second} = :boids.add(world, still())
+      second = :boids.whereis(world, second)
       ref = Process.monitor(second)
       :gen_boid.cast(second, :hello)
       assert_receive {:DOWN, ^ref, _, _, {:bad_cast, :hello}}
@@ -641,7 +645,7 @@ defmodule BoidsTest do
       Process.exit(:boids.whereis(world, :a), :kill)
       assert eventually(fn -> :boids.whereis(world, :a) == :undefined end)
       assert :boids.count(world) == 1
-      assert Process.alive?(other)
+      assert Process.alive?(:boids.whereis(world, other))
       # The id is free for a new boid.
       assert :boids.add(world, still(id: :a)) == {:ok, :a}
     end
@@ -654,7 +658,7 @@ defmodule BoidsTest do
       for _ <- 1..15, do: {:ok, _} = :boids.add(world, pos: {1, 1}, rules: [{bad, 1}], tick: 5)
       assert eventually(fn -> :boids.count(world) == 20 end)
       assert Process.alive?(world)
-      assert Enum.all?(good, &Process.alive?/1)
+      assert Enum.all?(good, &Process.alive?(:boids.whereis(world, &1)))
       assert Enum.sort(Enum.map(:boids.snapshot(world), & &1.id)) == Enum.sort(good)
     end
 
@@ -662,10 +666,11 @@ defmodule BoidsTest do
     test "the end of the process of a world stops all the world" do
       {:ok, world} = :boids.start_world()
       {:ok, id} = :boids.add(world, still())
+      pid = :boids.whereis(world, id)
       sup = :boids_world.sup(world)
       Process.exit(world, :kill)
       assert eventually(fn -> not Process.alive?(sup) end)
-      refute Process.alive?(id)
+      refute Process.alive?(pid)
       assert :boids.stop_world(world) == {:error, :not_found}
     end
 
@@ -674,9 +679,10 @@ defmodule BoidsTest do
       {:ok, id} = :boids.add(world, still())
       space = :boids.space(world)
       # The world does not see the end of the process before the call.
+      pid = :boids.whereis(world, id)
       :sys.suspend(world)
-      ref = Process.monitor(id)
-      :ok = GenServer.stop(id)
+      ref = Process.monitor(pid)
+      :ok = GenServer.stop(pid)
       assert_receive {:DOWN, ^ref, _, _, _}
       assert :boids.boid(space, id) == {:error, :not_found}
       assert :boids.update(space, id, %{max_speed: 1}) == {:error, :not_found}
@@ -687,7 +693,7 @@ defmodule BoidsTest do
     test "the world removes a boid whose process stops" do
       world = world()
       {:ok, id} = :boids.add(world, still())
-      :ok = GenServer.stop(id)
+      :ok = GenServer.stop(:boids.whereis(world, id))
       assert eventually(fn -> :boids.count(world) == 0 end)
       assert :boids.lookup(world, id) == :error
       assert :boids.near(world, {0, 0}, 5) == []
@@ -696,8 +702,8 @@ defmodule BoidsTest do
     test "other messages change nothing" do
       world = world()
       {:ok, id} = :boids.add(world, still())
-      send(id, :hello)
-      GenServer.cast(id, :hello)
+      send(:boids.whereis(world, id), :hello)
+      GenServer.cast(:boids.whereis(world, id), :hello)
       send(world, :hello)
       send(world, {:DOWN, make_ref(), :process, self(), :normal})
       GenServer.cast(world, :hello)
@@ -780,8 +786,8 @@ defmodule BoidsTest do
       assert start.(pos: {0, 0}, mass: 0) == {:error, {:shutdown, {:bad_option, {:mass, 0}}}}
       assert start.(:bird) == {:error, {:shutdown, {:bad_option, :bird}}}
       assert start.(id: :hawk, pos: {0, 0}) == {:error, {:shutdown, {:exists, :hawk}}}
-      assert {:ok, pid} = start.(pos: {0, 0})
-      assert :boids.whereis(world, pid) == pid
+      assert {:ok, pid} = start.(id: :mouse, pos: {0, 0})
+      assert :boids.whereis(world, :mouse) == pid
     end
   end
 
@@ -828,7 +834,7 @@ defmodule BoidsTest do
     test "a boid hibernates between two steps" do
       world = world()
 
-      sleeps? = &hibernates?/1
+      sleeps? = &hibernates?(:boids.whereis(world, &1))
 
       {:ok, timed} = :boids.add(world, pos: {0, 0}, vel: {1, 0}, rules: [], tick: 20)
       assert eventually(fn -> sleeps?.(timed) end)
@@ -845,7 +851,7 @@ defmodule BoidsTest do
     test "without hibernate, a boid keeps its heap" do
       world = world()
 
-      sleeps? = &hibernates?/1
+      sleeps? = &hibernates?(:boids.whereis(world, &1))
 
       {:ok, timed} = :boids.add(world, pos: {0, 0}, vel: {1, 0}, rules: [], tick: 5, hibernate: false)
       {:ok, manual} = :boids.add(world, still(hibernate: false))
@@ -859,10 +865,11 @@ defmodule BoidsTest do
       world = world()
       {:ok, id} = :boids.add(world, pos: {0, 0}, vel: {10, 0}, rules: [], tick: 10)
       # The tick comes 100 ms late, as with processors that have too much work.
-      :erlang.suspend_process(id)
+      pid = :boids.whereis(world, id)
+      :erlang.suspend_process(pid)
       Process.sleep(110)
       late = pos(world, id)
-      :erlang.resume_process(id)
+      :erlang.resume_process(pid)
       assert eventually(fn -> pos(world, id) != late end)
       # The boid waits 8 times the delay more: about 0.7 second.
       moved = pos(world, id)
@@ -945,21 +952,23 @@ defmodule BoidsTest do
     test "a step does not change the clock of a boid" do
       world = world()
       {:ok, id} = :boids.add(world, still(vel: {1, 0}))
-      %{last: last} = :sys.get_state(id)
+      pid = :boids.whereis(world, id)
+      %{last: last} = :sys.get_state(pid)
       Process.sleep(5)
       :boids.step(world, 0.5)
-      assert %{last: ^last, pending: :undefined} = :sys.get_state(id)
+      assert %{last: ^last, pending: :undefined} = :sys.get_state(pid)
     end
 
     test "a commit with no plan changes nothing" do
       world = world()
       {:ok, id} = :boids.add(world, still(vel: {1, 0}))
-      assert GenServer.call(id, :commit) == :ok
+      pid = :boids.whereis(world, id)
+      assert GenServer.call(pid, :commit) == :ok
       assert pos(world, id) == {0, 0}
       # An update removes the plan.
-      assert GenServer.call(id, {:plan, 1}) == :ok
+      assert GenServer.call(pid, {:plan, 1}) == :ok
       :ok = :boids.update(world, id, %{pos: {7, 7}})
-      assert GenServer.call(id, :commit) == :ok
+      assert GenServer.call(pid, :commit) == :ok
       assert pos(world, id) == {7, 7}
     end
 
