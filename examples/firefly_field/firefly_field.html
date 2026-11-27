@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firefly Field</title>
+<meta name="description" content="A calm puzzle made with boids: lead fireflies with a lantern until all of them flash together.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .field canvas { cursor: crosshair; touch-action: none; }
+  .panel { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+  .panel .message { margin: 0; flex: 1 1 320px; min-width: 0; }
+  .panel .message b { font-family: var(--display); font-weight: 600; }
+  .panel[data-state="done"] { border-color: var(--cool); }
+  .panel[data-state="dawn"] { border-color: var(--warm); }
+  .streak { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--muted); }
+  .streak i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--gold); display: inline-block; }
+  .streak i.on { background: var(--gold); box-shadow: 0 0 10px var(--gold); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+  .keys .pad button, .keys .fast { padding: 0; min-width: 0; height: 44px; }
+  .keys .fast { width: 80px; }
+  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Firefly Field</h1>
+    <p class="lead">It is night, and groups of fireflies fly over the field. The fireflies that see each other come to flash together. Move the lantern: the fireflies near it follow it. Bring the groups together, until all the fireflies flash at one moment, three times in a row, before the dawn.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="Fireflies that fly and flash at night around a lantern"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+  <div class="legend" aria-label="What the colors show">
+    <span><i style="background: #ffe27a; box-shadow: 0 0 8px #ffe27a"></i>A flash</span>
+    <span><i style="background: var(--boid)"></i>Fireflies</span>
+    <span><i style="background: var(--plum)"></i>Fireflies with a slow clock</span>
+    <span><i style="background: var(--gold); opacity: 0.5"></i>The light of the lantern: the fireflies in it follow it</span>
+  </div>
+
+  <div class="panel" id="panel" data-state="night" aria-live="polite">
+    <p class="message" id="message">Bring the groups together with the lantern.</p>
+    <span class="streak" aria-label="Flashes of all the fireflies together, in a row"><i id="s1"></i><i id="s2"></i><i id="s3"></i></span>
+    <button class="main" id="go" type="button" hidden>Next level</button>
+  </div>
+
+  <div class="keys">
+    <div class="pad">
+      <button type="button" data-key="up" aria-label="Up">Up</button>
+      <button type="button" data-key="left" aria-label="Left">Left</button>
+      <button type="button" data-key="down" aria-label="Down">Down</button>
+      <button type="button" data-key="right" aria-label="Right">Right</button>
+    </div>
+    <button class="fast" type="button" data-key="fast">Fast</button>
+    <p>Use the arrow keys or W, A, S and D to move the lantern, or click or touch a point of the field: the lantern goes there. The fireflies in its light follow it. Hold Shift (or Fast) to move the lantern faster than the fireflies: it leaves them where they are.</p>
+  </div>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>A signal in the data</h3>
+      <p>The data of a boid is what its neighbors see. The data of a firefly has the time of its last flash. A firefly reads the data of its neighbors: no message goes from firefly to firefly.</p>
+    </div>
+    <div>
+      <h3>A sync that no firefly makes</h3>
+      <p>Each firefly has a clock. When it sees a neighbor flash, it moves its own clock a little forward, and more when its own flash is near. That is all. The flashes of a group come together from these small changes.</p>
+    </div>
+    <div>
+      <h3>The groups of the field</h3>
+      <p>The number of groups comes from <code>boids:flocks/2</code>: the fireflies that see each other, from neighbor to neighbor. Two groups flash together only when they are one group.</p>
+    </div>
+    <div>
+      <h3>Rules that are functions</h3>
+      <p>The lantern is a rule of each firefly: a function that reads the place of the lantern. The wind is the rule <code>flow</code> of the library, with a field that is a function.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/firefly_field/firefly_field.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var box = [160, 90];
+  var lantern = null;
+  var radius = 24;
+
+  function show(more) {
+    if (more.lantern) { lantern = more.lantern; }
+    if (more.radius) { radius = more.radius; }
+    var panel = el("panel");
+    panel.setAttribute("data-state", more.state);
+    for (var i = 1; i <= 3; i++) { el("s" + i).className = more.streak >= i ? "on" : ""; }
+    var go = el("go");
+
+    if (more.state === "night") {
+      el("message").innerHTML = "<b>Level " + more.level + " of " + more.levels + ": " + more.title + ".</b> " +
+        (more.groups > 1 ? "The field has " + more.groups + " groups. Bring them together with the lantern." : "All the fireflies are one group. Keep them in the light, and wait for the flashes.") +
+        (more.wind ? " The wind turns slowly, and moves the fireflies." : "");
+      go.hidden = true;
+    } else if (more.state === "done") {
+      var last = more.level >= more.levels;
+      el("message").innerHTML = "<b>All " + more.total + " fireflies flashed together, three times in a row.</b> The night took " + Math.round(more.time) + " seconds." + (last ? " That was the last level." : "");
+      go.hidden = false;
+      go.textContent = last ? "Start again" : "Next level";
+    } else {
+      el("message").innerHTML = "<b>The dawn came.</b> " +
+        (more.best >= more.total ? "All the fireflies flashed together, but not three times in a row." : "The best flash had " + more.best + " of " + more.total + " fireflies.") +
+        " Try level " + more.level + " again: bring the groups together sooner.";
+      go.hidden = false;
+      go.textContent = "Try again";
+    }
+  }
+
+  // The lantern: a soft light on the ground, under the fireflies.
+  function beneath(ctx, scale, height, c, now) {
+    if (!lantern) { return; }
+    var x = lantern[0] * scale, y = (height - lantern[1]) * scale, r = radius * scale;
+    var flicker = 1 + 0.04 * Math.sin(now * 0.011) + 0.03 * Math.sin(now * 0.023);
+    var light = ctx.createRadialGradient(x, y, 0, x, y, r * flicker);
+    light.addColorStop(0, "rgba(255, 214, 120, 0.30)");
+    light.addColorStop(0.55, "rgba(255, 196, 90, 0.12)");
+    light.addColorStop(1, "rgba(255, 196, 90, 0)");
+    ctx.fillStyle = light;
+    ctx.beginPath(); ctx.arc(x, y, r * flicker, 0, 2 * Math.PI); ctx.fill();
+    ctx.strokeStyle = "rgba(255, 214, 120, 0.22)"; ctx.lineWidth = 2; ctx.setLineDash([10, 10]);
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
+    // The lantern itself: a small frame with a flame.
+    var s = 1.6 * scale;
+    ctx.fillStyle = c.fur; ctx.fillRect(x - s * 0.6, y - s * 1.1, s * 1.2, s * 0.25);
+    ctx.fillRect(x - s * 0.6, y + s * 0.85, s * 1.2, s * 0.25);
+    var flame = ctx.createRadialGradient(x, y, 0, x, y, s);
+    flame.addColorStop(0, "rgba(255, 248, 200, 1)");
+    flame.addColorStop(0.5, "rgba(255, 200, 80, 0.95)");
+    flame.addColorStop(1, "rgba(255, 170, 60, 0.15)");
+    ctx.fillStyle = flame;
+    ctx.beginPath(); ctx.ellipse(x, y, s * 0.55 * flicker, s * 0.85, 0, 0, 2 * Math.PI); ctx.fill();
+    ctx.strokeStyle = c.fur; ctx.lineWidth = Math.max(1.5, s * 0.12);
+    ctx.strokeRect(x - s * 0.55, y - s * 0.9, s * 1.1, s * 1.8);
+  }
+
+  var scene = Boids.scene({
+    name: "firefly-field", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
+    onStart: function (header) { box = header.box; },
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+
+  // A click or a touch on the field: the lantern goes to that point.
+  el("field").addEventListener("pointerdown", function (event) {
+    var rect = el("field").getBoundingClientRect();
+    var x = (event.clientX - rect.left) / rect.width * box[0];
+    var y = box[1] - (event.clientY - rect.top) / rect.height * box[1];
+    scene.send({lantern: [Math.round(x * 10) / 10, Math.round(y * 10) / 10]});
+  });
+
+  // The keys of the person move the lantern: a list of the keys that are down.
+  var down = {};
+  var codes = {
+    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
+    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+    ShiftLeft: "fast", ShiftRight: "fast"
+  };
+  function send() { scene.send({keys: Object.keys(down)}); }
+  function set(name, on) {
+    if (!name || !!down[name] === on) { return; }
+    if (on) { down[name] = true; } else { delete down[name]; }
+    var button = document.querySelector('[data-key="' + name + '"]');
+    if (button) { button.classList.toggle("down", on); }
+    send();
+  }
+  window.addEventListener("keydown", function (event) {
+    var name = codes[event.code];
+    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
+  });
+  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
+  // A window that loses the focus gets no keyup: the lantern stops.
+  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+    var name = button.getAttribute("data-key");
+    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+      button.addEventListener(type, function () { set(name, false); });
+    });
+  });
+  // The lantern gets the keys again each second, while a key is down.
+  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+</script>
+</body>
+</html>
