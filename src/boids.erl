@@ -464,7 +464,7 @@ Groups = graph:components(Graph),
 Alone = [Id || Id <- graph:vertices(Graph), graph:out_degree(Graph, Id) =:= 0].
 ```
 
-The build reads all the flock: it takes about 50 microseconds for each
+The build reads all the flock: it takes 50 to 200 microseconds for each
 boid. Use it for a view of the flock, and not at each step of a boid.
 """.
 -spec graph(flock(), number()) -> graph:graph().
@@ -514,9 +514,13 @@ relation is a vertex, and each relation is an edge `{From, To, Label}`.
 
 ```erlang
 Relations = boids:relations(Flock),
-Followers = graph:in_neighbours(Relations, Leader),
+Chain = graph:get_path(Relations, Bird, TopLeader),
 Order = graph:topsort(Relations).
 ```
+
+Two boids can have relations with different labels. `graph` then gives
+a neighbor one time for each label: for the boids of one label, use
+`related/3` and `related_to/3`.
 """.
 -spec relations(flock()) -> graph:graph().
 relations(Flock) ->
@@ -547,7 +551,9 @@ two in the state of the process, and call `advance/3` at each step.
 
 The options are those of a boid (`boids_boid`), on top of the `defaults`
 of the flock. The default id is the pid of the process. The flock
-removes the boid when the process stops.
+removes the boid when the process stops. The options of the process of
+a `gen_boid` (`tick`, `search` and the others) have no effect here: the
+process has its own clock.
 
 ```erlang
 init(Flock) ->

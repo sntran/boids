@@ -2,6 +2,8 @@ defmodule BoidsTest do
   use ExUnit.Case, async: true
   import Boids.Helpers
 
+  alias Boids.TestBoids.Mouse
+
   @box {{0, 0}, {100, 100}}
 
   # A flock that stops at the end of the test.
@@ -237,9 +239,10 @@ defmodule BoidsTest do
 
       assert_raise ArgumentError, fn -> :boids.set_obstacle(flock, :rock, {0, 0, 0}, 1) end
       assert :boids.count(flock) == 1
-      # An empty flock with no box accepts each size.
+      # The size of the first boid stays, also for an empty flock.
       :ok = :boids.remove(flock, a)
-      assert {:ok, _} = :boids.add(flock, still(pos: {0, 0, 0}))
+      assert :boids.add(flock, still(pos: {0, 0, 0})) == {:error, {:bad_option, {:pos, {0, 0, 0}}}}
+      assert {:ok, _} = :boids.add(flock, still())
       # A flock with a box has the size of its box.
       box = flock(bounds: {{0, 0, 0}, {9, 9, 9}})
       assert :boids.add(box, still()) == {:error, {:bad_option, {:pos, {0, 0}}}}
@@ -337,6 +340,264 @@ defmodule BoidsTest do
     end
   end
 
+  describe "add_rule/3, delete_rule/3 and which_rules/2" do
+    test "change the rules of a boid, from its next step" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, still(max_force: 100))
+      assert :boids.which_rules(flock, id) == {:ok, []}
+      assert :boids.add_rule(flock, id, {{:seek, :home}, 1, target: {10, 0}}) == :ok
+      assert :boids.add_rule(flock, id, {{:seek, :food}, 1, %{target: {0, 10}}}) == :ok
+      assert :boids.which_rules(flock, id) == {:ok, [seek: :home, seek: :food]}
+      :boids.step(flock, 0.1)
+      {x, y} = pos(flock, id)
+      assert x > 0 and y > 0
+      assert :boids.delete_rule(flock, id, {:seek, :food}) == :ok
+      assert :boids.which_rules(flock, id) == {:ok, [seek: :home]}
+      assert {:ok, %{rules: [{{:seek, :home}, 1, %{target: {10, 0}}}]}} = :boids.boid(flock, id)
+      # A boid with no such rule does not change.
+      assert :boids.delete_rule(flock, id, :wander) == :ok
+      assert :boids.which_rules(flock, id) == {:ok, [seek: :home]}
+    end
+
+    test "a rule of your own is a function, and its name is the function" do
+      flock = flock()
+      me = self()
+
+      push = fn boid, neighbors, env ->
+        send(me, {:rule, boid.id, length(neighbors), env.dt})
+        {3, 0}
+      end
+
+      {:ok, id} = :boids.add(flock, still(id: :a, max_force: 100))
+      {:ok, _} = :boids.add(flock, still(pos: {1, 1}))
+      assert :boids.add_rule(flock, id, {push, 2}) == :ok
+      assert :boids.which_rules(flock, id) == {:ok, [push]}
+      :boids.step(flock, 0.5)
+      assert_received {:rule, :a, 1, 0.5}
+      assert_vec(pos(flock, id), {1.5, 0.0})
+      assert :boids.delete_rule(flock, id, push) == :ok
+      :boids.step(flock, 0.5)
+      refute_received {:rule, _, _, _}
+    end
+
+    test "give not_found for an id that is not a boid with a process of the library" do
+      flock = flock()
+      {:ok, _space, _me} = :boids.join(flock, id: :me, pos: {0, 0})
+
+      for id <- [:me, :nobody] do
+        assert :boids.add_rule(flock, id, {:wander, 1}) == {:error, :not_found}
+        assert :boids.delete_rule(flock, id, :wander) == {:error, :not_found}
+        assert :boids.which_rules(flock, id) == {:error, :not_found}
+        assert :boids.update(flock, id, %{max_speed: 1}) == {:error, :not_found}
+        assert :boids.boid(flock, id) == {:error, :not_found}
+        assert :boids.remove(flock, id) == {:error, :not_found}
+      end
+    end
+
+    test "refuse a bad rule, and change nothing" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, still())
+      assert :boids.add_rule(flock, id, {:seek, 1}) == {:error, {:bad_option, {:rules, {:seek, 1, %{}}}}}
+      assert :boids.add_rule(flock, id, {:fly, 1}) == {:error, {:bad_option, {:rules, {:fly, 1, %{}}}}}
+      assert :boids.which_rules(flock, id) == {:ok, []}
+    end
+
+    test "the memory of a rule has the name of the rule" do
+      flock = flock()
+      {:ok, id} = :boids.add(flock, still(seed: 1, rules: [{:wander, 1}, {{:wander, :slow}, 1, jitter: 0.1}]))
+      :boids.step(flock, 0.1)
+
+      assert {:ok, %{memory: %{:wander => {_, _}, {:wander, :slow} => {_, _}} = memory}} =
+               :boids.boid(flock, id)
+
+      assert map_size(memory) == 2
+      :ok = :boids.delete_rule(flock, id, :wander)
+      assert {:ok, %{memory: only}} = :boids.boid(flock, id)
+      assert Map.keys(only) == [{:wander, :slow}]
+    end
+  end
+
+  describe "a boid with no module of yours" do
+    @describetag :capture_log
+
+    test "stops at a call or a cast of gen_boid" do
+      flock = flock()
+      {:ok, first} = :boids.add(flock, still())
+      assert {{:bad_call, :hello}, _} = catch_exit(:gen_boid.call(first, :hello))
+      {:ok, second} = :boids.add(flock, still())
+      ref = Process.monitor(second)
+      :gen_boid.cast(second, :hello)
+      assert_receive {:DOWN, ^ref, _, _, {:bad_cast, :hello}}
+      assert eventually(fn -> :boids.count(flock) == 0 end)
+    end
+  end
+
+  describe "the relations between the boids" do
+    setup do
+      flock = flock()
+      for id <- [:a, :b, :c], do: {:ok, ^id} = :boids.add(flock, still(id: id))
+      %{flock: flock}
+    end
+
+    test "relate/4 adds a relation, and the reads give it in the two directions", %{flock: flock} do
+      assert :boids.relate(flock, :a, :follows, :b) == :ok
+      assert :boids.relate(flock, :c, :follows, :b) == :ok
+      # Two boids can have two relations, with different labels.
+      assert :boids.relate(flock, :a, :fears, :b) == :ok
+      # The same relation again changes nothing.
+      assert :boids.relate(flock, :a, :follows, :b) == :ok
+      assert :boids.related(flock, :a, :follows) == [:b]
+      assert Enum.sort(:boids.related_to(flock, :b, :follows)) == [:a, :c]
+      assert :boids.related(flock, :a, :fears) == [:b]
+      assert :boids.related(flock, :b, :follows) == []
+      assert :boids.related_to(flock, :a, :follows) == []
+      assert :boids.related(flock, :nobody, :follows) == []
+      # The space of the flock gives the same, with no message.
+      assert :boids.related(:boids.space(flock), :c, :follows) == [:b]
+    end
+
+    test "relations/1 gives the relations as a graph", %{flock: flock} do
+      assert :graph.vertices(:boids.relations(flock)) == []
+      :ok = :boids.relate(flock, :a, :follows, :b)
+      :ok = :boids.relate(flock, :c, :follows, :b)
+      :ok = :boids.relate(flock, :a, :fears, :b)
+      graph = :boids.relations(flock)
+      assert Enum.sort(:graph.vertices(graph)) == [:a, :b, :c]
+      assert Enum.sort(:graph.edges(graph)) == [{:a, :b, :fears}, {:a, :b, :follows}, {:c, :b, :follows}]
+      assert graph |> :graph.in_neighbours(:b) |> Enum.uniq() |> Enum.sort() == [:a, :c]
+      assert Enum.uniq(:graph.out_neighbours(graph, :a)) == [:b]
+      assert :graph.has_edge(graph, :a, :b)
+    end
+
+    test "unrelate/4 removes one relation", %{flock: flock} do
+      :ok = :boids.relate(flock, :a, :follows, :b)
+      :ok = :boids.relate(flock, :c, :follows, :b)
+      :ok = :boids.relate(flock, :a, :fears, :b)
+      assert :boids.unrelate(flock, :a, :follows, :b) == :ok
+      assert :boids.related(flock, :a, :follows) == []
+      assert :boids.related_to(flock, :b, :follows) == [:c]
+      assert :boids.related(flock, :a, :fears) == [:b]
+      assert Enum.sort(:graph.edges(:boids.relations(flock))) == [{:a, :b, :fears}, {:c, :b, :follows}]
+      # A relation that the flock does not have changes nothing.
+      assert :boids.unrelate(flock, :a, :follows, :b) == :ok
+      assert :boids.unrelate(flock, :b, :follows, :nobody) == :ok
+      assert :boids.related_to(flock, :b, :follows) == [:c]
+    end
+
+    test "relate/4 refuses an id that is not in the flock", %{flock: flock} do
+      assert :boids.relate(flock, :a, :follows, :nobody) == {:error, {:not_found, :nobody}}
+      assert :boids.relate(flock, :nobody, :follows, :a) == {:error, {:not_found, :nobody}}
+      assert :graph.vertices(:boids.relations(flock)) == []
+      assert :boids.related(flock, :a, :follows) == []
+    end
+
+    test "a flock accepts a cycle of relations", %{flock: flock} do
+      assert :boids.relate(flock, :a, :follows, :b) == :ok
+      assert :boids.relate(flock, :b, :follows, :a) == :ok
+      assert :boids.related(flock, :b, :follows) == [:a]
+    end
+
+    test "a flock with the option acyclic refuses a cycle" do
+      flock = flock(relations: :acyclic)
+      for id <- [:a, :b, :c], do: {:ok, ^id} = :boids.add(flock, still(id: id))
+      assert :boids.relate(flock, :a, :follows, :b) == :ok
+      assert :boids.relate(flock, :b, :follows, :c) == :ok
+      assert :boids.relate(flock, :c, :follows, :a) == {:error, :cycle}
+      assert :boids.related(flock, :c, :follows) == []
+      assert :boids.related_to(flock, :a, :follows) == []
+      assert :graph.topsort(:boids.relations(flock)) == [:a, :b, :c]
+    end
+
+    test "the option relations is cyclic or acyclic" do
+      assert {:ok, flock} = :boids.start_flock(relations: :cyclic)
+      :boids.stop_flock(flock)
+      assert :boids.start_flock(relations: :tree) == {:error, {:bad_option, {:relations, :tree}}}
+      assert catch_error(:boids.child_spec(relations: :tree)) == {:bad_option, {:relations, :tree}}
+    end
+
+    test "the relations of a boid go when the flock removes the boid", %{flock: flock} do
+      :ok = :boids.relate(flock, :a, :follows, :b)
+      :ok = :boids.relate(flock, :b, :follows, :c)
+      :ok = :boids.relate(flock, :c, :fears, :a)
+      assert :boids.remove(flock, :b) == :ok
+      assert :boids.related(flock, :a, :follows) == []
+      assert :boids.related_to(flock, :c, :follows) == []
+      assert :boids.related_to(flock, :b, :follows) == []
+      assert :boids.related(flock, :b, :follows) == []
+      # The other relations stay.
+      assert :boids.related(flock, :c, :fears) == [:a]
+      assert :graph.edges(:boids.relations(flock)) == [{:c, :a, :fears}]
+      assert Enum.sort(:graph.vertices(:boids.relations(flock))) == [:a, :c]
+    end
+
+    test "the relations of a boid go when its process stops", %{flock: flock} do
+      :ok = :boids.relate(flock, :a, :follows, :b)
+      :ok = :boids.relate(flock, :c, :follows, :a)
+      :ok = GenServer.stop(:boids.whereis(flock, :a))
+      assert eventually(fn -> :boids.count(flock) == 2 end)
+      assert :boids.related_to(flock, :b, :follows) == []
+      assert :boids.related(flock, :c, :follows) == []
+      assert :graph.edges(:boids.relations(flock)) == []
+    end
+
+    test "a process of yours with join/2 has relations, and they go when it leaves", %{flock: flock} do
+      {:ok, space, me} = :boids.join(flock, id: :me, pos: {1, 1})
+      assert :boids.relate(flock, :me, :follows, :a) == :ok
+      assert :boids.relate(flock, :b, :follows, :me) == :ok
+      assert :boids.related(flock, :me, :follows) == [:a]
+      assert :boids.related_to(flock, :me, :follows) == [:b]
+      assert :boids.leave(space, me) == :ok
+      assert :boids.related_to(flock, :a, :follows) == []
+      assert :boids.related(flock, :b, :follows) == []
+    end
+
+    test "a rule with the target of a relation uses the related boid", %{flock: flock} do
+      rules = [{:seek, 1, %{target: {:related, :follows}}}]
+      :ok = :boids.update(flock, :a, %{rules: rules, max_force: 100})
+      :ok = :boids.update(flock, :b, %{pos: {10, 0}})
+      # No relation gives no force.
+      :boids.step(flock, 0.1)
+      assert pos(flock, :a) == {0, 0}
+      :ok = :boids.relate(flock, :a, :follows, :b)
+      :boids.step(flock, 0.1)
+      {x, y} = pos(flock, :a)
+      assert x > 0 and y == 0
+      # A process of yours uses the relation too, with advance/3.
+      {:ok, space, me} = :boids.join(flock, id: :me, pos: {0, 5}, rules: rules, max_force: 100)
+      :ok = :boids.relate(flock, :me, :follows, :c)
+      :ok = :boids.update(flock, :c, %{pos: {0, 20}})
+      %{pos: {mx, my}} = :boids.advance(space, me, 0.1)
+      assert mx == 0 and my > 5
+    end
+  end
+
+  describe "graph/2" do
+    test "gives the boids that see each other as a graph" do
+      flock = flock()
+      {:ok, :a} = :boids.add(flock, still(id: :a))
+      {:ok, :b} = :boids.add(flock, still(id: :b, pos: {3, 0}))
+      {:ok, :c} = :boids.add(flock, still(id: :c, pos: {50, 50}))
+      graph = :boids.graph(flock, 5)
+      assert Enum.sort(:graph.vertices(graph)) == [:a, :b, :c]
+      # The label of a boid is its row.
+      assert :graph.vertex(graph, :b) == elem(:boids.lookup(flock, :b), 1)
+      assert :graph.has_edge(graph, :a, :b)
+      assert :graph.has_edge(graph, :b, :a)
+      assert :graph.no_edges(graph) == 2
+      assert :graph.out_degree(graph, :c) == 0
+      groups = graph |> :graph.components() |> Enum.map(&Enum.sort/1) |> Enum.sort()
+      assert groups == [[:a, :b], [:c]]
+      # With a large radius, each boid sees each other boid.
+      all = :boids.graph(:boids.space(flock), 100)
+      assert :graph.no_edges(all) == 6
+      assert [[_, _, _]] = :graph.components(all)
+    end
+
+    test "an empty flock gives an empty graph" do
+      assert :graph.vertices(:boids.graph(flock(), 10)) == []
+    end
+  end
+
   describe "the process of a boid" do
     @tag :capture_log
     test "a boid that stops with an error goes from the flock, and the other boids continue" do
@@ -419,7 +680,7 @@ defmodule BoidsTest do
 
       children = [
         {:boids, name: name, defaults: %{tick: :manual, rules: []}},
-        {:gen_boid, {:boids_boid, [id: :hawk, pos: {1, 1}, vel: {1, 0}], [flock: name]}}
+        {:gen_boid, {Mouse, [id: :hawk, pos: {1, 1}, vel: {1, 0}], [flock: name]}}
       ]
 
       start = {Supervisor, :start_link, [children, [strategy: :rest_for_one]]}
@@ -468,15 +729,15 @@ defmodule BoidsTest do
     end
 
     test "the specification of the child has the module and its arguments" do
-      assert :gen_boid.child_spec({:boids_boid, %{id: :hawk}, %{flock: :f}}) == %{
-               id: {:gen_boid, :boids_boid, %{id: :hawk}},
-               start: {:gen_boid, :start_link, [:boids_boid, %{id: :hawk}, %{flock: :f}]}
+      assert :gen_boid.child_spec({Mouse, %{id: :hawk}, %{flock: :f}}) == %{
+               id: {:gen_boid, Mouse, %{id: :hawk}},
+               start: {:gen_boid, :start_link, [Mouse, %{id: :hawk}, %{flock: :f}]}
              }
     end
 
     test "start_link/3 refuses a bad option and an id of the flock", %{flock: flock} do
       Process.flag(:trap_exit, true)
-      start = fn options -> :gen_boid.start_link(:boids_boid, options, flock: flock) end
+      start = fn options -> :gen_boid.start_link(Mouse, options, flock: flock) end
       assert start.(pos: {0, 0}, mass: 0) == {:error, {:shutdown, {:bad_option, {:mass, 0}}}}
       assert start.(:bird) == {:error, {:shutdown, {:bad_option, :bird}}}
       assert start.(id: :hawk, pos: {0, 0}) == {:error, {:shutdown, {:exists, :hawk}}}
@@ -576,7 +837,9 @@ defmodule BoidsTest do
     end
 
     test "the maximum time of a step is 0.25 second, or 4 ticks" do
-      assert {%{tick: 50, max_dt: 0.25, priority: :low, hibernate: true}, %{}} = :gen_boid.options(%{})
+      assert {%{tick: 50, max_dt: 0.25, search: 1, priority: :low, hibernate: true}, %{}} =
+               :gen_boid.options(%{})
+
       assert {%{max_dt: 0.25}, _} = :gen_boid.options(%{tick: :manual})
       assert {%{max_dt: 0.25}, _} = :gen_boid.options(%{tick: 20})
       assert {%{max_dt: 4.0}, %{pos: {0, 0}}} = :gen_boid.options(%{tick: 1000, pos: {0, 0}})
@@ -734,8 +997,8 @@ defmodule BoidsTest do
       {:ok, [a, b]} = :boids.populate(flock, 2, id: :same, tick: :manual, seed: 5, rules: [wander: 1])
       assert a != b
       :boids.step(flock, 0.1)
-      {:ok, %{memory: %{1 => first}}} = :boids.boid(flock, a)
-      {:ok, %{memory: %{1 => second}}} = :boids.boid(flock, b)
+      {:ok, %{memory: %{wander: first}}} = :boids.boid(flock, a)
+      {:ok, %{memory: %{wander: second}}} = :boids.boid(flock, b)
       assert first != second
     end
 
@@ -745,7 +1008,7 @@ defmodule BoidsTest do
       {:ok, one} = :boids.add(flock, pos: {1, 1}, seed: 101)
       {:ok, two} = :boids.add(flock, pos: {1, 1}, seed: 102)
       :boids.step(flock, 0.1)
-      point = fn id -> elem(:boids.boid(flock, id), 1).memory[1] end
+      point = fn id -> elem(:boids.boid(flock, id), 1).memory.wander end
       assert point.(first) == point.(one)
       assert point.(second) == point.(two)
       assert point.(first) != point.(second)

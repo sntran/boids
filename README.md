@@ -290,8 +290,8 @@ ok = boids:update(Flock, Bird, #{rules => [{leader, 1.0, #{target => {related, f
 
   ```erlang
   Relations = boids:relations(Flock),
-  Followers = graph:in_neighbours(Relations, Leader),
-  Chain = graph:get_path(Relations, Bird, TopLeader).
+  Chain = graph:get_path(Relations, Bird, TopLeader),
+  true = graph:is_acyclic(Relations).
   ```
 
 - With `boids:start_flock(#{relations => acyclic})`, a relation that
@@ -313,8 +313,8 @@ true = graph:has_path(Graph, BoidA, BoidB).
 
 Use it to find the separate groups of a flock, the boids that are
 alone, or if a signal can go from one boid to another from neighbor to
-neighbor. The build reads all the flock (about 50 µs for each boid): it
-is for a view, and not for each step of a boid.
+neighbor. The build reads all the flock, and takes 50 µs to 200 µs for
+each boid: it is for a view, and not for each step of a boid.
 
 ## The space of a flock
 
@@ -429,7 +429,38 @@ replay the messages of a real flock process as a behavior of
 
 ## The speed
 
-SPEED_SECTION
+These numbers are from a computer with 4 virtual processors (x86_64,
+Erlang/OTP 29 with the JIT). Each boid has the three rules of a flock,
+a tick of 50 ms, and sees about 15 neighbors. `examples/speed.exs`
+measures the same on your computer:
+
+```sh
+mix run examples/speed.exs 6000
+```
+
+| Boids | Steps of each boid in a second | The same, with `search => 4` |
+|---|---|---|
+| 4,000 | 19.3 | 19.6 |
+| 6,000 | 15.6 | 17.8 |
+| 12,000 | 7.5 | 8.7 |
+
+- A flock makes about 90,000 boid steps in a second, and about 105,000
+  with `search => 4`. That is about 4,500 boids, or 5,000 boids, at 20
+  steps in a second.
+- One step of one boid takes about 20 µs of calculation. A real step
+  also has the cost of a timer and of a process that starts to run.
+- A boid process holds about 3 KB between two steps, and its row in the
+  tables is about 1 KB.
+- With too many boids for the processors, the boids make fewer steps in
+  a second, and each step is longer. The node continues to answer:
+  `boids:populate/3` of the 12,000 boids took 1.0 second, and
+  `boids:snapshot/1` 22 ms.
+- Make `cell_size` near the `perception` of the boids. Keep the `data`
+  of a boid small, because each neighbor gets a copy of it.
+- The numbers change with the computer and with the density of the
+  boids. On a computer that other programs use, they change from run to
+  run by about 10 %.
+
 ## A boid that stops
 
 - The flock is the supervisor of the boids of `boids:add/2`: they stop

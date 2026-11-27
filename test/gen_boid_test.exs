@@ -7,23 +7,9 @@ defmodule GenBoidTest do
   @moduletag :capture_log
 
   setup do
-    {:ok, flock} = :boids.start_flock(tick: :manual)
+    {:ok, flock} = :boids.start_flock(defaults: %{tick: :manual})
     on_exit(fn -> :boids.stop_flock(flock) end)
     %{flock: flock}
-  end
-
-  # A flock with a clock: its boids move in real time.
-  defp timed do
-    {:ok, flock} = :boids.start_flock(tick: 5)
-    on_exit(fn -> :boids.stop_flock(flock) end)
-    flock
-  end
-
-  # Only a process that hibernates has a heap smaller than the minimum
-  # heap of a new process.
-  defp hibernates?(pid) do
-    {:total_heap_size, words} = Process.info(pid, :total_heap_size)
-    words < 233
   end
 
   defp hawk(flock, args \\ %{}) do
@@ -41,11 +27,8 @@ defmodule GenBoidTest do
       pid = hawk(flock, boid: %{id: :hawk, pos: {1, 2}, max_speed: 3})
       assert :boids.whereis(flock, :hawk) == pid
       assert {:ok, %{id: :hawk, pos: {1, 2}, group: :hawks, max_speed: 3}} = :boids.boid(flock, :hawk)
-      space = :boids.space(flock)
-      assert :boids_space.owner(space, :hawk) == {:server, pid}
+      assert :boids_space.owner(:boids.space(flock), :hawk) == {:server, pid}
       assert {:ok, %{id: :hawk, pid: ^pid}} = :boids.lookup(flock, :hawk)
-      # The clock of the flock moves it.
-      assert Map.keys(:sys.get_state(space.clock).servers) == [pid]
       assert :proc_lib.get_label(pid) == {:boids, :boid, :hawk}
       # The supervisor of the flock stops it with the flock.
       assert :boids.stop_flock(flock) == :ok
@@ -72,12 +55,8 @@ defmodule GenBoidTest do
       assert :gen_boid.start(Hawk, {:stop, :no_sky}, flock: flock) == {:error, :no_sky}
       assert :gen_boid.start(Mouse, %{}, flock: flock) == {:error, {:bad_option, {:pos, :undefined}}}
 
-      # The tick is an option of the flock, and not of a boid.
-      assert :gen_boid.start(Mouse, %{pos: {0, 0}, tick: 5}, flock: flock) ==
-               {:error, {:bad_option, {:tick, 5}}}
-
-      assert :gen_boid.start(Mouse, %{pos: {0, 0}, priority: :low}, flock: flock) ==
-               {:error, {:bad_option, {:priority, :low}}}
+      assert :gen_boid.start(Mouse, %{pos: {0, 0}, tick: 0}, flock: flock) ==
+               {:error, {:bad_option, {:tick, 0}}}
 
       assert :gen_boid.start(Mouse, %{pos: {0, 0}, seed: :random}, flock: flock) ==
                {:error, {:bad_option, {:seed, :random}}}
@@ -92,35 +71,7 @@ defmodule GenBoidTest do
       assert catch_error(:gen_boid.start(Mouse, %{pos: {0, 0}}, [])) == {:bad_option, {:flock, :undefined}}
       assert catch_error(:gen_boid.start(Mouse, %{}, flock: flock, speed: 1)) == {:bad_option, {:speed, 1}}
       assert catch_error(:gen_boid.start_link(Mouse, %{}, :here)) == {:bad_option, :here}
-
-      assert catch_error(:gen_boid.start(Mouse, %{pos: {0, 0}}, flock: flock, hibernate: :yes)) ==
-               {:bad_option, {:hibernate, :yes}}
-
       assert :boids.count(flock) == 0
-    end
-
-    test "the process hibernates after each step", %{flock: flock} do
-      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}}, flock: flock)
-      refute hibernates?(pid)
-      :boids.step(flock, 0.1)
-      assert eventually(fn -> hibernates?(pid) end)
-      # A boid that hibernates answers, and moves.
-      assert {:ok, %{id: :mouse}} = :boids.boid(flock, :mouse)
-      :boids.step(flock, 0.1)
-      assert_vec(row(flock, :mouse).pos, {0.2, 0.0})
-      late = timed()
-      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}}, flock: late)
-      assert eventually(fn -> hibernates?(pid) and row(late, :mouse).pos != {0, 0} end)
-    end
-
-    test "without hibernate, the process keeps its heap", %{flock: flock} do
-      options = %{id: :mouse, pos: {0, 0}, vel: {1, 0}, rules: []}
-      {:ok, pid} = :gen_boid.start(Mouse, options, flock: flock, hibernate: false)
-      {:ok, other} = :gen_boid.start(Mouse, %{options | id: :other}, %{flock: flock, hibernate: true})
-      for _ <- 1..3, do: :boids.step(flock, 0.1)
-      assert eventually(fn -> hibernates?(other) end)
-      refute hibernates?(pid)
-      assert_vec(row(flock, :mouse).pos, {0.3, 0.0})
     end
 
     test "a seed in the options of init/1 gives the random numbers of the process", %{flock: flock} do
@@ -134,8 +85,6 @@ defmodule GenBoidTest do
       for _ <- 1..10, do: :boids.step(flock, 0.1)
       assert_vec(:boids_vec.sub(row(flock, :b).pos, {50, 50}), row(flock, :a).pos)
       refute :boids_vec.sub(row(flock, :c).pos, {90, 90}) == row(flock, :a).pos
-      # The boid has no random numbers of its own.
-      assert {:ok, %{rand: :undefined}} = :boids.boid(flock, :a)
     end
   end
 
@@ -159,8 +108,97 @@ defmodule GenBoidTest do
     end
   end
 
-  describe "handle_step/3" do
-    test "runs at each step, with the boid and the neighbors that it sees", %{flock: flock} do
+  describe "the boid is the state" do
+    test "the key state of the options of init/1 is the state of the module", %{flock: flock} do
+      pid = hawk(flock, boid: %{id: :hawk})
+      assert %{steps: 0, acts: 0} = :gen_boid.call(pid, :state)
+      assert {:ok, %{state: %{steps: 0}}} = :boids.boid(flock, :hawk)
+      # The other boids do not see it.
+      refute Map.has_key?(row(flock, :hawk), :state)
+    end
+
+    test "a module with only init/1 follows its rules", %{flock: flock} do
+      {:ok, _} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}, rules: []}, flock: flock)
+      :boids.step(flock, 1)
+      assert row(flock, :mouse).pos == {1.0, 0.0}
+      assert {:ok, %{state: :undefined}} = :boids.boid(flock, :mouse)
+    end
+  end
+
+  describe "handle_sense/2" do
+    test "runs at each step, with what the boid perceives", %{flock: flock} do
+      me = self()
+
+      defmodule Looks do
+        @behaviour :gen_boid
+        def init({owner, options}), do: {:ok, Map.put(options, :state, owner)}
+
+        def handle_sense(seen, boid) do
+          send(boid.state, {:seen, seen})
+          {:ok, seen, boid}
+        end
+      end
+
+      {:ok, _} = :gen_boid.start(Looks, {me, %{id: :a, pos: {0, 0}}}, flock: flock)
+      {:ok, :b} = :boids.add(flock, id: :b, pos: {3, 0})
+      :ok = :boids.set_obstacle(flock, :rock, {5, 5}, 1)
+      :boids.step(flock, 0.5)
+
+      assert_received {:seen,
+                       %{
+                         neighbors: [%{id: :b, pos: {3, 0}, dist: 3.0}],
+                         obstacles: [%{id: :rock}],
+                         bounds: :undefined,
+                         wrap: false,
+                         dt: 0.5
+                       }}
+    end
+
+    test "adds keys of yours, which handle_decide/2 and the rules get", %{flock: flock} do
+      me = self()
+
+      defmodule Smells do
+        @behaviour :gen_boid
+        def init(options), do: {:ok, options}
+        def handle_sense(seen, boid), do: {:ok, Map.put(seen, :food, {10, 0}), boid}
+
+        def handle_decide(%{food: food}, boid), do: {:ok, %{boid | data: {:goes_to, food}}}
+      end
+
+      to_food = fn boid, _neighbors, env ->
+        send(me, {:rule, env.food})
+        :boids_steer.seek(boid, env.food)
+      end
+
+      {:ok, _} =
+        :gen_boid.start(Smells, %{id: :a, pos: {0, 0}, max_force: 100, rules: [{to_food, 1}]}, flock: flock)
+
+      :boids.step(flock, 0.1)
+      assert_received {:rule, {10, 0}}
+      assert %{pos: {x, +0.0}, data: {:goes_to, {10, 0}}} = row(flock, :a)
+      assert x > 0
+    end
+
+    test "can change the neighbors that the rules get", %{flock: flock} do
+      defmodule Blind do
+        @behaviour :gen_boid
+        def init(options), do: {:ok, options}
+        def handle_sense(seen, boid), do: {:ok, %{seen | neighbors: []}, boid}
+      end
+
+      options = %{pos: {0, 0}, max_force: 100, rules: [cohesion: 1]}
+      {:ok, _} = :gen_boid.start(Blind, Map.put(options, :id, :blind), flock: flock)
+      {:ok, _} = :gen_boid.start(Mouse, %{options | pos: {0, 4}} |> Map.put(:id, :mouse), flock: flock)
+      :boids.step(flock, 0.1)
+      # The boid that sees its neighbor moves to it. The other boid stays.
+      assert row(flock, :blind).pos == {0, 0}
+      assert {+0.0, y} = row(flock, :mouse).pos
+      assert y < 4
+    end
+  end
+
+  describe "handle_decide/2" do
+    test "runs at each step, before the forces", %{flock: flock} do
       pid = hawk(flock, boid: %{id: :hawk, max_speed: 2})
       :boids.step(flock, 1)
       :boids.step(flock, 1)
@@ -180,43 +218,146 @@ defmodule GenBoidTest do
       assert :gen_boid.call(pid, :steps) == 2
     end
 
-    test "runs at each tick of the clock of the flock" do
-      pid = hawk(timed())
+    test "runs at each tick of the clock of the boid", %{flock: flock} do
+      pid = hawk(flock, boid: %{tick: 5})
       assert eventually(fn -> :gen_boid.call(pid, :steps) > 3 end)
-    end
-
-    test "can stop the boid, at a step of boids:step/2 and at a tick", %{flock: flock} do
-      manual = hawk(flock, owner: self(), stop_at: 1, boid: %{id: :manual})
-      {:ok, id} = :boids.add(flock, pos: {5, 5}, vel: {1, 0}, rules: [])
-      :boids.step(flock, 1)
-      assert Process.alive?(manual)
-      # The step continues for the other boids.
-      assert :boids.step(flock, 1) == :ok
-      assert_receive {:terminated, :normal, :manual, 1}
-      assert row(flock, id).pos == {7.0, 5.0}
-      assert eventually(fn -> not Process.alive?(manual) and :boids.count(flock) == 1 end)
-      assert :boids.step(flock, 1) == :ok
-      late = timed()
-      timed = hawk(late, owner: self(), stop_at: 2, boid: %{id: :timed})
-      assert_receive {:terminated, :normal, :timed, 2}
-      assert eventually(fn -> not Process.alive?(timed) and :boids.count(late) == 0 end)
-    end
-
-    test "a module without it has the rules of its options only", %{flock: flock} do
-      {:ok, _} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}, rules: []}, flock: flock)
-      :boids.step(flock, 1)
-      assert row(flock, :mouse).pos == {1.0, 0.0}
     end
   end
 
-  describe "call/2, call/3 and handle_call/4" do
+  describe "handle_act/1" do
+    test "runs at each step, after the movement", %{flock: flock} do
+      pid = hawk(flock, boid: %{id: :hawk, vel: {1, 0}})
+      :boids.step(flock, 1)
+      # The module saw the boid at its new position.
+      assert %{acts: 1, at: {1.0, +0.0}} = :gen_boid.call(pid, :state)
+      :boids.step(flock, 1)
+      assert %{acts: 2, at: {2.0, +0.0}} = :gen_boid.call(pid, :state)
+      assert row(flock, :hawk).pos == {2.0, 0.0}
+    end
+
+    test "its change of the boid is in the row of the boid", %{flock: flock} do
+      defmodule Counts do
+        @behaviour :gen_boid
+        def init(options), do: {:ok, options}
+        def handle_act(boid), do: {:ok, %{boid | data: (boid.data || 0) + 1}}
+      end
+
+      {:ok, _} =
+        :gen_boid.start(Counts, %{id: :a, pos: {0, 0}, vel: {1, 0}, rules: [], data: nil}, flock: flock)
+
+      :boids.step(flock, 1)
+      assert %{pos: {1.0, +0.0}, data: 1} = row(flock, :a)
+      :boids.step(flock, 1)
+      assert %{pos: {2.0, +0.0}, data: 2} = row(flock, :a)
+    end
+  end
+
+  describe "a callback of a step" do
+    test "can stop the boid in a step of boids:step/2, and the step continues", %{flock: flock} do
+      for stage <- [:sense, :decide, :act] do
+        pid = hawk(flock, owner: self(), stop_at: 1, stop_in: stage, boid: %{id: stage})
+        {:ok, other} = :boids.add(flock, pos: {5, 5}, vel: {1, 0}, rules: [])
+        assert :boids.step(flock, 1) == :ok
+        # The steps continue for the other boids.
+        assert :boids.step(flock, 1) == :ok
+        assert_receive {:terminated, :normal, ^stage, 1}
+        assert row(flock, other).pos == {7.0, 5.0}
+        assert eventually(fn -> not Process.alive?(pid) and :boids.whereis(flock, stage) == :undefined end)
+        assert :boids.step(flock, 1) == :ok
+        :ok = :boids.remove(flock, other)
+      end
+    end
+
+    test "can stop the boid at a tick", %{flock: flock} do
+      for stage <- [:sense, :decide, :act] do
+        pid = hawk(flock, owner: self(), stop_at: 2, stop_in: stage, boid: %{id: stage, tick: 5})
+        assert_receive {:terminated, :normal, ^stage, 2}
+        assert eventually(fn -> not Process.alive?(pid) and :boids.count(flock) == 0 end)
+      end
+    end
+
+    test "that gives a boid with another id stops the process with an error", %{flock: flock} do
+      for stage <- [:sense, :decide, :act] do
+        pid = hawk(flock, other_id_in: stage, boid: %{id: stage})
+        ref = Process.monitor(pid)
+        assert :boids.step(flock, 1) == :ok
+        assert_receive {:DOWN, ^ref, _, _, {reason, _stack}}
+        assert elem(reason, 0) in [:else_clause, :case_clause]
+        assert eventually(fn -> :boids.count(flock) == 0 end)
+      end
+
+      pid = hawk(flock)
+      assert {{:function_clause, _}, _} = catch_exit(:gen_boid.call(pid, :other_id))
+    end
+  end
+
+  describe "the neighbors that a boid knows" do
+    # What the hawk saw at its last step: the ids and the positions.
+    defp seen(pid), do: :gen_boid.call(pid, :state).seen
+
+    test "with the option search, a boid searches the flock at one step of some", %{flock: flock} do
+      pid = hawk(flock, boid: %{id: :hawk, search: 3, max_speed: 0})
+      still = %{group: :mice, rules: [], max_speed: 0}
+      {:ok, :m} = :boids.add(flock, Map.merge(still, %{id: :m, pos: {5, 0}}))
+      # The first step: a search.
+      :boids.step(flock, 0.1)
+      assert seen(pid) == [m: {5, 0}]
+      # Between two searches, the boid sees a neighbor that it knows where
+      # that neighbor is now. It does not see a boid that came after the
+      # search.
+      :ok = :boids.update(flock, :m, %{pos: {6, 0}})
+      {:ok, :n} = :boids.add(flock, Map.merge(still, %{id: :n, pos: {2, 0}}))
+      :boids.step(flock, 0.1)
+      assert seen(pid) == [m: {6, 0}]
+      # It does not see a neighbor that went from the flock.
+      :ok = :boids.remove(flock, :m)
+      :boids.step(flock, 0.1)
+      assert seen(pid) == []
+      # The fourth step: a search again.
+      :boids.step(flock, 0.1)
+      assert seen(pid) == [n: {2, 0}]
+      # A neighbor that it knows and that is too far is not a neighbor.
+      :ok = :boids.update(flock, :n, %{pos: {50, 0}})
+      :boids.step(flock, 0.1)
+      assert seen(pid) == []
+    end
+
+    test "with a search at each step, a boid sees each boid that comes", %{flock: flock} do
+      pid = hawk(flock, boid: %{id: :hawk, max_speed: 0})
+      :boids.step(flock, 0.1)
+      assert seen(pid) == []
+      {:ok, :n} = :boids.add(flock, id: :n, pos: {2, 0}, rules: [], max_speed: 0)
+      :boids.step(flock, 0.1)
+      assert seen(pid) == [n: {2, 0}]
+    end
+
+    test "a boid with a clock uses the option too", %{flock: flock} do
+      pid = hawk(flock, boid: %{id: :hawk, search: 2, tick: 5, max_speed: 0})
+      {:ok, :n} = :boids.add(flock, id: :n, pos: {2, 0}, rules: [], max_speed: 0)
+      assert eventually(fn -> seen(pid) == [n: {2, 0}] end)
+      steps = :gen_boid.call(pid, :steps)
+      assert eventually(fn -> :gen_boid.call(pid, :steps) > steps + 4 end)
+      assert seen(pid) == [n: {2, 0}]
+    end
+
+    test "the option is an integer of 1 or more", %{flock: flock} do
+      for bad <- [0, -1, 1.5, :all] do
+        assert :gen_boid.start(Mouse, %{pos: {0, 0}, search: bad}, flock: flock) ==
+                 {:error, {:bad_option, {:search, bad}}}
+      end
+
+      assert {%{search: 4}, %{}} = :gen_boid.options(%{search: 4})
+    end
+  end
+
+  describe "call/2, call/3 and handle_call/3" do
     test "gives the answer of the module, which sees the boid", %{flock: flock} do
       pid = hawk(flock, boid: %{pos: {3, 4}})
       assert :gen_boid.call(pid, :where) == {3, 4}
       assert :gen_boid.call(pid, :steps, 1000) == 0
     end
 
-    test "an answer can change the boid", %{flock: flock} do
+    test "a boid that the module changed is in the flock", %{flock: flock} do
       pid = hawk(flock, boid: %{id: :hawk})
       assert :gen_boid.call(pid, {:go, {7, 7}}) == :ok
       assert row(flock, :hawk).pos == {7, 7}
@@ -285,27 +426,60 @@ defmodule GenBoidTest do
       assert :gen_boid.which_rules(pid) == [{:seek, :home}]
       assert :boids.add_rule(flock, :mouse, :seek) == {:error, {:bad_option, {:rules, :seek}}}
     end
+  end
 
-    test "a change after the first part of a step removes the step", %{flock: flock} do
-      {:ok, pid} = :gen_boid.start(Mouse, %{id: :mouse, pos: {0, 0}, vel: {1, 0}, rules: []}, flock: flock)
-      # The messages of the clock of the flock, and the answers of the boid.
-      part = fn request ->
-        ref = make_ref()
-        send(pid, {:"$boids_clock", self(), ref, request})
-        assert_receive {^ref, ^pid}
+  describe "a change of the boid between the two parts of a step" do
+    setup %{flock: flock} do
+      pid = hawk(flock, boid: %{id: :hawk, vel: {1, 0}})
+      # A second part with no first part changes nothing.
+      assert GenServer.call(pid, :commit) == :ok
+      assert row(flock, :hawk).pos == {0, 0}
+      # The first part of a step: the boid calculates, and does not move.
+      assert GenServer.call(pid, {:plan, 1}) == :ok
+      assert row(flock, :hawk).pos == {0, 0}
+      %{pid: pid}
+    end
+
+    test "without a change, the boid moves in the second part", %{flock: flock, pid: pid} do
+      assert GenServer.call(pid, :commit) == :ok
+      assert row(flock, :hawk).pos == {1.0, 0.0}
+      assert %{acts: 1} = :gen_boid.call(pid, :state)
+    end
+
+    test "a change with update/3 removes the step", %{flock: flock, pid: pid} do
+      :ok = :boids.update(flock, :hawk, %{pos: {7, 7}})
+      assert GenServer.call(pid, :commit) == :ok
+      assert row(flock, :hawk).pos == {7, 7}
+      assert %{acts: 0} = :gen_boid.call(pid, :state)
+    end
+
+    test "a change in handle_call/3, handle_cast/2 or handle_info/2 removes the step", %{flock: flock} do
+      for {change, key, value} <- [
+            {&:gen_boid.call(&1, {:go, {7, 7}}), :pos, {7, 7}},
+            {&:gen_boid.cast(&1, {:data, :blue}), :data, :blue},
+            {&send(&1, {:speed, 4}), :vel, {1, 0}}
+          ] do
+        pid = hawk(flock, boid: %{id: key, vel: {1, 0}})
+        assert GenServer.call(pid, {:plan, 1}) == :ok
+        change.(pid)
+        assert GenServer.call(pid, :commit) == :ok
+        row = row(flock, key)
+        assert Map.fetch!(row, key) == value
+        assert row.pos in [{0, 0}, {7, 7}]
       end
+    end
 
-      part.(:commit)
-      assert row(flock, :mouse).pos == {0, 0}
-      part.({:plan, 1})
-      assert row(flock, :mouse).pos == {0, 0}
-      :ok = :boids.update(flock, :mouse, %{pos: {7, 7}})
-      part.(:commit)
-      assert row(flock, :mouse).pos == {7, 7}
+    test "a callback that does not change the boid keeps the step", %{flock: flock, pid: pid} do
+      # Before the second part, the boid is as it was before the step.
+      assert :gen_boid.call(pid, :steps) == 0
+      send(pid, :hello)
+      assert GenServer.call(pid, :commit) == :ok
+      assert row(flock, :hawk).pos == {1.0, 0.0}
+      assert :gen_boid.call(pid, :steps) == 1
     end
   end
 
-  describe "cast/2 and handle_cast/3" do
+  describe "cast/2 and handle_cast/2" do
     test "the module gets the request, and can change the boid or its state", %{flock: flock} do
       pid = hawk(flock, boid: %{id: :hawk})
       assert :gen_boid.cast(pid, {:data, :blue}) == :ok
@@ -330,7 +504,7 @@ defmodule GenBoidTest do
     end
   end
 
-  describe "handle_info/3" do
+  describe "handle_info/2" do
     test "the module gets each other message, and can change the boid", %{flock: flock} do
       pid = hawk(flock, boid: %{id: :hawk})
       send(pid, {:speed, 4})
@@ -351,8 +525,8 @@ defmodule GenBoidTest do
     end
   end
 
-  describe "terminate/3" do
-    test "runs at stop/1, with the reason, the boid and the state", %{flock: flock} do
+  describe "terminate/2" do
+    test "runs at stop/1, with the reason and the boid", %{flock: flock} do
       pid = hawk(flock, owner: self(), boid: %{id: :hawk})
       assert :gen_boid.stop(pid) == :ok
       assert_receive {:terminated, :normal, :hawk, 0}
@@ -371,30 +545,53 @@ defmodule GenBoidTest do
     end
   end
 
-  test "the example of the documentation: a hawk that hunts the birds that it sees", %{flock: flock} do
+  test "the example of the documentation: a hawk that hunts, and that uses its energy", %{flock: flock} do
     defmodule HawkOfTheDocs do
       @behaviour :gen_boid
       def init(pos) do
-        {:ok, %{pos: pos, group: :hawks, perception: 25, max_force: 100, rules: [{:wander, 1.0}]},
-         %{meals: 0}}
+        {:ok,
+         %{
+           pos: pos,
+           group: :hawks,
+           perception: 25,
+           max_force: 100,
+           rules: [{:wander, 1.0}],
+           state: %{energy: 10.0}
+         }}
       end
 
-      def handle_step(_boid, neighbors, %{meals: meals} = state) do
-        case Enum.filter(neighbors, &(&1.group == :birds)) do
-          [] -> {:ok, %{rules: [{:wander, 1.0}]}, state}
-          [%{dist: dist} | _] when dist < 1 -> {:ok, %{state | meals: meals + 1}}
-          [_ | _] -> {:ok, %{rules: [{:pursue, 1.0, %{target: {:group, :birds}}}]}, state}
-        end
+      def handle_sense(%{neighbors: neighbors} = seen, boid) do
+        {:ok, Map.put(seen, :prey, Enum.filter(neighbors, &(&1.group == :birds))), boid}
       end
 
-      def handle_call(:meals, _from, _boid, %{meals: meals} = state), do: {:reply, meals, state}
+      def handle_decide(%{prey: [_ | _]}, %{state: %{energy: energy}} = boid) when energy > 2 do
+        {:ok, :boids_boid.update(boid, %{rules: [{:pursue, 1.0, %{target: {:group, :birds}}}]})}
+      end
+
+      def handle_decide(_seen, boid), do: {:ok, :boids_boid.update(boid, %{rules: [{:wander, 1.0}]})}
+
+      def handle_act(%{vel: vel, state: %{energy: energy} = state} = boid) do
+        {:ok, %{boid | state: %{state | energy: energy - 0.01 * :boids_vec.norm(vel)}}}
+      end
+
+      def handle_call(:energy, _from, %{state: %{energy: energy}} = boid), do: {:reply, energy, boid}
     end
 
     {:ok, hawk} = :gen_boid.start_link(HawkOfTheDocs, {50, 50}, flock: flock)
-    assert :gen_boid.call(hawk, :meals) == 0
+    assert :gen_boid.call(hawk, :energy) == 10.0
     {:ok, _} = :boids.add(flock, id: :bird, pos: {60, 50}, group: :birds, rules: [])
+    :boids.step(flock, 0.05)
+    assert :gen_boid.which_rules(hawk) == [:pursue]
     for _ <- 1..60, do: :boids.step(flock, 0.05)
-    assert :gen_boid.call(hawk, :meals) > 0
+    # The hawk came to the bird, and it used energy.
+    {:ok, %{pos: pos}} = :boids.boid(flock, hawk)
+    assert :boids_vec.dist(pos, {60, 50}) < 2
+    energy = :gen_boid.call(hawk, :energy)
+    assert energy < 10.0
+    # With too little energy, the hawk wanders.
+    for _ <- 1..2000, :gen_boid.call(hawk, :energy) > 2, do: :boids.step(flock, 0.05)
+    :boids.step(flock, 0.05)
+    assert :gen_boid.which_rules(hawk) == [:wander]
     :gen_boid.stop(hawk)
   end
 end

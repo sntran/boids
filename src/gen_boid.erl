@@ -96,7 +96,8 @@ environment, so a rule of yours (a function) reads your keys.
 | `hibernate` | `true` | The process hibernates between two steps. |
 
 The time of a step is the time that passed on the monotonic clock,
-multiplied by the scale of the time of the flock. The process waits
+multiplied by the scale of the time of the flock. With the scale 0, the
+boid does not move, and its callbacks run with `dt` 0. The process waits
 `tick` milliseconds after each step, so the time between two steps is a
 little more than `tick`.
 
@@ -106,7 +107,7 @@ The search of the neighbors is the largest part of a step. With `search
 => 4`, a boid searches the flock at one step of 4. In the 3 other steps,
 it reads the rows of the neighbors that it found: it sees them where
 they are now, and it does not see a boid that came near after the
-search. A flock of such boids makes about 25 % more steps in a second.
+search. A flock of such boids makes about 15 % more steps in a second.
 
 ## The supervisor of a boid
 
@@ -174,7 +175,13 @@ about 3 KB. Without it, the process holds about 100 KB.
 
 %% The start has a high priority: a flock with too much work must not
 %% make its caller wait.
--define(GEN, [{spawn_opt, [{priority, high}]}]).
+%%
+%% A boid that hibernates has a heap for its boid only. Without a
+%% minimum size, the heap becomes larger 4 or 5 times in each step, each
+%% time with a collection of the garbage: a quarter of the time of a
+%% flock. This minimum (in words) is sufficient for the garbage of one
+%% step with about 15 neighbors. A boid that hibernates does not keep it.
+-define(GEN, [{spawn_opt, [{priority, high}, {min_heap_size, 4185}]}]).
 
 -doc """
 Start a boid below the supervisor of its flock. The boid stops with its

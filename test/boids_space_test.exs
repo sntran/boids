@@ -20,6 +20,10 @@ defmodule BoidsSpaceTest do
       space = :boids_space.new(%{})
       assert %{cell_size: 10.0, bounds: :undefined, wrap: false, defaults: %{}} = space
       assert space.owner == self()
+
+      for table <- [space.rows, space.grid, space.meta, space.links],
+          do: assert(:ets.info(table, :owner) == self())
+
       assert :boids_space.count(space) == 0
       assert :boids_space.all(space) == []
     end
@@ -88,17 +92,26 @@ defmodule BoidsSpaceTest do
       assert :boids_space.lookup(space, :nobody) == :error
     end
 
-    test "owner/2 tells who has a boid", %{space: space} do
+    test "owner/2 tells which process has a boid", %{space: space} do
       :boids_space.insert_new(space, entry(:a, {1, 2}, %{pid: self(), kind: :server}))
       :boids_space.insert_new(space, entry(:b, {1, 2}, %{pid: self()}))
-      :boids_space.insert_new(space, entry(:c, {1, 2}, %{kind: :data}))
       assert :boids_space.owner(space, :a) == {:server, self()}
       assert :boids_space.owner(space, :b) == {:process, self()}
-      assert :boids_space.owner(space, :c) == {:data, :undefined}
       assert :boids_space.owner(space, :nobody) == :error
       # A write keeps the owner.
       assert :boids_space.put(space, %{id: :a, pos: {5, 5}, vel: {0, 0}, group: :g, data: nil})
       assert :boids_space.owner(space, :a) == {:server, self()}
+    end
+
+    test "servers/1 gives the processes of the boids that are a gen_boid", %{space: space} do
+      assert :boids_space.servers(space) == []
+      other = spawn(fn -> :ok end)
+      :boids_space.insert_new(space, entry(:a, {1, 2}, %{pid: self(), kind: :server}))
+      :boids_space.insert_new(space, entry(:b, {1, 2}, %{pid: other, kind: :process}))
+      :boids_space.insert_new(space, entry(:c, {1, 2}, %{pid: other, kind: :server}))
+      assert Enum.sort(:boids_space.servers(space)) == Enum.sort([self(), other])
+      :boids_space.remove(space, :c)
+      assert :boids_space.servers(space) == [self()]
     end
 
     test "the first boid gives the size of the vectors of the space", %{space: space} do
@@ -130,17 +143,25 @@ defmodule BoidsSpaceTest do
       refute :boids_space.insert_new(space, entry(:a, {1, 1}))
     end
 
-    test "cell/2 gives the cell of a point" do
-      free = :boids_space.new(%{cell_size: 10})
-      assert :boids_space.cell(free, {25, -1}) == {2, -1}
-      assert :boids_space.cell(free, {25.0, -0.5, 100.0}) == {2, -1, 10}
+    test "a row is in the cell of its position" do
+      # The cell of a new row at a position.
+      cell = fn space, pos ->
+        id = make_ref()
+        true = :boids_space.insert_new(space, entry(id, pos))
+        [{^id, ^pos, _vel, _group, _data, cell, _pid, _kind, _last}] = :ets.lookup(space.rows, id)
+        assert [{^cell, ^id, ^pos, _, _, _}] = :ets.lookup(space.grid, cell)
+        cell
+      end
+
+      assert cell.(:boids_space.new(%{cell_size: 10}), {25, -1}) == {2, -1}
+      assert cell.(:boids_space.new(%{cell_size: 10}), {25.0, -0.5, 100.0}) == {2, -1, 10}
       flat = :boids_space.new(%{cell_size: 10, bounds: {{-5, -5}, {20, 20}}, wrap: true})
-      assert :boids_space.cell(flat, {-5, 14.9}) == {0, 1}
+      assert cell.(flat, {-5, 14.9}) == {0, 1}
       # A point out of the box is in the cell of its point in the box.
-      assert :boids_space.cell(flat, {21, -6}) == {0, 2}
+      assert cell.(flat, {21, -6}) == {0, 2}
       deep = :boids_space.new(%{cell_size: 10, bounds: {{0, 0, 0}, {30, 30, 25}}, wrap: true})
-      assert :boids_space.cell(deep, {29.9, 0, 24.0}) == {2, 0, 2}
-      assert :boids_space.cell(deep, {31, -1, 26}) == {0, 2, 0}
+      assert cell.(deep, {29.9, 0, 24.0}) == {2, 0, 2}
+      assert cell.(deep, {31, -1, 26}) == {0, 2, 0}
     end
 
     test "put/2 writes the position, the velocity, the group and the data", %{space: space} do
@@ -333,27 +354,6 @@ defmodule BoidsSpaceTest do
       assert :boids_space.offset(space, {1, 50}, {99, 50}) == {98, 0}
     end
 
-    test "near/4 reads each cell one time, and does not see a later write" do
-      space = :boids_space.new(%{})
-      :boids_space.insert_new(space, entry(:a, {1, 1}))
-      :boids_space.insert_new(space, entry(:b, {25, 1}))
-      assert {[%{id: :a}], cache} = :boids_space.near(space, {0, 0}, 5, %{})
-      assert %{{0, 0} => [{{0, 0}, :a, {1, 1}, _, :default, :undefined}], {-1, -1} => []} = cache
-      assert map_size(cache) == 4
-      # The cache keeps the cells that it has, and reads the others.
-      :boids_space.put(space, %{id: :a, pos: {2, 2}, vel: {0, 0}, group: :default, data: nil})
-      :boids_space.put(space, %{id: :b, pos: {26, 1}, vel: {0, 0}, group: :default, data: nil})
-      assert {[%{id: :a, pos: {1, 1}}], ^cache} = :boids_space.near(space, {0, 0}, 5, cache)
-      assert {[%{id: :b, pos: {26, 1}}], more} = :boids_space.near(space, {25, 0}, 4, cache)
-      assert map_size(more) > map_size(cache)
-      assert [%{id: :a, pos: {2, 2}}] = :boids_space.near(space, {0, 0}, 5)
-      # With none, there is no cache.
-      assert {[%{id: :a, pos: {2, 2}}], :none} = :boids_space.near(space, {0, 0}, 5, :none)
-      # A read of all the rows does not use the cache.
-      assert {[_, _], empty} = :boids_space.near(space, {0, 0}, 1.0e6, %{})
-      assert empty == %{}
-    end
-
     property "gives the same boids as a read of each row" do
       check all(
               d <- dim(),
@@ -406,11 +406,79 @@ defmodule BoidsSpaceTest do
     found = :boids_space.near(space, pos, radius)
     assert Enum.sort(Enum.map(found, & &1.id)) == Enum.sort(brute(space, entries, pos, radius))
     assert found == Enum.sort_by(found, &{&1.dist, &1.id})
-    # A read with a cache gives the same boids, also with a full cache.
-    assert {^found, cache} = :boids_space.near(space, pos, radius, %{})
-    assert {^found, ^cache} = :boids_space.near(space, pos, radius, cache)
+    # A read of the rows of these boids gives the same, also with ids that
+    # are not in the space, and with the ids of the boids that are too far.
+    ids = [:nobody | Enum.map(entries, & &1.id)]
+    assert :boids_space.seen(space, pos, radius, ids) == found
+    assert :boids_space.seen(space, pos, radius, Enum.map(found, & &1.id)) == found
     :boids_space.delete(space)
     found
+  end
+
+  describe "seen/4" do
+    test "gives the boids of a list of ids in the radius, the nearest first" do
+      space = :boids_space.new(%{})
+      :boids_space.insert_new(space, entry(:a, {4, 0}, %{group: :g, data: 1}))
+      :boids_space.insert_new(space, entry(:b, {0, 2}))
+      :boids_space.insert_new(space, entry(:c, {0, 9}))
+      :boids_space.insert_new(space, entry(:d, {1, 0}))
+
+      assert [
+               %{id: :b, pos: {0, 2}, offset: {+0.0, 2.0}, dist: 2.0},
+               %{id: :a, pos: {4, 0}, vel: {+0.0, +0.0}, group: :g, data: 1, offset: {4.0, +0.0}, dist: 4.0}
+             ] = :boids_space.seen(space, {0, 0}, 5, [:a, :b, :c, :nobody])
+
+      # The read gives the rows as they are now.
+      :boids_space.put(space, %{id: :a, pos: {1, 0}, vel: {0, 0}, group: :g, data: 2})
+      assert [%{id: :a, pos: {1, 0}, data: 2}] = :boids_space.seen(space, {0, 0}, 5, [:a])
+      :boids_space.remove(space, :a)
+      assert :boids_space.seen(space, {0, 0}, 5, [:a]) == []
+      assert :boids_space.seen(space, {0, 0}, 5, []) == []
+      assert_raise FunctionClauseError, fn -> :boids_space.seen(space, {0, 0}, -1, [:b]) end
+    end
+
+    test "with wrap, gives a boid across a side at its nearest position" do
+      space = :boids_space.new(%{bounds: {{0, 0}, {100, 100}}, wrap: true})
+      :boids_space.insert_new(space, entry(:a, {99, 50}))
+
+      assert [%{id: :a, pos: {-1.0, 50.0}, offset: {-2.0, +0.0}, dist: 2.0}] =
+               :boids_space.seen(space, {1, 50}, 5, [:a])
+
+      assert :boids_space.seen(space, {1, 50}, 1, [:a]) == []
+    end
+
+    test "in three dimensions" do
+      space = :boids_space.new(%{})
+      :boids_space.insert_new(space, entry(:a, {1, 1, 4}))
+      assert [%{id: :a, offset: {+0.0, +0.0, 3.0}, dist: 3.0}] = :boids_space.seen(space, {1, 1, 1}, 5, [:a])
+    end
+  end
+
+  describe "the relations" do
+    test "relate/4 writes the boids of a relation, and the reads give them" do
+      space = :boids_space.new(%{})
+      assert :boids_space.related(space, :a, :follows) == []
+      assert :boids_space.related_to(space, :b, :follows) == []
+      assert :boids_space.relate(space, :out, {:a, :follows}, [:b, :c]) == :ok
+      assert :boids_space.relate(space, :in, {:b, :follows}, [:a]) == :ok
+      assert :boids_space.related(space, :a, :follows) == [:b, :c]
+      assert :boids_space.related_to(space, :b, :follows) == [:a]
+      # The label and the direction are parts of the key.
+      assert :boids_space.related(space, :a, :fears) == []
+      assert :boids_space.related_to(space, :a, :follows) == []
+      assert :boids_space.related(space, :b, :follows) == []
+      # An empty list removes the row.
+      assert :boids_space.relate(space, :out, {:a, :follows}, []) == :ok
+      assert :boids_space.related(space, :a, :follows) == []
+      assert :ets.tab2list(space.links) == [{{:in, :b, :follows}, [:a]}]
+    end
+
+    test "only the owner of the space writes the relations" do
+      space = :boids_space.new(%{})
+      task = Task.async(fn -> catch_error(:boids_space.relate(space, :out, {:a, :follows}, [:b])) end)
+      assert Task.await(task) == :badarg
+      assert :boids_space.related(space, :a, :follows) == []
+    end
   end
 
   describe "the environment" do
@@ -499,6 +567,7 @@ defmodule BoidsSpaceTest do
       assert space.owner == pid
       Agent.stop(pid)
       assert :ets.info(space.rows) == :undefined
+      assert :ets.info(space.links) == :undefined
     end
   end
 end

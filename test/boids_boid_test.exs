@@ -33,7 +33,7 @@ defmodule BoidsBoidTest do
                rules: [{:separation, 1.5, %{}}, {:alignment, 1.0, %{}}, {:cohesion, 1.0, %{}}],
                combine: :sum,
                memory: %{},
-               rand: :undefined
+               state: :undefined
              } = boid
 
       assert min_speed == 0
@@ -63,14 +63,14 @@ defmodule BoidsBoidTest do
         rules: []
       }
 
-      assert Map.drop(:boids_boid.new(opts), [:memory, :rand]) == opts
+      assert Map.drop(:boids_boid.new(opts), [:memory, :state]) == opts
     end
 
-    test "a seed gives random numbers to the boid" do
-      assert %{rand: {:exsss, _} = rand} = boid = boid(seed: 5)
-      refute Map.has_key?(boid, :seed)
-      assert boid(seed: 5).rand == rand
-      assert boid(seed: 6).rand != rand
+    test "the key state is for a term of yours, which the other boids do not see" do
+      boid = boid(state: %{energy: 3})
+      assert boid.state == %{energy: 3}
+      refute Map.has_key?(:boids_boid.entry(boid), :state)
+      assert :boids_boid.options(%{state: :any}) == %{state: :any}
     end
 
     test "refuses a bad option" do
@@ -100,8 +100,9 @@ defmodule BoidsBoidTest do
             combine: :mean,
             rules: :none,
             memory: [],
-            seed: :random,
-            seed: 1.5,
+            seed: 5,
+            rand: :none,
+            search: 2,
             tick: 5,
             priority: :low,
             speed: 5
@@ -263,12 +264,11 @@ defmodule BoidsBoidTest do
       assert :boids_boid.update(moved, %{rules: [cruise: 1]}).memory == %{}
     end
 
-    test "a new seed gives new random numbers" do
-      boid = boid(seed: 1)
-      assert :boids_boid.update(boid, %{max_speed: 2}).rand == boid.rand
-      changed = :boids_boid.update(boid, %{seed: 2})
-      assert changed.rand == boid(seed: 2).rand
-      refute Map.has_key?(changed, :seed)
+    test "keeps the state, and changes it" do
+      boid = boid(state: %{energy: 3})
+      assert :boids_boid.update(boid, %{max_speed: 2}).state == %{energy: 3}
+      assert :boids_boid.update(boid, %{state: :tired}).state == :tired
+      assert :boids_boid.add_rule(boid, {:wander, 1}).state == %{energy: 3}
     end
 
     test "refuses a rule with a vector of another size" do
@@ -287,8 +287,7 @@ defmodule BoidsBoidTest do
       assert catch_error(:boids_boid.update(boid, %{vel: {1, 2, 3}})) == {:bad_option, {:vel, {1, 2, 3}}}
       assert catch_error(:boids_boid.update(boid, %{id: :b})) == {:bad_option, {:id, :b}}
       assert catch_error(:boids_boid.update(boid, %{memory: %{}})) == {:bad_option, {:memory, %{}}}
-      assert catch_error(:boids_boid.update(boid, %{rand: :none})) == {:bad_option, {:rand, :none}}
-      assert catch_error(:boids_boid.update(boid, %{seed: :none})) == {:bad_option, {:seed, :none}}
+      assert catch_error(:boids_boid.update(boid, %{seed: 1})) == {:bad_option, {:seed, 1}}
       assert catch_error(:boids_boid.update(boid, :faster)) == {:bad_option, :faster}
     end
   end
@@ -825,20 +824,15 @@ defmodule BoidsBoidTest do
       assert_received %{dt: 0.25, wrap: false}
     end
 
-    test "a boid with a seed uses its own random numbers" do
+    test "the rules use the random numbers of the process" do
       run = fn seed ->
-        boid = boid(id: :a, seed: seed, rules: [wander: 1], vel: {1, 0})
+        :rand.seed(:exsss, seed)
+        boid = boid(id: :a, rules: [wander: 1], vel: {1, 0})
         Enum.reduce(1..5, boid, fn _, b -> :boids_boid.step(b, [], %{}, 0.1) end)
       end
 
-      first = run.(1)
-      # The random numbers of the process do not change the result.
-      :rand.seed(:exsss, 99)
-      assert run.(1) == first
-      assert run.(2).pos != first.pos
-      assert first.rand != boid(seed: 1).rand
-      assert first.rand != run.(2).rand
-      assert {:exsss, _} = first.rand
+      assert run.(1) == run.(1)
+      assert run.(2).pos != run.(1).pos
     end
 
     test "no time changes nothing" do

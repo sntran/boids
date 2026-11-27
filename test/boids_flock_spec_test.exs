@@ -45,8 +45,26 @@ defmodule BoidsFlockSpecTest do
 
     table = settle(flock, members)
     events = FlockSpec.events(flock, recorder)
+    check_relations(flock, table)
     :boids.stop_flock(flock)
     {events, table}
+  end
+
+  # The relations are not in the specification. After the acts, only the
+  # boids of the table have relations, and the table of the relations
+  # has the edges of the graph, in the two directions.
+  defp check_relations(flock, table) do
+    links = :boids.relations(flock)
+    edges = :graph.edges(links)
+    ids = for {id, _pid} <- table, do: id
+    assert :graph.vertices(links) -- ids == []
+
+    rows =
+      for {from, to, label} <- edges,
+          row <- [{{:out, from, label}, [to]}, {{:in, to, label}, [from]}],
+          do: row
+
+    assert Enum.sort(:ets.tab2list(:boids.space(flock).links)) == Enum.sort(rows)
   end
 
   defp act(flock, {:add, id}, members) do
@@ -73,10 +91,25 @@ defmodule BoidsFlockSpecTest do
 
   defp act(flock, {:join, id}, members), do: [{id, member(flock, id)} | members]
 
+  # A relation from a boid to the other boid of the test, or to itself.
+  defp act(flock, {:relate, id}, members) do
+    :boids.relate(flock, id, :follows, other(id))
+    members
+  end
+
+  defp act(flock, {:unrelate, id}, members) do
+    :boids.unrelate(flock, id, :follows, other(id))
+    members
+  end
+
   defp act(_flock, {:leave, id}, members) do
     for {^id, pid} <- members, do: send(pid, :leave)
     members
   end
+
+  defp other(:a), do: :b
+  defp other(:b), do: :a
+  defp other(id), do: id
 
   # Wait until each process of the test did its calls, and the table
   # does not change. The result is the table.
@@ -146,12 +179,40 @@ defmodule BoidsFlockSpecTest do
   end
 
   property "each real flock is a behavior of the specification", %{tmp_dir: dir} do
-    act = tuple({member_of([:add, :add, :remove, :kill, :join, :leave]), member_of([:a, :b])})
+    kinds = [:add, :add, :remove, :kill, :join, :leave, :relate, :relate, :unrelate]
+    act = tuple({member_of(kinds), member_of([:a, :b])})
 
     check all(acts <- list_of(act, max_length: 25), max_runs: 40) do
       {events, table} = run(acts)
       assert FlockSpec.replay(events, table, dir) == :ok
     end
+  end
+
+  test "the relations between the boids are not events of the specification", %{tmp_dir: dir} do
+    acts = [
+      add: :a,
+      relate: :a,
+      add: :b,
+      relate: :a,
+      relate: :b,
+      join: :c,
+      relate: :c,
+      kill: :a,
+      relate: :b,
+      add: :a,
+      relate: :a,
+      unrelate: :a,
+      relate: :b,
+      remove: :b,
+      leave: :c,
+      add: :b,
+      relate: :b
+    ]
+
+    {events, table} = run(acts, true)
+    assert Enum.all?(events, &(elem(&1, 0) in [:join, :leave, :down]))
+    assert [{:a, _}, {:b, _}] = table
+    assert FlockSpec.replay(events, table, dir) == :ok
   end
 
   describe "a flock that is not a behavior of the specification" do
@@ -221,6 +282,10 @@ defmodule BoidsFlockSpecTest do
     pid = :boids.whereis(flock, :a)
     {:error, _} = :boids.add(flock, id: :a, pos: {1, 1}, tick: :manual)
     {:error, _} = :boids.add(flock, id: :b, pos: {1, 1, 1}, tick: :manual)
+    # The record does not have the messages of the relations.
+    :ok = :boids.relate(flock, :a, :follows, :a)
+    [{:a, :a, :follows}] = :graph.edges(:boids.relations(flock))
+    :ok = :boids.unrelate(flock, :a, :follows, :a)
     :ok = :boids.remove(flock, :a)
     send(flock, {:DOWN, make_ref(), :process, self(), :normal})
     assert eventually(fn -> :boids.count(flock) == 0 end)
