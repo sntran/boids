@@ -33,7 +33,7 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
 -export([insert_new/2, put/2, remove/2]).
 -export([lookup/2, owner/2, servers/1, near/3, seen/4, all/1, count/1, dim/1, fit/2, offset/3]).
 -export([relate/4, related/3, related_to/3, relations/2]).
--export([show/2, nodes/1, set_nodes/2, home/2, home/3, place/3]).
+-export([show/2, nodes/1, set_nodes/2, home/2, place/3]).
 -export([env/1, obstacles/1, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
 
 -export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0]).
@@ -61,8 +61,9 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
     data => term(),
     pid => pid() | undefined,
     kind => kind(),
-    %% The moves of the boid from node to node, before this process.
-    moves => non_neg_integer()
+    %% The moves of the boid from node to node before this process, or
+    %% none for a boid that does not move from node to node.
+    moves => non_neg_integer() | none
 }.
 -type neighbor() :: #{
     id := term(),
@@ -485,12 +486,10 @@ with no message, and a new node takes only its part of the tiles.
 """.
 -spec home(space(), vec()) -> node().
 home(Space, Pos) ->
-    home(Space, Pos, ?MODULE:nodes(Space)).
-
--doc "As `home/2`, for a world on the nodes of a list.".
--spec home(space(), vec(), [node(), ...]) -> node().
-home(_Space, _Pos, [Node]) -> Node;
-home(Space, Pos, Nodes) -> pick(tile(Space, Pos), Nodes).
+    case ?MODULE:nodes(Space) of
+        [Node] -> Node;
+        Nodes -> pick(tile(Space, Pos), Nodes)
+    end.
 
 -doc """
 Where a boid at `Pos` that sees the distance `Radius` is, for this node:

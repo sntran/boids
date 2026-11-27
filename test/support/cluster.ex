@@ -59,7 +59,12 @@ defmodule Boids.Cluster do
   def add(nodes, options \\ []) do
     paths = Enum.flat_map(:code.get_path(), &[~c"-pa", &1])
     port = free_port()
-    never = if options[:split], do: [~c"-kernel", ~c"dist_auto_connect", ~c"never"], else: []
+    # With a split, Erlang writes a warning for each connection that it
+    # ends: the log of such a node has only the errors.
+    never =
+      if options[:split],
+        do: [~c"-kernel", ~c"dist_auto_connect", ~c"never", ~c"-kernel", ~c"logger_level", ~c"error"],
+        else: []
 
     args =
       [~c"-start_epmd", ~c"false", ~c"-epmd_module", ~c"Elixir.Boids.Cluster.Epmd", ~c"-setcookie", ~c"boids"] ++

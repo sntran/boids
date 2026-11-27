@@ -72,7 +72,7 @@ and a force is in units for each second for each second.
 """.
 
 -export([start_world/0, start_world/1, stop_world/1, child_spec/1, space/1]).
--export([add/2, populate/3, remove/2, update/3, boid/2, whereis/2, nodes/1]).
+-export([add/2, populate/3, remove/2, update/3, boid/2, whereis/2, nodes/1, timeout/0]).
 -export([add_rule/3, delete_rule/3, which_rules/2]).
 -export([snapshot/1, snapshot/2, lookup/2, near/3, count/1, count/2]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
@@ -283,7 +283,7 @@ result is `{error, not_found}`: a process of yours with `join/2`, or a
 boid below a supervisor of yours (`gen_boid:start_link/3`). In a world
 on several nodes, the node of the boid removes it.
 """.
--spec remove(world(), term()) -> ok | {error, not_found}.
+-spec remove(world(), term()) -> ok | {error, not_found | timeout}.
 remove(World, Id) ->
     Space = space(World),
     case boids_world:find(Space, Id) of
@@ -296,11 +296,9 @@ remove(World, Id) ->
             end;
         {server, Pid} ->
             %% The boid is on another node: that node removes it.
-            try
-                erpc:call(node(Pid), ?MODULE, remove, [maps:get(name, Space), Id], 5000)
-            catch
-                _:_ -> {error, not_found}
-            end;
+            remote(node(Pid), remove, [maps:get(name, Space), Id], {error, not_found});
+        timeout ->
+            {error, timeout};
         _ ->
             {error, not_found}
     end.
@@ -329,49 +327,80 @@ add_rule(World, Id, Rule) ->
     change(World, Id, add_rule, Rule).
 
 -doc "Remove the first rule with the name `Name` from a boid. A boid with no such rule does not change.".
--spec delete_rule(world(), term(), boids_boid:name()) -> ok | {error, not_found}.
+-spec delete_rule(world(), term(), boids_boid:name()) -> ok | {error, not_found | timeout}.
 delete_rule(World, Id, Name) ->
     change(World, Id, delete_rule, Name).
 
 -doc "The names of the rules of a boid, in their order.".
--spec which_rules(world(), term()) -> {ok, [boids_boid:name()]} | {error, not_found}.
+-spec which_rules(world(), term()) -> {ok, [boids_boid:name()]} | {error, not_found | timeout}.
 which_rules(World, Id) ->
     case boid(World, Id) of
         {ok, Boid} -> {ok, boids_boid:which_rules(Boid)};
-        {error, not_found} -> {error, not_found}
+        {error, Reason} -> {error, Reason}
     end.
 
 change(World, Id, Function, Arg) ->
     Space = space(World),
     case boids_world:find(Space, Id) of
         {server, Pid} -> call(Pid, {change, Function, Arg});
+        timeout -> {error, timeout};
         _ -> {error, not_found}
     end.
 
 -doc """
 All the state of a boid, from its process. See `t:boids_boid:boid/0`.
 """.
--spec boid(world(), term()) -> {ok, boids_boid:boid()} | {error, not_found}.
+-spec boid(world(), term()) -> {ok, boids_boid:boid()} | {error, not_found | timeout}.
 boid(World, Id) ->
     Space = space(World),
     case boids_world:find(Space, Id) of
         {server, Pid} ->
             case call(Pid, get) of
-                {error, not_found} -> {error, not_found};
+                {error, Reason} -> {error, Reason};
                 Boid -> {ok, Boid}
             end;
+        timeout ->
+            {error, timeout};
         _ ->
             {error, not_found}
     end.
 
-%% A request to a gen_boid, which can stop before its answer.
+%% A request to a gen_boid, on this node or on another node. The boid
+%% can stop before its answer: then it is not found. With no answer in
+%% the time limit, the result is {error, timeout}.
 call(Pid, Request) ->
     try
-        gen_server:call(Pid, Request)
+        gen_server:call(Pid, Request, timeout())
     catch
-        exit:{Reason, _} when Reason =:= noproc; Reason =:= normal; Reason =:= shutdown ->
-            {error, not_found}
+        exit:{timeout, _} -> {error, timeout};
+        exit:_ -> {error, not_found}
     end.
+
+%% A call of a function of this module on the node of a boid. With no
+%% answer in the time limit, the result is {error, timeout}. With no
+%% connection to the node, the result is `Missing`.
+remote(Node, Function, Args, Missing) ->
+    try
+        erpc:call(Node, ?MODULE, Function, Args, timeout())
+    catch
+        error:{erpc, timeout} -> {error, timeout};
+        _:_ -> Missing
+    end.
+
+-doc """
+The time limit of a call to a boid, or to another node of a world, in
+milliseconds: the value `timeout` of the application `boids`, or 5000.
+A function that gets no answer in this time gives `{error, timeout}`,
+and `whereis/2` gives `undefined`. The result `timeout` does not tell
+that the call had no effect: a node that is slow can do the work later.
+
+```erlang
+ok = application:set_env(boids, timeout, 1000).
+```
+""".
+-spec timeout() -> pos_integer().
+timeout() ->
+    application:get_env(boids, timeout, 5000).
 
 -doc """
 The process of a boid, or `undefined` for an id that is not in the
@@ -383,7 +412,7 @@ node: ask again for it then.
 whereis(World, Id) ->
     case boids_world:find(space(World), Id) of
         {_Kind, Pid} -> Pid;
-        error -> undefined
+        _ -> undefined
     end.
 
 -doc """
@@ -518,7 +547,8 @@ is faster than the clock.
 For a world on several nodes, the step is for the boids of all the
 nodes: each node makes the first part, then each node makes the second
 part. `step(World, Dt, local)` makes a step for the boids of this node
-only.
+only. The step does not wait for a node that has no connection: the
+other nodes make the step.
 """.
 -spec step(world(), number()) -> ok.
 step(World, Dt) when is_number(Dt), Dt >= 0 ->
@@ -675,31 +705,37 @@ In a world on several nodes, a relation is on the node of the boid
 the boid perceives the boid `To`: on its node, or near a border. The
 option `acyclic` checks the relations of the node of the boid `From`.
 """.
--spec relate(world(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle}.
+-spec relate(world(), term(), term(), term()) -> ok | {error, {not_found, term()} | cycle | timeout}.
 relate(World, From, Label, To) ->
     Space = space(World),
     case {boids_world:find(Space, From), boids_world:find(Space, To)} of
         {error, _} ->
             {error, {not_found, From}};
+        {timeout, _} ->
+            {error, timeout};
         {_, error} ->
             {error, {not_found, To}};
+        {_, timeout} ->
+            {error, timeout};
         {{_Kind, Pid}, {_, Other}} when node(Pid) =:= node() ->
             %% The world of this node checks a boid of this node again:
             %% that boid can go before the world gets this call.
             boids_world:relate(Space, From, Label, To, node(Other) =/= node());
         {{_Kind, Pid}, _} ->
             %% The relation is on the node of the boid that has it.
-            erpc:call(node(Pid), ?MODULE, relate, [maps:get(name, Space), From, Label, To], 5000)
+            remote(node(Pid), relate, [maps:get(name, Space), From, Label, To], {error, {not_found, From}})
     end.
 
 -doc "Remove a relation of `relate/4`, on the node of the boid `From`.".
--spec unrelate(world(), term(), term(), term()) -> ok.
+-spec unrelate(world(), term(), term(), term()) -> ok | {error, not_found | timeout}.
 unrelate(World, From, Label, To) ->
     Space = space(World),
     case boids_world:find(Space, From) of
         {_Kind, Pid} when node(Pid) =/= node() ->
             %% The relation is on the node of the boid that has it.
-            erpc:call(node(Pid), ?MODULE, unrelate, [maps:get(name, Space), From, Label, To], 5000);
+            remote(node(Pid), unrelate, [maps:get(name, Space), From, Label, To], {error, not_found});
+        timeout ->
+            {error, timeout};
         _ ->
             boids_world:unrelate(Space, From, Label, To)
     end.

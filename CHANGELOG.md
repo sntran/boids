@@ -41,7 +41,9 @@ The first version. It needs Erlang/OTP 29.
   random numbers (`boids:nodes/1`, the option `tile`). The functions of
   `boids` are about the boids of all the nodes, or of one node with the
   argument `local`. After a split of the network, a boid that has a
-  process on two nodes gets one process again.
+  process on two nodes gets one process again. A call to a boid of
+  another node that gets no answer in the time limit gives `{error,
+  timeout}` (`boids:timeout/0`).
 - The id of a boid is a reference, and `boids:whereis/2` gives its
   process, on each node.
 - A process with another behavior as a boid (`boids:join/2`,
@@ -52,7 +54,8 @@ The first version. It needs Erlang/OTP 29.
   an error at each step cannot stop its world.
 - Specifications of the flows in TLA+ (`specs/`, `docs/specs.md`): the
   members of a world, a write against a read of its space, the step in
-  two parts, and the move of a boid to another node. The tests check the models and the fault
+  two parts, and the move of a boid to another node, on two nodes and
+  on three nodes. The tests check the models and the fault
   models with the native checker of Accord, and replay the process of a
   real world against `specs/Members.tla`.
 - The processes of a world and of a boid have a label.
