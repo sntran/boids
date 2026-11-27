@@ -309,26 +309,35 @@ defmodule BoidsNodesTest do
       {:ok, _} = :boids.add(world, id: :mate, pos: {mine, 80})
       :ok = :boids.relate(world, :one, :likes, :mate)
       :ok = :boids.relate(world, :mate, :likes, :one)
-      send(world, {:claim, :one, large, 1, {theirs, 80}})
+      send(world, {:claim, :one, large, 1})
       assert stays.(one)
-      send(world, {:census, large, [{:nobody, 9, {theirs, 80}}, {:one, 3, {theirs, 80}}]})
+      send(world, {:census, large, [{:nobody, 9}, {:one, 3}]})
       assert stops.(one)
       assert :boids.lookup(world, :one) == :error
       # The relations of the boid went with it. A relation to it stays.
       assert :boids.related(world, :one, :likes) == []
       assert :boids.related(world, :mate, :likes) == [:one]
 
-      # With the same number of moves, the process that is in a tile of
-      # its node stays.
-      away = boid.(:away, 1, theirs)
-      send(world, {:claim, :away, large, 1, {theirs, 80}})
-      assert stops.(away)
+      # With the same number of moves, the process of the node with the
+      # larger name stays. The tile of a process has no effect: a
+      # decision for the same two processes is always the same decision
+      # (specs/MoveMany.tla).
       home = boid.(:home, 1, mine)
-      send(world, {:claim, :home, large, 1, {mine, 80}})
-      assert stays.(home)
-      # Then the process of the node with the larger name stays.
-      send(world, {:claim, :home, large, 1, {theirs, 80}})
+      send(world, {:claim, :home, large, 1})
       assert stops.(home)
+      away = boid.(:away, 1, theirs)
+      send(world, {:claim, :away, large, 1})
+      assert stops.(away)
+
+      # A node that started a process for the boid tells the other
+      # nodes, with the process that called. The world of that process
+      # does nothing: the process stops with the answer of its call.
+      calls = boid.(:calls, 1, mine)
+      send(world, {:claim, :calls, large, 2, calls})
+      assert stays.(calls)
+      # For the call of another process, the world decides.
+      send(world, {:claim, :calls, large, 2, self()})
+      assert stops.(calls)
 
       # A row that shows a boid of this node from another node is such a message.
       shown = boid.(:shown, 0, mine)
@@ -344,7 +353,7 @@ defmodule BoidsNodesTest do
       # tells it its boid, and waits.
       :ok = :boids_space.set_nodes(space, [node(), small])
       waits = boid.(:waits, 0, mine)
-      send(world, {:claim, :waits, small, 5, {mine, 80}})
+      send(world, {:claim, :waits, small, 5})
       assert stays.(waits)
       # The decision stops only the process with the number of moves that the other world saw.
       send(world, {:yield, :waits, 3})
@@ -355,10 +364,34 @@ defmodule BoidsNodesTest do
 
       # A process of yours is not a boid that moves: it stays.
       {:ok, _space, _boid} = :boids.join(world, id: :person, pos: {mine, 80})
-      send(world, {:claim, :person, large, 9, {theirs, 80}})
+      send(world, {:claim, :person, large, 9})
       send(world, {:yield, :person, 0})
       assert :boids.count(world) >= 0
       assert :boids_space.owner(space, :person) == {:process, self()}
+
+      # A boid below a supervisor of yours does not move from node to
+      # node. It has no part in a decision: another boid with its id is
+      # a fault of the ids, and the boid of the supervisor stays.
+      {:ok, resident} = :gen_boid.start_link(world, Mouse, %{id: :resident, pos: {mine, 80}})
+      send(world, {:claim, :resident, large, 9})
+      send(world, {:yield, :resident, 0})
+
+      send(
+        world,
+        {:show, %{id: :resident, pos: {theirs, 80}, vel: {0, 0}, pid: remote, kind: :server, moves: 4}}
+      )
+
+      send(world, {:census, large, [{:resident, 7}]})
+      assert stays.(resident)
+      # A boid with its id that comes from another node does not take its place.
+      new = :boids_boid.new(%{id: :resident, pos: {mine, 80}, rules: []})
+      coming = %{boid: new, mod: :undefined, server: process, relations: [], moves: 5}
+      assert :gen_boid.adopt(world, coming) == {:error, {:exists, :resident}}
+      assert stays.(resident)
+      # Its row tells the other nodes no number of moves.
+      {:ok, shown_boid} = :boids.boid(world, :resident)
+      assert :boids_world.settle(space, shown_boid, :none) == :home
+      :gen_boid.stop(resident)
     end
 
     test "the world process answers for a boid that is not its boid" do
@@ -941,6 +974,76 @@ defmodule BoidsClusterTest do
       # The boids of the node that stopped are gone with it.
       assert count.(a) + count.(b) == 40 - length(on_c)
     end
+
+    test "a call to a boid of a node that gives no answer gives the result timeout" do
+      [{a, na}, {b, nb}] = nodes = Cluster.start(2)
+      on_exit(fn -> Cluster.stop(nodes) end)
+      world = name()
+      options = %{name: world, defaults: %{rules: [], tick: 20, max_speed: 0}}
+      for {peer, _} <- nodes, do: {:ok, _} = call(peer, :boids, :start_world, [options])
+      assert eventually(fn -> call(a, :boids, :nodes, [world]) == Enum.sort([na, nb]) end)
+      assert eventually(fn -> call(b, :boids, :nodes, [world]) == Enum.sort([na, nb]) end)
+      space = call(a, :boids, :space, [world])
+      home = fn i -> call(a, :boids_space, :home, [space, {i * @tile + 80, 80}]) end
+      # A tile of the node a, then a tile of the node b.
+      i = Enum.find(0..400, fn i -> home.(i) == na and home.(i + 1) == nb end)
+      border = (i + 1) * @tile
+      {:ok, :here} = call(a, :boids, :add, [world, %{id: :here, pos: {border - 80, 80}}])
+      # The node a has a row for the boid near, and no row for the boid far.
+      {:ok, :near} = call(b, :boids, :add, [world, %{id: :near, pos: {border + 3, 80}}])
+      {:ok, :far} = call(b, :boids, :add, [world, %{id: :far, pos: {border + 80, 80}}])
+      assert eventually(fn -> call(a, :boids, :lookup, [world, :near]) != :error end)
+      assert call(a, :boids, :lookup, [world, :far]) == :error
+
+      # The time limit is 5 seconds, or the value of the application.
+      assert call(a, :boids, :timeout, []) == 5000
+      :ok = call(a, :application, :set_env, [:boids, :timeout, 50])
+      assert call(a, :boids, :timeout, []) == 50
+
+      # The node b stops its work, and its connection stays: it gives no answer.
+      os_pid = call(b, :os, :getpid, [])
+      {_, 0} = System.cmd("kill", ["-STOP", to_string(os_pid)])
+      rule = {:wander, 1.0, %{}}
+
+      try do
+        # The node a has the row of the boid near for a short time: it
+        # sends the call to the process of the boid, or to its node.
+        assert is_pid(call(a, :boids, :whereis, [world, :near]))
+        assert call(a, :boids, :boid, [world, :near]) == {:error, :timeout}
+        assert call(a, :boids, :remove, [world, :near]) == {:error, :timeout}
+        assert call(a, :boids, :relate, [world, :near, :leader, :here]) == {:error, :timeout}
+        assert call(a, :boids, :unrelate, [world, :near, :leader, :here]) == {:error, :timeout}
+        # With no row, the node a asks the other nodes for the boid.
+        assert call(a, :boids, :whereis, [world, :far]) == :undefined
+
+        # A boid that can be on the node b, and an id that is in no node that answers.
+        for id <- [:near, :far, :nobody] do
+          assert call(a, :boids, :boid, [world, id]) == {:error, :timeout}
+          assert call(a, :boids, :update, [world, id, %{data: :late}]) == {:error, :timeout}
+          assert call(a, :boids, :add_rule, [world, id, rule]) == {:error, :timeout}
+          assert call(a, :boids, :delete_rule, [world, id, :wander]) == {:error, :timeout}
+          assert call(a, :boids, :which_rules, [world, id]) == {:error, :timeout}
+          assert call(a, :boids, :remove, [world, id]) == {:error, :timeout}
+          assert call(a, :boids, :relate, [world, id, :leader, :here]) == {:error, :timeout}
+          assert call(a, :boids, :unrelate, [world, id, :leader, :here]) == {:error, :timeout}
+        end
+
+        assert call(a, :boids, :relate, [world, :here, :leader, :far]) == {:error, :timeout}
+        # A boid of the node a has its answers.
+        assert {:ok, %{id: :here}} = call(a, :boids, :boid, [world, :here])
+      after
+        {_, 0} = System.cmd("kill", ["-CONT", to_string(os_pid)])
+      end
+
+      # The node b does its work again. It got the call to remove the
+      # boid near during its stop, and does that work now: the result
+      # timeout does not tell that a call had no effect. No call for the
+      # boid far came to the node b.
+      assert call(b, :boids, :nodes, [world]) == Enum.sort([na, nb])
+      assert eventually(fn -> call(b, :boids, :snapshot, [world, :local]) |> Enum.map(& &1.id) == [:far] end)
+      assert {:ok, %{data: :undefined}} = call(b, :boids, :boid, [world, :far])
+      assert call(a, :boids, :count, [world]) == 2
+    end
   end
 end
 
@@ -1030,6 +1133,37 @@ defmodule BoidsSplitTest do
     assert call(small, :boids, :count, [world]) == 1
   end
 
+  test "a step of the world, with a node that has no connection, is a step of the other nodes", %{
+    nodes: nodes
+  } do
+    %{world: world, small: small, large: large, ns: ns, nl: nl, border: border} = world(nodes)
+    boid = fn id, x -> %{id: id, pos: {x, 80}, vel: {1, 0}, min_speed: 1, max_speed: 1, tick: :manual} end
+    {:ok, :here} = call(small, :boids, :add, [world, boid.(:here, border - 80)])
+    {:ok, :there} = call(large, :boids, :add, [world, boid.(:there, border + 80)])
+    space = call(small, :boids, :space, [world])
+    x = fn peer, id -> call(peer, :boids, :lookup, [world, id]) |> elem(1) |> Map.fetch!(:pos) |> elem(0) end
+
+    # The connection ends. For a short time, the list of the nodes of
+    # the node small has the two nodes: its world did not get the news.
+    split(world, nodes)
+    :ok = call(small, :boids_space, :set_nodes, [space, [ns, nl]])
+    assert call(small, :boids, :nodes, [world]) == [ns, nl]
+
+    # The step does not wait for the node large, and gives no error.
+    assert call(small, :boids, :step, [world, 1.0]) == :ok
+    assert_in_delta x.(small, :here), border - 79, 1.0e-9
+    assert_in_delta x.(large, :there), border + 80, 1.0e-9
+    # The same with the list of one node.
+    :ok = call(small, :boids_space, :set_nodes, [space, [ns]])
+    assert call(small, :boids, :step, [world, 1.0]) == :ok
+    assert_in_delta x.(small, :here), border - 78, 1.0e-9
+
+    heal(world, nodes)
+    assert call(small, :boids, :step, [world, 1.0]) == :ok
+    assert_in_delta x.(small, :here), border - 77, 1.0e-9
+    assert_in_delta x.(large, :there), border + 81, 1.0e-9
+  end
+
   test "after a heal, a boid with a process on each node has one process", %{nodes: nodes} do
     %{world: world, small: small, large: large, ns: ns, nl: nl, border: border} = world(nodes)
     split(world, nodes)
@@ -1050,8 +1184,10 @@ defmodule BoidsSplitTest do
       # {id, moves and tile on the node small, moves and tile on the node large, the node that keeps the boid}
       {:more_small, {2, ns}, {1, nl}, ns},
       {:more_large, {1, ns}, {2, nl}, nl},
+      # With the same number of moves, the process of the node with the
+      # larger name stays, in each tile.
       {:tie, {1, ns}, {1, nl}, nl},
-      {:home_small, {1, ns}, {1, ns}, ns},
+      {:home_small, {1, ns}, {1, ns}, nl},
       {:home_large, {1, nl}, {1, nl}, nl},
       {:away, {1, nl}, {1, ns}, nl}
     ]
@@ -1081,5 +1217,160 @@ defmodule BoidsSplitTest do
     assert call(small, :erlang, :is_process_alive, [only])
     assert call(large, :boids, :count, [world]) == 7
     assert call(large, :boids, :count, [world, :local]) + call(small, :boids, :count, [world, :local]) == 7
+  end
+end
+
+defmodule BoidsThreeNodesTest do
+  # A world on three nodes. A fault that needs three nodes, or three
+  # processes of one boid, shows here (specs/MoveMany.tla).
+  use ExUnit.Case, async: false
+  import Boids.Helpers
+  import Boids.Cluster, only: [call: 4]
+
+  alias Boids.Cluster
+
+  @moduletag :capture_log
+
+  setup_all do
+    nodes = Cluster.start(3, split: true)
+    on_exit(fn -> Cluster.stop(nodes) end)
+    # The nodes in the order of their names.
+    %{nodes: Enum.sort_by(nodes, &elem(&1, 1))}
+  end
+
+  defp world(nodes) do
+    world = :"world#{System.unique_integer([:positive])}"
+    options = %{name: world, defaults: %{rules: [], tick: 20}}
+    for {peer, _} <- nodes, do: {:ok, _} = call(peer, :boids, :start_world, [options])
+    joined(world, nodes)
+    world
+  end
+
+  # End the connection of the first node to the other nodes. When a
+  # node loses a connection, Erlang ends its connections to the other
+  # nodes also, so that no node has a part of the connections. Thus the
+  # other nodes make their connection again.
+  defp cut(world, [first | others] = nodes) do
+    for other <- others, do: Cluster.split(first, other)
+    for node <- nodes, do: joined(world, [node])
+    connect(world, others)
+  end
+
+  # Make the connections of the nodes, one at a time.
+  defp connect(world, nodes) do
+    for {a, i} <- Enum.with_index(nodes), b <- Enum.drop(nodes, i + 1), do: Cluster.heal(a, b)
+    joined(world, nodes)
+  end
+
+  # Each node of the list has the world with the nodes of the list, and no other node.
+  defp joined(world, nodes) do
+    names = nodes |> Enum.map(&elem(&1, 1)) |> Enum.sort()
+    for {peer, _} <- nodes, do: assert(eventually(fn -> call(peer, :boids, :nodes, [world]) == names end))
+  end
+
+  # A process of the boid on a node, with a number of moves. The boid
+  # has a manual step: it stays on its node.
+  defp copy({peer, _node}, world, id, moves) do
+    process = %{tick: :manual, max_dt: 0.25, search: 1, priority: :low, hibernate: true}
+    boid = :boids_boid.new(%{id: id, pos: {80, 80}, rules: [], data: moves})
+    moving = %{boid: boid, mod: :undefined, server: process, relations: [], moves: moves, rand: :undefined}
+    {:ok, pid} = call(peer, :gen_boid, :adopt, [world, moving])
+    pid
+  end
+
+  # The nodes that have a process of the boid.
+  defp nodes_of(nodes, world, id) do
+    for {peer, node} <- nodes,
+        match?({:server, _}, call(peer, :boids_space, :owner, [call(peer, :boids, :space, [world]), id])),
+        do: node
+  end
+
+  # In the end, the boid of each case has one process, on the node of the case.
+  defp one_each(nodes, world, cases) do
+    for {id, _copies, keeper} <- cases do
+      {_peer, stays} = Enum.at(nodes, keeper)
+
+      assert eventually(fn -> nodes_of(nodes, world, id) == [stays] end),
+             "the boid #{id} is on #{inspect(nodes_of(nodes, world, id))}, not only on #{stays}"
+    end
+
+    for {peer, _} <- nodes, do: assert(call(peer, :boids, :count, [world]) == length(cases))
+  end
+
+  test "a node that starts a process for a boid tells all the nodes, and the boid has one process",
+       %{nodes: nodes} do
+    world = world(nodes)
+
+    # A boid moves from a node to a second node. The first node does
+    # not get the answer, and keeps its process. Then the boid moves to
+    # a third node. The first node and the third node always had their
+    # connection: no heal makes them compare their boids.
+    cases = [
+      # {id, the processes in the order of their start: {node, moves}, the node that keeps the boid}
+      {:newer_large, [{0, 1}, {2, 2}], 2},
+      {:newer_small, [{2, 1}, {0, 2}], 0},
+      # A call of an old process that comes late starts a process with less moves.
+      {:late, [{1, 5}, {2, 2}], 1},
+      # With the same number of moves, the process of the node with the larger name stays.
+      {:tie, [{0, 1}, {1, 1}, {2, 1}], 2},
+      {:first, [{0, 3}, {1, 2}, {2, 1}], 0},
+      {:middle, [{0, 1}, {2, 1}, {1, 2}], 1}
+    ]
+
+    pids =
+      for {id, copies, keeper} <- cases, {index, moves} <- copies do
+        {index == keeper, copy(Enum.at(nodes, index), world, id, moves)}
+      end
+
+    one_each(nodes, world, cases)
+    {[{true, kept} | _], _} = Enum.split_with(pids, &elem(&1, 0))
+    assert node(kept) == nodes |> Enum.at(2) |> elem(1)
+  end
+
+  test "after a split and a heal of three nodes, a boid with a process on each node has one process",
+       %{nodes: [first, second, third] = nodes} do
+    world = world(nodes)
+
+    # The first node has no connection to the other nodes. The other
+    # nodes have their connection.
+    cut(world, nodes)
+    joined(world, [first])
+    joined(world, [second, third])
+
+    one_cut = [
+      {:cut_new, [{0, 1}, {1, 2}, {2, 3}], 2},
+      {:cut_old, [{0, 4}, {1, 2}, {2, 3}], 0},
+      {:cut_tie, [{0, 3}, {2, 2}, {1, 3}], 1}
+    ]
+
+    for {id, copies, _keeper} <- one_cut,
+        {index, moves} <- copies,
+        do: copy(Enum.at(nodes, index), world, id, moves)
+
+    connect(world, nodes)
+    one_each(nodes, world, one_cut)
+
+    # No node has a connection.
+    Cluster.split(first, second)
+    for node <- nodes, do: joined(world, [node])
+
+    all_cut = [
+      {:all_tie, [{0, 1}, {1, 1}, {2, 1}], 2},
+      {:all_first, [{0, 3}, {1, 2}, {2, 1}], 0},
+      {:all_middle, [{0, 1}, {1, 5}, {2, 2}], 1},
+      {:all_two, [{0, 1}, {1, 4}, {2, 4}], 2}
+    ]
+
+    for {id, copies, _keeper} <- all_cut,
+        {index, moves} <- copies,
+        do: copy(Enum.at(nodes, index), world, id, moves)
+
+    # Each node has a process of each of these boids.
+    for {id, _copies, _keeper} <- all_cut,
+        do: assert(nodes_of(nodes, world, id) == Enum.map(nodes, &elem(&1, 1)))
+
+    # The connections come again one at a time, the last node first.
+    connect(world, [third, second, first])
+    one_each(nodes, world, one_cut ++ all_cut)
   end
 end

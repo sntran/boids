@@ -29,6 +29,7 @@ world to the design.
 | `specs/Space.tla` | A write of a row against a read of the grid. | `boids_space:put/2`, `boids_space:near/3` |
 | `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 | `specs/Move.tla` | The move of a boid to another node of its world. | `gen_boid` (`settle`, `adopt/2`), `boids_world` (the join of a boid that comes, `moved/3`) |
+| `specs/MoveMany.tla` | The same move in a world on three nodes: a boid with a process on each node, and a decision for two processes at a time. | `boids_world` (`adopt/5`, the messages `census`, `claim` and `yield`) |
 
 ### `specs/Members.tla`
 
@@ -162,10 +163,10 @@ than the process that calls.
 
 After a split, the boid can have a process on each node. After the
 heal, the world of the first node (the node with the smaller name)
-decides which process stays: the one with more moves, then the one in a
-tile of its node, then the one of the second node. It stops its own
-process, or it tells the second node to stop the process of the age
-that it saw.
+decides which process stays: the one with more moves, then the one of
+the second node. It stops its own process, or it tells the second node
+to stop the process of the age that it saw. The decision does not use
+the tile of a process: `specs/MoveMany.tla` shows why.
 
 | Action | When it can occur | In the code |
 |---|---|---|
@@ -213,6 +214,80 @@ after the last heal.
   with a split, `OneProcess` is violated. During the split, the world
   has two boids with one id.
 
+### `specs/MoveMany.tla`
+
+`Move.tla` has two nodes. With three nodes, a boid can have a process
+on each node, and the code decides for two processes at a time: each
+pair of nodes has its own decision. `MoveMany.tla` is the move for a
+set of nodes. It has less detail of one move than `Move.tla` (no row,
+and no node that stops), and each message is on its way in a set, so
+the messages come in each order.
+
+The constants: the nodes (`Nodes`, numbers in the order of their
+names), the times that a process goes into a tile of another node
+(`Crossings`), the splits (`Splits`), a bound for the splits (`Apart`),
+and three guards for the fault models. The model has one boid.
+
+| Action | When it can occur | In the code |
+|---|---|---|
+| `Cross(n, m)` | The process of `n` is in a tile of its node, and the two nodes have a connection: its boid goes into a tile of `m`. | A step of the boid |
+| `Call(n)` | The process of `n` is in a tile of another node: it calls that node, with its age plus 1. | `erpc:call(Home, gen_boid, adopt, ..., infinity)` |
+| `Adopt(c)` | The call comes. With no process, or with an older process, the node starts a process and sends a claim with the call to all the other nodes. | `gen_boid:adopt/2`, `boids_world:adopt/5`, the message `{claim, Id, Node, Moves, Caller}` |
+| `Answer(a)` | The answer comes to the process that waits for it: that process stops. An answer for a process that is gone does nothing. | `boids_world:moved/3`, the reason `{shutdown, {moved, Node}}` |
+| `LoseCall(c)`, `LoseAnswer(a)` | A split cut the two nodes: the call or the answer does not come, and the process that called stays. | `erpc` gives an error to the process that calls |
+| `Claim(cl)` | A node gets the claim of another node. The node whose process waits for the answer of the call of the claim does nothing. The node with the smaller number decides. The node with the larger number sends its own claim to the other node. | `claim` in `boids_world`, after the messages `{census, ...}`, `{claim, ...}` and `{show, Entry}` |
+| `Yield(y)` | The decision comes: the node stops its process when that process has the age of the decision. | The message `{yield, Id, Moves}` |
+| `Split` | One node loses its connections to all the other nodes, or (with `Apart`) all the connections end. The claims and the decisions between the nodes that it cuts are lost. | The end of a connection of Erlang |
+| `Heal` | All the connections come again. Each node of a pair that had no connection sends a claim for its process to the other. | The `join` of `pg`, the message `{census, Node, Claims}` |
+
+| Invariant or property | What it says | The fault that it stops |
+|---|---|---|
+| `NotLost` | The boid has a process. | Two decisions for the same two processes that stop the two, and a decision that stops the only process. |
+| `Settled` | When all the nodes have a connection, no process is in a tile of another node, and no message is on its way, the boid has one process. | Two processes that stay with nothing more to do. |
+| `Lands` | In the end, all the nodes have a connection, nothing is on its way, and the boid has one process. | A flow of messages that does not end. |
+
+The small model (`specs/MCMoveThree.tla`) has three nodes and one boid:
+
+| Model | The bounds | The checks | The result |
+|---|---|---|---|
+| `MCMoveThree.cfg` | 3 crossings, 1 split that cuts one node from the two others | `NotLost`, `Settled` | They hold: 518,063 states, about 50 seconds. |
+| `MCMoveThreeSplits.cfg` | 2 crossings, 2 splits, each of one node or of all the nodes | `NotLost`, `Settled`, `Lands` | They hold: 21,594 states, about 6 seconds. |
+
+The model found two faults of the code, which two nodes cannot show.
+The code and the specification changed together, and each fault stays
+as a fault model:
+
+- `MCMoveThreeTiles.cfg` lets a decision also use the tile of each
+  process, as the code did: with the same number of moves, the process
+  in a tile of its node stayed. `NotLost` is violated. On two nodes,
+  two processes never have the same number of moves: the processes of
+  one node have an even number, and those of the other node an odd
+  number. On three nodes they can. The boid moves from the node 1 to
+  the node 2, and a split loses the answer. After the heal, the process
+  of the node 1 moves to the node 3: the processes of the node 2 and of
+  the node 3 each made one move. Two claims for the process of the node
+  3 are on their way to the node 2: one from before that process went
+  into a tile of another node, and one from after. The node 2 decides
+  two times, with opposite results: it tells the node 3 to stop its
+  process, and then it stops its own process. The boid has no process.
+  The decision now uses only what does not change: the moves of a
+  process, then its node.
+- `MCMoveThreeAlone.cfg` lets a node start a process and tell no other
+  node, as the code did. `Settled` is violated. A boid moves from the
+  node 1 to the node 2, and a split loses the answer: the node 1 keeps
+  its process. Then the boid moves from the node 2 to the node 3. The
+  node 1 and the node 3 always had their connection, so no heal makes
+  them compare their boids, and the two processes stay. A node that
+  starts a process now sends a claim to all the other nodes.
+- `MCMoveThreeAny.cfg` lets a node stop its process of each age when
+  the decision comes: `NotLost` violated, as in `MCMoveAny.cfg`.
+
+The claim of a new process has the call that started it. A first
+design sent that claim to all the nodes but the node of the call, and
+the model found a fault there too: the call of a process that is gone
+can start a process that no node compares. With the call in the claim,
+only the node whose process waits for that call does nothing.
+
 ## The replay: the code against the specification
 
 `Boids.MembersSpec` (`test/support/members_spec.ex`) does two things.
@@ -259,21 +334,31 @@ join, the process of the row stopped, or not. The result is `:ok`,
 
 ## What the checks do not prove
 
-- A model is small: three processes, two boids, two cells, two nodes. A
-  fault that needs more is not found.
+- A model is small: three processes, two boids, two cells, three nodes.
+  A fault that needs more is not found.
 - `Space.tla`, `Step.tla` and `Move.tla` have no replay. Their tie to
   the code is the comments in `boids_space`, `gen_boid` and
   `boids_world`, and the tests of the behavior
   (`test/boids_space_test.exs`, `test/boids_test.exs`,
   `test/boids_nodes_test.exs`).
 - `Move.tla` has two nodes and one call of a node on its way at one
-  time. It does not have the relations of a boid, which move with it.
-  With three nodes, each pair of nodes decides for its two processes.
-  The model does not check that.
+  time. `MoveMany.tla` has three nodes, one boid, three crossings and
+  two splits at most, and no node that stops. A fault that needs four
+  nodes, more crossings or more splits is not found. The two do not
+  have the relations of a boid, which move with it.
+- In `MoveMany.tla`, a split cuts one node from all the others, or all
+  the nodes. That is what Erlang does by default: a node that loses one
+  connection loses the others too. A network where a node has only a
+  part of its connections for a long time is not in the model.
 - In `Move.tla`, the world that decides sees the two processes at one
-  moment. In the code, it sees its own process now, and the other
-  process as a message told it. The age in the decision keeps a
-  decision that comes late from a process that it did not see.
+  moment. In the code, and in `MoveMany.tla`, it sees its own process
+  now, and the other process as a message told it. The age in the
+  decision keeps a decision that comes late from a process that it did
+  not see.
+- The ids of a world are for one boid each. The code cannot tell two
+  boids with one id on two nodes from two processes of one boid, and it
+  stops one of them. Only a boid that the world supervises is in these
+  decisions: a boid below a supervisor of yours always stays.
 - A boid that comes from another node, after more moves, takes the row
   of a process of its id that runs (`Move.tla`, `Adopt`). `Members.tla`
   does not have this: there, a process that runs keeps its row.

@@ -524,6 +524,13 @@ What changes for your code:
 
 - The functions with an id find a boid on each node: `whereis/2`,
   `boid/2`, `update/3`, `remove/2`, `add_rule/3`, `relate/4`.
+- A call to a boid of another node has a time limit: 5 seconds, or the
+  value `timeout` of the application `boids`, in milliseconds. With no
+  answer in that time, the result is `{error, timeout}`, and
+  `whereis/2` gives `undefined`. The other node can do the work of the
+  call later. With no connection to the node, the boid is not found.
+- `step/2` does not wait for a node that has no connection: it makes
+  the step on the other nodes.
 - The id of a boid is not its process. In a callback, the function
   `lookup` of `Seen` gives the row of a neighbor, with its process:
   `{ok, #{pid := Pid}} = (maps:get(lookup, Seen))(Id)`.
@@ -547,7 +554,10 @@ What changes for your code:
 - A read of all the nodes (`boids:snapshot/1`, `boids:count/1`) is not
   of one moment: a boid that moves at that moment can be absent, or
   counted two times by `count/1`.
-- The ids of a world are for one boid each, on all the nodes.
+- The ids of a world are for one boid each, on all the nodes. The world
+  cannot tell two boids with one id from two processes of one boid: it
+  stops one of them. A boid below a supervisor of yours always stays,
+  and a boid with its id that comes from another node stops.
 
 The move is safe when the network has faults:
 
@@ -559,11 +569,17 @@ The move is safe when the network has faults:
   node continues alone with all the tiles.
 - When the nodes have a connection again, each world tells the other
   its boids. For a boid with two processes, one world decides which
-  process stays: the one that made more moves, then the one in a tile
-  of its node, then the one of the node with the larger name. The other
-  process stops with the reason `{shutdown, replaced}`.
-- The specification `specs/Move.tla` has this flow. Its model checks
-  that no move, no split and no decision loses a boid.
+  process stays: the one that made more moves, then the one of the node
+  with the larger name. The other process stops with the reason
+  `{shutdown, replaced}`.
+- A node that starts a process for a boid that comes tells all the
+  other nodes. Thus two processes of one boid are found also on two
+  nodes that always had their connection: for example after a move to
+  a third node.
+- The specifications `specs/Move.tla` (two nodes) and
+  `specs/MoveMany.tla` (three nodes) have this flow. Their models check
+  that no move, no split and no decision loses a boid, and that a boid
+  has one process when all the nodes have a connection again.
 
 The limits of a world on several nodes:
 

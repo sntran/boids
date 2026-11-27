@@ -20,11 +20,15 @@
 (*                                                                         *)
 (* When the nodes have a connection again (Heal), the world of the first   *)
 (* node (the smaller name) decides which of two processes stays (Judge):   *)
-(* the one with more moves, then the one in a tile of its node, then the   *)
-(* one of the second node. It stops its own process, or it tells the       *)
-(* other node to stop the process of the age that it saw (Yield). Only     *)
-(* one world decides, and a process that came after the decision has       *)
-(* another age, so the boid keeps a process.                               *)
+(* the one with more moves, then the one of the second node. It stops its  *)
+(* own process, or it tells the other node to stop the process of the age  *)
+(* that it saw (Yield). Only one world decides, and a process that came    *)
+(* after the decision has another age, so the boid keeps a process.        *)
+(*                                                                         *)
+(* The decision does not use the tile of a process, because a process can  *)
+(* go to another tile between two decisions. MoveMany.tla has the model    *)
+(* for more than two nodes: it shows that fault, and a second fault that   *)
+(* needs three nodes.                                                      *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -191,14 +195,11 @@ Heal ==
     /\ UNCHANGED <<proc, age, at, row, req, ans, orphan, up, crossed, splits, yield>>
 
 \* Of two processes of the boid, the process of the node n stops: it
-\* made fewer moves; or the same number, and only the other process is
-\* in a tile of its node; or that does not decide, and n is the first
-\* node.
+\* made fewer moves; or the same number, and n is the first node.
 Loses(n) ==
     LET m == Other(n) IN
     \/ age[n] < age[m]
-    \/ age[n] = age[m] /\ at[n] /= n /\ at[m] = m
-    \/ age[n] = age[m] /\ ((at[n] = n) <=> (at[m] = m)) /\ n = First
+    \/ age[n] = age[m] /\ n = First
 
 \* The process of the node n goes, with what it waited for.
 Gone(n) ==

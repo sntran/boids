@@ -402,7 +402,7 @@ init({World, '$adopt', Moving = #{boid := Boid = #{id := Id}, mod := Module, ser
     _ = Module =:= undefined orelse code:ensure_loaded(Module),
     case join(Space, Server#{mod => Module, moves => Moves, roams => Roams}, Boid) of
         {ok, State} ->
-            ok = boids_world:adopt(Space, Id, Relations),
+            ok = boids_world:adopt(Space, Id, Relations, Moves, maps:get(caller, Moving, undefined)),
             %% The random numbers of the boid continue.
             _ = [rand:seed(Rand) || #{rand := Rand} <- [Moving], Rand =/= undefined],
             {ok, State};
@@ -441,8 +441,9 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
     %% The tools that show processes show which boid this process is.
     proc_lib:set_label({boids, boid, Id}),
     %% The moves of the boid from node to node before this process: the
-    %% world of a node keeps the process with the most moves.
-    Entry = (boids_boid:entry(Boid))#{kind => server, moves => maps:get(moves, Server)},
+    %% world of a node keeps the process with the most moves. A boid
+    %% that does not move from node to node has none.
+    Entry = (boids_boid:entry(Boid))#{kind => server, moves => moves(Server)},
     case boids_world:join(Space, self(), Entry) of
         ok ->
             %% The first tick comes after a random part of the period, so
@@ -581,11 +582,14 @@ act(Moved = #{id := Id}, State = #{space := Space, mod := Module}) ->
     case Acted of
         {ok, Boid = #{id := Id}} ->
             _ = boids_space:put(Space, Boid),
-            Place = boids_world:settle(Space, Boid, maps:get(moves, State)),
+            Place = boids_world:settle(Space, Boid, moves(State)),
             settle(Place, State#{boid := Boid, pending := undefined});
         {stop, Reason, Boid} ->
             {stop, Reason, State#{boid := Boid}}
     end.
+
+moves(#{roams := true, moves := Moves}) -> Moves;
+moves(#{roams := false}) -> none.
 
 %% The boid wrote its row. In a world on several nodes, a boid that is
 %% in a tile of another node moves to that node: its process starts
@@ -598,6 +602,9 @@ settle({away, Home}, State = #{roams := true, space := Space = #{name := Name}, 
         server => maps:without([seed], maps:with(?KEYS, State)),
         relations => boids_space:relations(Space, Id),
         moves => maps:get(moves, State) + 1,
+        %% The process that calls: its world does nothing with the
+        %% message that the other node sends about the new process.
+        caller => self(),
         %% The state of the random numbers of this process.
         rand => rand:export_seed()
     },
@@ -648,9 +655,9 @@ result({stop, Reason, Boid}, State) -> {stop, Reason, State#{boid := Boid}}.
 %% its row, and a step that the boid calculated before is not good.
 keep(Boid, State = #{boid := Boid}) ->
     State;
-keep(Boid = #{id := Id}, State = #{space := Space, boid := #{id := Id}, moves := Moves}) ->
+keep(Boid = #{id := Id}, State = #{space := Space, boid := #{id := Id}}) ->
     _ = boids_space:put(Space, Boid),
-    _ = boids_world:settle(Space, Boid, Moves),
+    _ = boids_world:settle(Space, Boid, moves(State)),
     State#{boid := Boid, pending := undefined}.
 
 %% --- The clock -------------------------------------------------------

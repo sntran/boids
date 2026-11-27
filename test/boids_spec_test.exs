@@ -10,6 +10,7 @@ defmodule BoidsSpecTest do
   @space Path.expand("../specs/MCSpace.tla", __DIR__)
   @step Path.expand("../specs/MCStep.tla", __DIR__)
   @move Path.expand("../specs/MCMove.tla", __DIR__)
+  @three Path.expand("../specs/MCMoveThree.tla", __DIR__)
 
   defp config(model, name), do: [config: Path.rootname(model) <> name <> ".cfg"]
 
@@ -113,6 +114,38 @@ defmodule BoidsSpecTest do
     test "a limit: during a split, the boid can have a process on each node" do
       assert {:error, %{kind: :invariant, property: "OneProcess"}, _} =
                Checker.check(@move, config(@move, "Two"))
+    end
+  end
+
+  describe "specs/MoveMany.tla: the move of a boid in a world on three nodes" do
+    # The bounds: three nodes, one boid, three crossings of a border, and
+    # one split that cuts one node from the two others.
+    @tag timeout: 300_000
+    test "the boid keeps a process, and it has one process when all the nodes have a connection and no message is on its way" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@three, @workers)
+      assert states > 100_000
+    end
+
+    # The bounds: three nodes, one boid, two crossings, and two splits.
+    # A split cuts one node from the two others, or all the nodes.
+    test "the same with two splits, and the world comes to rest with one process after the last heal" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@three, config(@three, "Splits") ++ @workers)
+      assert states > 10_000
+    end
+
+    test "a decision that uses the tile of a process can stop the two processes of a boid" do
+      assert {:error, %{kind: :invariant, property: "NotLost"}, _} =
+               Checker.check(@three, config(@three, "Tiles") ++ @workers)
+    end
+
+    test "a node that starts a process and tells no other node leaves two processes on nodes with a connection" do
+      assert {:error, %{kind: :invariant, property: "Settled"}, _} =
+               Checker.check(@three, config(@three, "Alone") ++ @workers)
+    end
+
+    test "a node that stops a process of each age when it is told can stop the only process, on three nodes" do
+      assert {:error, %{kind: :invariant, property: "NotLost"}, _} =
+               Checker.check(@three, config(@three, "Any") ++ @workers)
     end
   end
 end
