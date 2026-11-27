@@ -69,6 +69,12 @@
       lastAt = performance.now();
       if (moment.l) { links = moment.l; }
       if (moment.x) { extra = moment.x; }
+      // A scene can change its rocks and its zones while it runs.
+      if (moment.h && run) {
+        if (moment.h.rocks) { run.rocks = moment.h.rocks; }
+        if (moment.h.zones) { run.zones = moment.h.zones; }
+      }
+      if (moment.x && options.onMore) { options.onMore(moment.x); }
       (moment.r || []).forEach(function (pair) { reading(pair[0], pair[1]); });
     }
 
@@ -115,6 +121,14 @@
       var at = {};
       var list = [];
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // A zone is a part of the box with a color, behind the boids.
+      (run.zones || []).forEach(function (zone) {
+        ctx.fillStyle = c[zone[4]] || c.cool;
+        ctx.globalAlpha = 0.14;
+        ctx.fillRect(zone[0] * scale, (height - zone[3]) * scale, (zone[2] - zone[0]) * scale, (zone[3] - zone[1]) * scale);
+        ctx.globalAlpha = 1;
+      });
 
       ctx.fillStyle = c.rock;
       run.rocks.forEach(function (one) {

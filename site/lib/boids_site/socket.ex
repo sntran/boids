@@ -4,12 +4,14 @@ defmodule BoidsSite.Socket do
 
   The server sends `{"start": HEADER}` when a scene starts, then
   `{"m": MOMENT}` at each tick, or `{"error": TEXT}`. The page sends
-  `{"keys": [NAME]}` for the keys that are down (the game), or
-  `{"scene": DEFINITION}` to start a scene of its own (the playground).
+  `{"keys": [NAME]}` for the keys that are down (the game), `{"scene":
+  DEFINITION}` to start a scene of its own (the playground), or
+  `{"pick": N}`, `{"order": [NAME]}` and `{"go": true}` (the flight).
   """
   @behaviour :cowboy_websocket
 
   @scenes %{
+    "flight" => BoidsSite.Scenes.Flight,
     "flock" => BoidsSite.Scenes.Flock,
     "game" => BoidsSite.Scenes.Game,
     "playground" => BoidsSite.Scenes.Playground

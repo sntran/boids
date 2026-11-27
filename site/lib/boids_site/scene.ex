@@ -30,7 +30,10 @@ defmodule BoidsSite.Scene do
   @doc "The work of each second: for example new boids for boids that are gone."
   @callback direct(t()) :: :ok
 
-  @optional_callbacks more: 2, input: 2, direct: 1
+  @doc "More for the header of the scene: for example `zones`, a list of `[x0, y0, x1, y1, color]`."
+  @callback header(t()) :: map()
+
+  @optional_callbacks more: 2, input: 2, direct: 1, header: 1
 
   @doc "The milliseconds between two steps of a boid, and between two moments for the page."
   def tick, do: String.to_integer(System.get_env("BOIDS_TICK", "50"))
@@ -73,12 +76,14 @@ defmodule BoidsSite.Scene do
   def header(%{module: module, space: space} = scene) do
     %{bounds: {_min, {width, height}}} = space
 
-    %{
+    header = %{
       box: [width, height],
       tick: tick(),
       kinds: module.kinds(scene),
       rocks: for(%{pos: {x, y}, radius: radius} <- :boids.obstacles(space), do: [x, y, radius])
     }
+
+    if function_exported?(module, :header, 1), do: Map.merge(header, module.header(scene)), else: header
   end
 
   @doc """

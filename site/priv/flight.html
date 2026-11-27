@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Long Flight</title>
+<meta name="description" content="A game made with boids: lead a flock through lands with rocks and hawks, with rules as cards.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; counter-reset: rule; }
+  .rules li { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; counter-increment: rule; }
+  .rules li::before { content: counter(rule); font-family: var(--data); color: var(--muted); min-width: 1.2em; }
+  .rules .name { font-family: var(--data); font-size: 0.9rem; }
+  .rules .weight { font-family: var(--data); font-size: 0.85rem; color: var(--muted); margin-right: auto; }
+  .rules button { padding: 2px 9px; }
+  .rules button:disabled { opacity: 0.35; cursor: default; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .cards button { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; padding: 12px 14px; min-height: 92px; white-space: normal; }
+  .cards button b { font-family: var(--display); font-size: 0.98rem; font-weight: 600; }
+  .cards button span { color: var(--muted); font-weight: 400; font-size: 0.86rem; }
+  .cards button:disabled { opacity: 0.45; cursor: default; }
+  .cards button.taken { opacity: 1; border-color: var(--cool); outline: 2px solid var(--cool); }
+  .status { font-size: 1.02rem; min-height: 1.6em; }
+  .facts { color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/game">Game</a>
+    <a href="/flight" aria-current="page">Long Flight</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Long Flight</h1>
+    <p class="lead">Lead a flock to the exit of each land, on the right side. You do not control a bird: you give the flock its rules. After each land, take one card and put the rules in an order.</p>
+  </div>
+
+  <section class="two">
+    <div>
+      <div class="field">
+        <canvas id="field" width="1600" height="900" role="img" aria-label="A flock of birds that flies to the right, around rocks and away from hawks"></canvas>
+        <span class="source" id="source">Connecting</span>
+      </div>
+      <div class="strip">
+        <div class="readings" id="readings"></div>
+        <div class="controls">
+          <button id="links" type="button" aria-pressed="true">Relations</button>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="status" id="status" role="status">The flock flies.</p>
+      <div id="choice" hidden>
+        <h2>Take one card</h2>
+        <div class="cards" id="cards"></div>
+      </div>
+      <div>
+        <h2>The rules of the flock</h2>
+        <p class="facts">The first rule uses the force first. <span id="facts"></span></p>
+      </div>
+      <ol class="rules" id="rules"></ol>
+      <div class="row">
+        <button class="main" id="go" type="button" hidden>Fly</button>
+      </div>
+      <p class="error" id="error" role="alert"></p>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div>
+      <h3>The rules are data</h3>
+      <p>Your deck is the list of the rules of each bird. A card adds a rule, or changes a weight. The library checks each rule.</p>
+    </div>
+    <div>
+      <h3>The order is the priority</h3>
+      <p>The birds have <code>combine =&gt; priority</code>: each rule in the order of the list takes a part of the force, and the last rules get what stays.</p>
+    </div>
+    <div>
+      <h3>A boid changes while it runs</h3>
+      <p>With the card "Scatter", a bird that sees a hawk has other rules first. With "Elders", each bird has the relation <code>follows</code> to an elder.</p>
+    </div>
+    <div>
+      <h3>Boids send messages, and stop</h3>
+      <p>A hawk sends <code>caught</code> to the process of the bird that it touches. A bird that is safe, caught or in a rock stops, and the world removes it.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/flight.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var labels = {flow: "to the exit", separation: "separation", alignment: "alignment", cohesion: "cohesion", avoid: "avoid the rocks", evade: "evade the hawks", dodge: "dodge", leader: "follow an elder"};
+  var shown = "";
+  var order = [];
+
+  var scene = Boids.scene({
+    name: "flight", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("links"), scene.links);
+
+  // Show the phase of the run, the offer of cards and the deck. The server sends them with each moment.
+  function show(more) {
+    var text = JSON.stringify(more);
+    if (text === shown) { return; }
+    shown = text;
+    order = more.deck.map(function (rule) { return rule.name; });
+    var choosing = more.phase === "choosing";
+
+    if (more.phase === "flying") {
+      el("status").textContent = "Land " + more.land + ": the flock flies.";
+    } else if (choosing) {
+      el("status").textContent = "Land " + more.land + " is done: " + more.safe + " birds are safe, and " + more.lost + " are lost.";
+    } else {
+      el("status").textContent = "The run is over in land " + more.land + ": no bird is left.";
+    }
+
+    el("choice").hidden = !choosing;
+    el("cards").textContent = "";
+    more.offer.forEach(function (card, number) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.disabled = more.picked;
+      button.appendChild(document.createElement("b")).textContent = card.title;
+      button.appendChild(document.createElement("span")).textContent = card.text;
+      button.addEventListener("click", function () { button.className = "taken"; scene.send({pick: number}); });
+      el("cards").appendChild(button);
+    });
+    if (choosing && more.picked) {
+      el("choice").firstElementChild.textContent = "You took a card";
+    } else {
+      el("choice").firstElementChild.textContent = "Take one card";
+    }
+
+    el("rules").textContent = "";
+    more.deck.forEach(function (rule, index) {
+      var item = document.createElement("li");
+      var name = item.appendChild(document.createElement("span"));
+      name.className = "name";
+      name.textContent = labels[rule.name] || rule.name;
+      var weight = item.appendChild(document.createElement("span"));
+      weight.className = "weight";
+      weight.textContent = "weight " + rule.weight;
+      [["Up", -1], ["Down", 1]].forEach(function (move) {
+        var button = item.appendChild(document.createElement("button"));
+        button.type = "button";
+        button.textContent = move[0];
+        button.setAttribute("aria-label", "Move the rule " + (labels[rule.name] || rule.name) + " " + move[0].toLowerCase());
+        button.disabled = !choosing || index + move[1] < 0 || index + move[1] >= more.deck.length;
+        button.addEventListener("click", function () {
+          var next = order.slice();
+          next.splice(index + move[1], 0, next.splice(index, 1)[0]);
+          scene.send({order: next});
+        });
+      });
+      el("rules").appendChild(item);
+    });
+
+    var facts = ["Speed " + more.speed + ", the birds see " + more.perception + " units."];
+    if (more.scatter) { facts.push("Scatter: a bird that sees a hawk evades first."); }
+    if (more.elders) { facts.push("Elders: 3 birds lead the others."); }
+    el("facts").textContent = facts.join(" ");
+
+    el("go").hidden = more.phase === "flying";
+    el("go").textContent = choosing ? "Fly to land " + (more.land + 1) : "Start again";
+  }
+
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+</script>
+</body>
+</html>

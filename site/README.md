@@ -8,6 +8,7 @@ its VM.
 |---|---|
 | `/` | What the library is, with a flock of birds and a hawk that moves on the page. |
 | `/game` | Rock Patrol: a ship in a field of rocks, and a queen with drones that hunt it and shoot at it. A person flies the ship with the keys. |
+| `/flight` | Long Flight: a person leads a flock of birds through lands with rocks and hawks. The person does not control a bird: after each land, the person takes a card (a rule, or a change of the birds) and puts the rules in an order. |
 | `/playground` | A visitor defines kinds of boids and their rules, and sees them move. |
 
 [beam.com](https://github.com/sntran/BEAM.com) makes one file of the
@@ -67,7 +68,7 @@ then deploys at each push.
 ## How it works
 
 - A page opens one WebSocket for its scene (`/ws/flock`, `/ws/game`,
-  `/ws/playground`). The server starts one world with its boids for
+  `/ws/flight`, `/ws/playground`). The server starts one world with its boids for
   that socket, and sends one moment of it at each tick: the position, the
   direction and the kind of each boid. The page draws the moments.
 - A scene stops when its socket closes. With no visitor, the VM has no
@@ -77,6 +78,15 @@ then deploys at each push.
   in [`lib/boids_site/scenes`](lib/boids_site/scenes).
 - The game is the example of the library for a boid with a module of
   its own: see [`game.ex`](lib/boids_site/scenes/game.ex).
+- Long Flight is the example for rules as data:
+  [`flight.ex`](lib/boids_site/scenes/flight.ex). The deck of the person
+  is the list of the rules of each bird, and the order of the list is
+  the priority of the rules (`combine => priority`). A card adds a
+  rule, changes a weight, makes a bird change its rules when it sees a
+  hawk, or gives each bird a relation to an elder. A hawk sends a
+  message to the bird that it catches, and a bird that is safe or lost
+  stops. One process, the director, has the land, the deck and the
+  counts of a run.
 
 ## The playground
 

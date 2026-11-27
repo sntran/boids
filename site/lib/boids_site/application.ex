@@ -15,6 +15,7 @@ defmodule BoidsSite.Application do
          [
            {"/", :cowboy_static, {:priv_file, :boids_site, "index.html"}},
            {"/game", :cowboy_static, {:priv_file, :boids_site, "game.html"}},
+           {"/flight", :cowboy_static, {:priv_file, :boids_site, "flight.html"}},
            {"/playground", :cowboy_static, {:priv_file, :boids_site, "playground.html"}},
            {"/assets/[...]", :cowboy_static, {:priv_dir, :boids_site, "assets"}},
            {"/ws/:scene", BoidsSite.Socket, []}

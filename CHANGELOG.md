@@ -60,5 +60,6 @@ The first version. It needs Erlang/OTP 29.
   real world against `specs/Members.tla`.
 - The processes of a world and of a boid have a label.
 - A site for the library, made with the library (`site/`): a home page,
-  a game and a playground. It runs on a computer and on Cloudflare
-  Workers.
+  two games and a playground. It runs on a computer and on Cloudflare
+  Workers. In the game Long Flight, the rules of a flock are the cards
+  of the person.
