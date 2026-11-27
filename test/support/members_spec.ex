@@ -1,16 +1,16 @@
 defmodule Boids.MembersSpec do
   @moduledoc """
-  The replay of a real environment process (`boids_environment`) as a behavior of
+  The replay of a real world process (`boids_world`) as a behavior of
   `specs/Members.tla`.
 
-  `trace/1` records each message that the process of a environment handles: a
+  `trace/1` records each message that the process of a world handles: a
   join with its answer, a leave, and a `'DOWN'`. `replay/4` takes these
-  events in their order. Each event is one action of the environment in the
+  events in their order. Each event is one action of the world in the
   specification (`Join`, `Leave`, `Down`), and the answer of a join must
   be the answer of the specification. At the end, the rows of the real
   table must be the rows of the specification.
 
-  The environment does not see the acts of the other processes: the start of a
+  The world does not see the acts of the other processes: the start of a
   process, its end, and the call of `boids:remove/2` or `boids:leave/2`.
   The replay puts them where the events need them. When two orders are
   possible (for a join: the process of the row stopped, or not), it
@@ -27,16 +27,16 @@ defmodule Boids.MembersSpec do
   # --- The trace --------------------------------------------------------
 
   @doc """
-  Start to record the messages that the process of `environment` handles. The
+  Start to record the messages that the process of `world` handles. The
   record has its own trace session, so other tracers of the node and
   other records do not change it.
   """
-  def trace(environment) do
+  def trace(world) do
     recorder = spawn_link(fn -> record([]) end)
-    session = :trace.session_create(:boids_environment_spec, recorder, [])
-    :trace.function(session, {:boids_environment, :handle_call, 3}, [{:_, [], [{:return_trace}]}], [:local])
-    :trace.function(session, {:boids_environment, :handle_info, 2}, true, [:local])
-    :trace.process(session, environment, true, [:call])
+    session = :trace.session_create(:boids_world_spec, recorder, [])
+    :trace.function(session, {:boids_world, :handle_call, 3}, [{:_, [], [{:return_trace}]}], [:local])
+    :trace.function(session, {:boids_world, :handle_info, 2}, true, [:local])
+    :trace.process(session, world, true, [:call])
     {session, recorder}
   end
 
@@ -44,12 +44,12 @@ defmodule Boids.MembersSpec do
   Stop the record, and give the events in their order: `{:join, pid, id,
   answer}`, `{:leave, pid, id}` and `{:down, pid, id}`.
   """
-  def events(environment, {session, recorder}) do
-    :trace.process(session, environment, false, [:call])
-    ref = :trace.delivered(session, environment)
+  def events(world, {session, recorder}) do
+    :trace.process(session, world, false, [:call])
+    ref = :trace.delivered(session, world)
 
     receive do
-      {:trace_delivered, ^environment, ^ref} -> :ok
+      {:trace_delivered, ^world, ^ref} -> :ok
     end
 
     :trace.session_destroy(session)
@@ -89,8 +89,8 @@ defmodule Boids.MembersSpec do
   # --- The replay -------------------------------------------------------
 
   @doc """
-  Replay the events of a environment in `dir`. `table` has the rows of the real
-  environment after the events: a list of `{id, pid}`. The result is `:ok`,
+  Replay the events of a world in `dir`. `table` has the rows of the real
+  world after the events: a list of `{id, pid}`. The result is `:ok`,
   `{:error, {:diverged, event}}` when the specification has no step for
   an event, or `{:error, {:violated, invariant, event}}`.
   """
@@ -133,7 +133,7 @@ defmodule Boids.MembersSpec do
     named =
       Enum.reduce(events, start, fn
         {:join, _pid, _id, {:error, {:bad_option, _}}}, acc ->
-          # The environment refused the position: it did not read its table.
+          # The world refused the position: it did not read its table.
           acc
 
         {:join, pid, id, answer} = event, acc ->
@@ -188,7 +188,7 @@ defmodule Boids.MembersSpec do
   defp apply_step(m, s, {:leave, p}, _procs) do
     # The process itself left, or boids:remove/2 stopped it.
     case for(cause <- ["Quit", "Remove"], s1 <- run(m, s, cause, [p]), s2 <- run(m, s1, "Leave", [p]), do: s2) do
-      # A second leave, or a leave for a process that the environment refused, changes nothing.
+      # A second leave, or a leave for a process that the world refused, changes nothing.
       [] -> [s]
       next -> next
     end
@@ -209,7 +209,7 @@ defmodule Boids.MembersSpec do
     EXTENDS Members, TLC
     RunProcs == #{set(procs)}
     RunIds == #{set(ids)}
-    \\* What the replay sees of the environment: the answer to a join, and a row of the table.
+    \\* What the replay sees of the world: the answer to a join, and a row of the table.
     Got(p) == row[idOf[p]] = p /\\ UNCHANGED vars
     NotGot(p) == row[idOf[p]] /= p /\\ UNCHANGED vars
     Has(i, p) == row[i] = p /\\ UNCHANGED vars

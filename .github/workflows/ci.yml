@@ -23,7 +23,7 @@ concurrency:
 jobs:
   # The tests on the supported Erlang/OTP. The tests are ExUnit tests of
   # the Erlang code, the model checks of specs/ and the replay of the
-  # environment (docs/specs.md).
+  # world (docs/specs.md).
   test:
     name: Tests (OTP ${{ matrix.otp }}, Elixir ${{ matrix.elixir }})
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository

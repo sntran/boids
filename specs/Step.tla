@@ -1,10 +1,10 @@
 ---- MODULE Step ----
 (***************************************************************************)
-(* One step of all the boids of an environment (boids:step/2, gen_boid).   *)
-(* The caller asks each boid for its plan: the boid reads the environment  *)
+(* One step of all the boids of a world (boids:step/2, gen_boid).   *)
+(* The caller asks each boid for its plan: the boid reads the world  *)
 (* and calculates its new position, but it does not move. When each boid   *)
 (* answered, the caller asks each boid to move (commit). Thus each boid    *)
-(* calculates from the same state of the environment, and the result of a  *)
+(* calculates from the same state of the world, and the result of a  *)
 (* step does not change with the order of the processes.                   *)
 (*                                                                         *)
 (* The position of a boid is a number here. A boid that reads the          *)
@@ -13,14 +13,14 @@
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
-    Boids,      \* the boids of the environment
+    Boids,      \* the boids of the world
     Clocks,     \* the boids that also move on their own clock (a tick that is not manual)
     Steps,      \* the steps of the caller (a bound of the model)
     None,       \* no plan
     TwoParts    \* FALSE: the fault model where a boid moves when it calculates
 
 VARIABLES
-    val,        \* the position of each boid in the environment
+    val,        \* the position of each boid in the world
     plan,       \* the position that each boid calculated, or None
     phase,      \* "idle", "plan", "commit"
     wait,       \* the boids that did not answer in this part of the step
@@ -54,7 +54,7 @@ Begin ==
     /\ wait' = runs
     /\ UNCHANGED <<val, plan, steps, runs, ticked>>
 
-\* A boid calculates its new position from the environment as it is now.
+\* A boid calculates its new position from the world as it is now.
 Plan(b) ==
     /\ phase = "plan" /\ b \in wait \cap runs
     /\ IF TwoParts
@@ -115,7 +115,7 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Work)
 \* While the boids calculate, no boid moves.
 Quiet == phase = "plan" => val = base
 
-\* After a step, each boid is where a boid that read the environment at the
+\* After a step, each boid is where a boid that read the world at the
 \* start of the step goes. A boid whose process stopped before it moved
 \* is where it was.
 OneMoment ==

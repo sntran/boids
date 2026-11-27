@@ -4,8 +4,8 @@
 
 The first version. It needs Erlang/OTP 29.
 
-- An environment, where boids are: a supervisor, a process that owns its
-  tables, and one process for each boid (`boids:start_environment/1`,
+- A world, where boids are: a supervisor, a process that owns its
+  tables, and one process for each boid (`boids:start_world/1`,
   `boids:child_spec/1`, `boids:add/2`, `boids:populate/3`).
 - The behavior `gen_boid`: a boid is a process that senses, decides and
   acts on its own clock. A module of yours adds to each of these with a
@@ -14,7 +14,7 @@ The first version. It needs Erlang/OTP 29.
   The boid is the state of the callbacks, with a key for your module.
 - A boid can be a child of a supervisor of yours, which starts it again
   with its id (`gen_boid:start_link/3`, `gen_boid:child_spec/1`).
-- The tables of an environment in ETS, with a grid of cells as the index
+- The tables of a world in ETS, with a grid of cells as the index
   (`boids_space`). A box, sides that continue at the opposite sides
   (`wrap`), obstacles, and a scale of the time.
 - The rules of a boid: `separation`, `alignment`, `cohesion`, `seek`,
@@ -31,21 +31,21 @@ The first version. It needs Erlang/OTP 29.
 - Relations between the boids, as a graph with labels (`boids:relate/4`,
   `boids:relations/1`, `boids:related/3`, `boids:related_to/3`), and
   rules that use them (the target `{related, Label}`).
-- The flocks of an environment: the groups of boids that see each other
-  (`boids:flocks/2`). The environment as a graph of these boids
+- The flocks of a world: the groups of boids that see each other
+  (`boids:flocks/2`). The world as a graph of these boids
   (`boids:graph/2`), for the functions of the module `graph`.
 - A process with another behavior as a boid (`boids:join/2`,
   `boids:advance/3`).
-- Steps of all the boids from one state of the environment (`boids:step/2`),
+- Steps of all the boids from one state of the world (`boids:step/2`),
   for tests and for simulations that do not follow the clock.
 - A boid that stops with an error does not start again, so a boid with
-  an error at each step cannot stop its environment.
+  an error at each step cannot stop its world.
 - Specifications of the flows in TLA+ (`specs/`, `docs/specs.md`): the
-  members of an environment, a write against a read of its space,
+  members of a world, a write against a read of its space,
   and the step in two parts. The tests check the models and the fault
   models with the native checker of Accord, and replay the process of a
-  real environment against `specs/Members.tla`.
-- The processes of an environment and of a boid have a label.
+  real world against `specs/Members.tla`.
+- The processes of a world and of a boid have a label.
 - A site for the library, made with the library (`site/`): a home page,
   a game and a playground. It runs on a computer and on Cloudflare
   Workers.

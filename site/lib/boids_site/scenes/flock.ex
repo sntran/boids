@@ -51,10 +51,10 @@ defmodule BoidsSite.Scenes.Flock do
 
   @impl true
   def start(_definition) do
-    {:ok, environment} =
-      :boids.start_environment(bounds: {{0, 0}, {160, 60}}, wrap: true, defaults: %{tick: BoidsSite.Scene.tick()})
+    {:ok, world} =
+      :boids.start_world(bounds: {{0, 0}, {160, 60}}, wrap: true, defaults: %{tick: BoidsSite.Scene.tick()})
 
-    space = :boids.space(environment)
+    space = :boids.space(world)
     :ok = :boids.set_obstacle(space, :west, {42, 38}, 6)
     :ok = :boids.set_obstacle(space, :east, {118, 20}, 7)
 

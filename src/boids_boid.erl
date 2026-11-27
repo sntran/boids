@@ -14,7 +14,7 @@ for a process with another behavior.
 |---|---|---|
 | `pos` | (necessary) | The position: `{X, Y}` or `{X, Y, Z}`. |
 | `vel` | zero | The velocity, in units for each second. |
-| `id` | a reference | The name of the boid in its environment. |
+| `id` | a reference | The name of the boid in its world. |
 | `group` | `default` | The group of the boid: an atom, or another term. |
 | `data` | `undefined` | A term of yours. The neighbors see it. |
 | `max_speed` | `10.0` | The maximum speed. |
@@ -47,8 +47,8 @@ is the three rules of a flock:
 | `pursue` | `target`, `max_time` (`infinity`) | Move to where the target will be. |
 | `evade` | `target`, `radius` (`infinity`), `max_time` (`infinity`) | Move away from where the target will be. |
 | `wander` | `distance` (`2.0`), `radius` (`1.0`), `jitter` (`2.0`) | Move in a direction that changes slowly. |
-| `avoid` | `lookahead` (`1.0` second), `clearance` (a tenth of `perception`) | Move around the obstacles of the environment. |
-| `contain` | `margin` (`perception`), `bounds` (those of the environment) | Stay in the box. |
+| `avoid` | `lookahead` (`1.0` second), `clearance` (a tenth of `perception`) | Move around the obstacles of the world. |
+| `contain` | `margin` (`perception`), `bounds` (those of the world) | Stay in the box. |
 | `follow` | `path`, `ahead` (`perception`), `predict` (`0.5` second), `loop` (`false`) | Move along a list of points. |
 | `cruise` | `speed` (`max_speed`) | Keep a speed in the direction of the movement. |
 | `leader` | `target`, `distance` (half of `perception`), `slow_radius` (`perception`) | Stay behind a leader, and move out of its way. |
@@ -57,7 +57,7 @@ is the three rules of a flock:
 
 `groups` is `all`, `same` (the group of the boid) or a list of groups.
 
-`target` is a point, `{boid, Id}` (a boid of the environment), `{group,
+`target` is a point, `{boid, Id}` (a boid of the world), `{group,
 Group}` (the nearest neighbor of that group) or `{related, Label}` (the
 boid that this boid has the relation `Label` to, see `boids:relate/4`).
 A target that does not exist gives no force.
@@ -216,8 +216,8 @@ which_rules(#{rules := Rules}) ->
 
 -doc """
 Check options with no boid, and give them as a map: each value alone,
-and not the values together. `boids:start_environment/1` checks the
-`defaults` of an environment with this function.
+and not the values together. `boids:start_world/1` checks the
+`defaults` of a world with this function.
 """.
 -spec options(map() | [{atom(), term()}]) -> map().
 options(Opts) ->

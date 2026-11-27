@@ -386,15 +386,15 @@ defmodule BoidsSite.Scenes.Game do
 
   @impl true
   def start(_definition) do
-    {:ok, environment} =
-      :boids.start_environment(
+    {:ok, world} =
+      :boids.start_world(
         bounds: {{0, 0}, {@width, @height}},
         wrap: true,
         cell_size: 12,
         defaults: %{tick: BoidsSite.Scene.tick()}
       )
 
-    space = :boids.space(environment)
+    space = :boids.space(world)
     {:ok, ship} = :gen_boid.start(space, Ship, space)
     scene = %{space: space, ship: ship}
     for _ <- 1..5, do: rock(scene)
@@ -433,7 +433,7 @@ defmodule BoidsSite.Scenes.Game do
           ["Pilot", if(data.auto, do: "autopilot", else: "you")]
         ]
 
-        # Each second: the swarms of drones, from the environment as a graph.
+        # Each second: the swarms of drones, from the world as a graph.
         readings = if rem(number, steps(1000)) == 0, do: readings ++ [["Swarms", swarms(space)]], else: readings
         %{r: readings, x: %{thrust: data.thrust, safe: data.safe}}
 

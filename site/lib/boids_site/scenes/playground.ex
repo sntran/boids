@@ -1,6 +1,6 @@
 defmodule BoidsSite.Scenes.Playground do
   @moduledoc """
-  The scene of the playground: an environment with the boids of the
+  The scene of the playground: a world with the boids of the
   definition of a visitor.
 
   A definition is data (JSON), and not code: the site runs no code of a
@@ -81,14 +81,14 @@ defmodule BoidsSite.Scenes.Playground do
       end
     end
 
-    {:ok, environment} =
-      :boids.start_environment(
+    {:ok, world} =
+      :boids.start_world(
         bounds: {{0, 0}, {width, height}},
         wrap: Map.get(definition, "wrap", true) == true,
         defaults: %{tick: BoidsSite.Scene.tick()}
       )
 
-    space = :boids.space(environment)
+    space = :boids.space(world)
     for {{x, y, radius}, number} <- Enum.with_index(rocks), do: :ok = :boids.set_obstacle(space, number, {x, y}, radius)
 
     for kind <- kinds do

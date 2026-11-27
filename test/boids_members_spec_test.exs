@@ -1,5 +1,5 @@
 defmodule BoidsMembersSpecTest do
-  # The replay of a real environment as a behavior of specs/Members.tla.
+  # The replay of a real world as a behavior of specs/Members.tla.
   use ExUnit.Case, async: true
   use ExUnitProperties
   import Boids.Helpers
@@ -10,9 +10,9 @@ defmodule BoidsMembersSpecTest do
   @moduletag :capture_log
 
   # A process of the test that is a boid: it joins, and leaves on request.
-  defp member(environment, id) do
+  defp member(world, id) do
     spawn(fn ->
-      case :boids.join(environment, id: id, pos: {0, 0}) do
+      case :boids.join(world, id: id, pos: {0, 0}) do
         {:ok, space, boid} -> member_loop(space, boid)
         {:error, _} -> member_loop(nil, nil)
       end
@@ -29,32 +29,32 @@ defmodule BoidsMembersSpecTest do
     member_loop(space, boid)
   end
 
-  # Do the acts on a real environment, and give its events and its last table.
+  # Do the acts on a real world, and give its events and its last table.
   # With `wait`, each act is done before the next act starts. Without it,
-  # the processes of the test and of the environment run at the same time.
+  # the processes of the test and of the world run at the same time.
   defp run(acts, wait \\ false) do
-    {:ok, environment} = :boids.start_environment()
-    recorder = MembersSpec.trace(environment)
+    {:ok, world} = :boids.start_world()
+    recorder = MembersSpec.trace(world)
 
     members =
       Enum.reduce(acts, [], fn act, members ->
-        members = act(environment, act, members)
-        if wait, do: settle(environment, members)
+        members = act(world, act, members)
+        if wait, do: settle(world, members)
         members
       end)
 
-    table = settle(environment, members)
-    events = MembersSpec.events(environment, recorder)
-    check_relations(environment, table)
-    :boids.stop_environment(environment)
+    table = settle(world, members)
+    events = MembersSpec.events(world, recorder)
+    check_relations(world, table)
+    :boids.stop_world(world)
     {events, table}
   end
 
   # The relations are not in the specification. After the acts, only the
   # boids of the table have relations, and the table of the relations
   # has the edges of the graph, in the two directions.
-  defp check_relations(environment, table) do
-    links = :boids.relations(environment)
+  defp check_relations(world, table) do
+    links = :boids.relations(world)
     edges = :graph.edges(links)
     ids = for {id, _pid} <- table, do: id
     assert :graph.vertices(links) -- ids == []
@@ -64,14 +64,14 @@ defmodule BoidsMembersSpecTest do
           row <- [{{:out, from, label}, [to]}, {{:in, to, label}, [from]}],
           do: row
 
-    assert Enum.sort(:ets.tab2list(:boids.space(environment).links)) == Enum.sort(rows)
+    assert Enum.sort(:ets.tab2list(:boids.space(world).links)) == Enum.sort(rows)
   end
 
-  defp act(environment, {:add, id}, members) do
+  defp act(world, {:add, id}, members) do
     # After many kills in one second, the supervisor of the boids stops,
     # and its supervisor starts it again. A call to it exits then.
     try do
-      :boids.add(environment, id: id, pos: {0, 0}, tick: :manual)
+      :boids.add(world, id: id, pos: {0, 0}, tick: :manual)
     catch
       :exit, _ -> :ok
     end
@@ -79,26 +79,26 @@ defmodule BoidsMembersSpecTest do
     members
   end
 
-  defp act(environment, {:remove, id}, members) do
-    :boids.remove(environment, id)
+  defp act(world, {:remove, id}, members) do
+    :boids.remove(world, id)
     members
   end
 
-  defp act(environment, {:kill, id}, members) do
-    with pid when is_pid(pid) <- :boids.whereis(environment, id), do: Process.exit(pid, :kill)
+  defp act(world, {:kill, id}, members) do
+    with pid when is_pid(pid) <- :boids.whereis(world, id), do: Process.exit(pid, :kill)
     members
   end
 
-  defp act(environment, {:join, id}, members), do: [{id, member(environment, id)} | members]
+  defp act(world, {:join, id}, members), do: [{id, member(world, id)} | members]
 
   # A relation from a boid to the other boid of the test, or to itself.
-  defp act(environment, {:relate, id}, members) do
-    :boids.relate(environment, id, :follows, other(id))
+  defp act(world, {:relate, id}, members) do
+    :boids.relate(world, id, :follows, other(id))
     members
   end
 
-  defp act(environment, {:unrelate, id}, members) do
-    :boids.unrelate(environment, id, :follows, other(id))
+  defp act(world, {:unrelate, id}, members) do
+    :boids.unrelate(world, id, :follows, other(id))
     members
   end
 
@@ -113,7 +113,7 @@ defmodule BoidsMembersSpecTest do
 
   # Wait until each process of the test did its calls, and the table
   # does not change. The result is the table.
-  defp settle(environment, members, last \\ nil, same \\ 0) do
+  defp settle(world, members, last \\ nil, same \\ 0) do
     for {_id, pid} <- members, Process.alive?(pid) do
       ref = Process.monitor(pid)
       send(pid, {:ready?, self()})
@@ -124,8 +124,8 @@ defmodule BoidsMembersSpecTest do
       end
     end
 
-    :sys.get_state(environment)
-    table = Enum.sort(for %{id: id, pid: pid} <- :boids.snapshot(environment), do: {id, pid})
+    :sys.get_state(world)
+    table = Enum.sort(for %{id: id, pid: pid} <- :boids.snapshot(world), do: {id, pid})
 
     cond do
       table == last and same >= 3 ->
@@ -133,15 +133,15 @@ defmodule BoidsMembersSpecTest do
 
       table == last ->
         Process.sleep(5)
-        settle(environment, members, table, same + 1)
+        settle(world, members, table, same + 1)
 
       true ->
         Process.sleep(5)
-        settle(environment, members, table, 0)
+        settle(world, members, table, 0)
     end
   end
 
-  test "an environment with boids that start, stop, start again, leave and go", %{tmp_dir: dir} do
+  test "a world with boids that start, stop, start again, leave and go", %{tmp_dir: dir} do
     acts = [
       add: :a,
       add: :a,
@@ -178,7 +178,7 @@ defmodule BoidsMembersSpecTest do
     assert MembersSpec.replay(events, table, dir) == :ok
   end
 
-  property "each real environment is a behavior of the specification", %{tmp_dir: dir} do
+  property "each real world is a behavior of the specification", %{tmp_dir: dir} do
     kinds = [:add, :add, :remove, :kill, :join, :leave, :relate, :relate, :unrelate]
     act = tuple({member_of(kinds), member_of([:a, :b])})
 
@@ -215,7 +215,7 @@ defmodule BoidsMembersSpecTest do
     assert MembersSpec.replay(events, table, dir) == :ok
   end
 
-  describe "an environment that is not a behavior of the specification" do
+  describe "a world that is not a behavior of the specification" do
     setup do
       first = spawn(fn -> :ok end)
       second = spawn(fn -> Process.sleep(:infinity) end)
@@ -223,21 +223,21 @@ defmodule BoidsMembersSpecTest do
     end
 
     test "a leave that takes the row of a new process diverges", %{tmp_dir: dir, first: first, second: second} do
-      # The environment before the check of the process of a leave: specs/MCMembersLeave.cfg.
+      # The world before the check of the process of a leave: specs/MCMembersLeave.cfg.
       events = [{:join, first, :a, :ok}, {:down, first, :a}, {:join, second, :a, :ok}, {:leave, first, :a}]
       assert MembersSpec.replay(events, [{:a, second}], dir) == :ok
       assert MembersSpec.replay(events, [], dir) == {:error, {:diverged, {:no_row, :a}}}
     end
 
-    test "an environment that refuses an id whose process stopped diverges", %{
+    test "a world that refuses an id whose process stopped diverges", %{
       tmp_dir: dir,
       first: first,
       second: second
     } do
-      # The environment with no check of the process of a row: specs/MCMembersKeep.cfg.
+      # The world with no check of the process of a row: specs/MCMembersKeep.cfg.
       taken = [{:join, first, :a, :ok}, {:join, second, :a, :ok}]
       assert MembersSpec.replay(taken, [{:a, second}], dir) == :ok
-      # After that, the environment does not watch the first process.
+      # After that, the world does not watch the first process.
       watched = taken ++ [{:down, first, :a}]
       assert MembersSpec.replay(watched, [{:a, second}], dir) == {:error, {:diverged, {:down, first, :a}}}
       refused = [{:join, first, :a, :ok}, {:join, second, :a, {:error, {:exists, :a}}}, {:down, first, :a}]
@@ -275,22 +275,22 @@ defmodule BoidsMembersSpecTest do
     end
   end
 
-  test "the record has each message of the environment, with the answers", %{tmp_dir: dir} do
-    {:ok, environment} = :boids.start_environment()
-    recorder = MembersSpec.trace(environment)
-    {:ok, :a} = :boids.add(environment, id: :a, pos: {0, 0}, tick: :manual)
-    pid = :boids.whereis(environment, :a)
-    {:error, _} = :boids.add(environment, id: :a, pos: {1, 1}, tick: :manual)
-    {:error, _} = :boids.add(environment, id: :b, pos: {1, 1, 1}, tick: :manual)
+  test "the record has each message of the world, with the answers", %{tmp_dir: dir} do
+    {:ok, world} = :boids.start_world()
+    recorder = MembersSpec.trace(world)
+    {:ok, :a} = :boids.add(world, id: :a, pos: {0, 0}, tick: :manual)
+    pid = :boids.whereis(world, :a)
+    {:error, _} = :boids.add(world, id: :a, pos: {1, 1}, tick: :manual)
+    {:error, _} = :boids.add(world, id: :b, pos: {1, 1, 1}, tick: :manual)
     # The record does not have the messages of the relations.
-    :ok = :boids.relate(environment, :a, :follows, :a)
-    [{:a, :a, :follows}] = :graph.edges(:boids.relations(environment))
-    :ok = :boids.unrelate(environment, :a, :follows, :a)
-    :ok = :boids.remove(environment, :a)
-    send(environment, {:DOWN, make_ref(), :process, self(), :normal})
-    assert eventually(fn -> :boids.count(environment) == 0 end)
-    events = MembersSpec.events(environment, recorder)
-    :boids.stop_environment(environment)
+    :ok = :boids.relate(world, :a, :follows, :a)
+    [{:a, :a, :follows}] = :graph.edges(:boids.relations(world))
+    :ok = :boids.unrelate(world, :a, :follows, :a)
+    :ok = :boids.remove(world, :a)
+    send(world, {:DOWN, make_ref(), :process, self(), :normal})
+    assert eventually(fn -> :boids.count(world) == 0 end)
+    events = MembersSpec.events(world, recorder)
+    :boids.stop_world(world)
 
     assert [
              {:join, ^pid, :a, :ok},
@@ -301,7 +301,7 @@ defmodule BoidsMembersSpecTest do
 
     assert {:leave, pid, :a} in rest
     assert {:down, self(), :unknown} in rest
-    # A 'DOWN' that the environment does not know is not in the specification.
+    # A 'DOWN' that the world does not know is not in the specification.
     assert MembersSpec.replay(events, [], dir) == {:error, {:diverged, {:down, self(), :unknown}}}
     assert MembersSpec.replay(events -- [{:down, self(), :unknown}], [], dir) == :ok
   end

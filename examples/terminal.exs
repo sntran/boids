@@ -4,7 +4,7 @@
 #     mix run examples/terminal.exs [SECONDS]
 #
 # Each bird and the hawk is a process. This script only reads the
-# environment, 20 times in a second, and draws it.
+# world, 20 times in a second, and draws it.
 
 defmodule Terminal do
   @width 100
@@ -14,8 +14,8 @@ defmodule Terminal do
   def run(seconds) do
     # One cell of the terminal is 1 unit wide and 2 units high.
     bounds = {{0, 0}, {@width, @height * 2}}
-    {:ok, environment} = :boids.start_environment(bounds: bounds, wrap: true)
-    space = :boids.space(environment)
+    {:ok, world} = :boids.start_world(bounds: bounds, wrap: true)
+    space = :boids.space(world)
     :boids.set_obstacle(space, :left, {30, 30}, 5)
     :boids.set_obstacle(space, :right, {70, 25}, 4)
 
@@ -38,7 +38,7 @@ defmodule Terminal do
     IO.write([IO.ANSI.clear(), "\e[?25l"])
     for _ <- 1..(seconds * 20), do: frame(space)
     IO.write("\e[?25h")
-    :boids.stop_environment(space)
+    :boids.stop_world(space)
   end
 
   defp frame(space) do

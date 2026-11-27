@@ -1,6 +1,6 @@
 -module(boids_space).
 -moduledoc """
-The space of an environment: the ETS tables that tell where each boid
+The space of a world: the ETS tables that tell where each boid
 is.
 
 Each boid has one row with its position and its velocity. A grid of
@@ -11,8 +11,8 @@ the same time.
 
 A space is a map. Its process (the owner of the tables) makes it with
 `new/1`, and other processes get a copy of it. The process of an
-environment (`boids_environment`) is the owner for
-`boids:start_environment/1`, but a space also works alone, in one
+world (`boids_world`) is the owner for
+`boids:start_world/1`, but a space also works alone, in one
 process.
 
 With `wrap`, each side of the box `bounds` continues at the opposite
@@ -394,7 +394,7 @@ offset(_Space, From, To) ->
     boids_vec:sub(To, From).
 
 -doc """
-The facts of the environment that each boid perceives: the box, the
+The facts of the world that each boid perceives: the box, the
 obstacles and the scale of the time. `boids_boid:step/4` uses them.
 """.
 -spec env(space()) -> env().
@@ -449,7 +449,7 @@ set_time_scale(#{meta := Meta}, Scale) when is_number(Scale), Scale >= 0, Scale 
 -doc """
 Write the boids that the boid `From` has the relation `Label` to, and
 the same for the opposite direction of each of them. Only the owner of
-the space calls this function: `boids_environment` keeps the relations,
+the space calls this function: `boids_world` keeps the relations,
 and writes here what the boids read at each step.
 """.
 -spec relate(space(), out | in, {term(), term()}, [term()]) -> ok.

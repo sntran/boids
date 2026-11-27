@@ -2,12 +2,12 @@
 -moduledoc """
 The behavior of a boid: a process that senses, decides and acts.
 
-Each boid of an environment is a process with this behavior. At each
+Each boid of a world is a process with this behavior. At each
 step, the boid does three things:
 
 1. **Sense.** It finds the neighbors that it sees, and the obstacles.
 2. **Decide.** It calculates the force of its rules.
-3. **Act.** It moves, and it writes its new position to the environment.
+3. **Act.** It moves, and it writes its new position to the world.
 
 The library does these three things. Your module tells what the boid is,
 and it can add to each of them with a callback:
@@ -40,7 +40,7 @@ handle_call(energy, _From, Boid = #{state := #{energy := Energy}}) ->
 ```
 
 ```erlang
-{ok, Hawk} = gen_boid:start(Environment, hawk, {50, 50}),
+{ok, Hawk} = gen_boid:start(World, hawk, {50, 50}),
 10.0 = gen_boid:call(Hawk, energy).
 ```
 
@@ -66,7 +66,7 @@ follows its rules.
 
 | Callback | When it runs | It gives |
 |---|---|---|
-| `init(Args)` | The boid starts. | `{ok, Options}`: the options of the boid (`boids_boid`) and of its process (below), on top of the `defaults` of the environment. Or `ignore`, or `{stop, Reason}`. |
+| `init(Args)` | The boid starts. | `{ok, Options}`: the options of the boid (`boids_boid`) and of its process (below), on top of the `defaults` of the world. Or `ignore`, or `{stop, Reason}`. |
 | `handle_sense(Seen, Boid)` | At each step, after the library found what the boid perceives. | `{ok, Seen, Boid}` |
 | `handle_decide(Seen, Boid)` | At each step, before the forces of the rules. | `{ok, Boid}` |
 | `handle_act(Boid)` | At each step, after the movement. | `{ok, Boid}` |
@@ -90,13 +90,13 @@ of yours (a function) reads your keys.
 |---|---|---|
 | `tick` | `50` | The milliseconds between two steps, or `manual`: the boid moves only with `boids:step/2`. |
 | `max_dt` | `0.25`, or 4 ticks | The maximum of the seconds of one step. A late tick does not make a long step. The default is the larger of 0.25 second and 4 ticks. |
-| `search` | `1` | The boid searches the environment for its neighbors each `search` steps. In the other steps, it reads only the neighbors that it knows. |
+| `search` | `1` | The boid searches the world for its neighbors each `search` steps. In the other steps, it reads only the neighbors that it knows. |
 | `seed` | (none) | An integer: the seed of the random numbers of the process. |
 | `priority` | `low` | The priority of the process: `low` or `normal`. |
 | `hibernate` | `true` | The process hibernates between two steps. |
 
 The time of a step is the time that passed on the monotonic clock,
-multiplied by the scale of the time of the environment. With the scale
+multiplied by the scale of the time of the world. With the scale
 0, the boid does not move, and its callbacks run with `dt` 0. The
 process waits `tick` milliseconds after each step, so the time between
 two steps is a little more than `tick`.
@@ -104,21 +104,21 @@ two steps is a little more than `tick`.
 ## The neighbors that a boid knows
 
 The search of the neighbors is the largest part of a step. With `search
-=> 4`, a boid searches the environment at one step of 4. In the 3 other
+=> 4`, a boid searches the world at one step of 4. In the 3 other
 steps, it reads the rows of the neighbors that it found: it sees them
 where they are now, and it does not see a boid that came near after the
-search. An environment of such boids makes about 15 % more steps in a
+search. A world of such boids makes about 15 % more steps in a
 second.
 
 ## The supervisor of a boid
 
-`start/3` starts the boid below the supervisor of its environment. That
+`start/3` starts the boid below the supervisor of its world. That
 supervisor does not start a boid again after an error. `start_link/3`
 and `child_spec/1` are for a supervisor of yours, which starts the boid
 again as you tell it. Give an `id` in the options of `init/1`, so that
 the process that starts again is the same boid.
 
-## An environment with too much work
+## A world with too much work
 
 When the boids need more time than the computer has, each tick comes
 late. A boid whose tick comes late waits longer before its next tick, so
@@ -174,42 +174,42 @@ about 3 KB. Without it, the process holds about 100 KB.
 
 -define(KEYS, [tick, max_dt, search, seed, priority, hibernate]).
 
-%% The start has a high priority: an environment with too much work must not
+%% The start has a high priority: a world with too much work must not
 %% make its caller wait.
 %%
 %% A boid that hibernates has a heap for its boid only. Without a
 %% minimum size, the heap becomes larger 4 or 5 times in each step, each
 %% time with a collection of the garbage: a quarter of the time of a
-%% environment. This minimum (in words) is sufficient for the garbage of one
+%% world. This minimum (in words) is sufficient for the garbage of one
 %% step with about 15 neighbors. A boid that hibernates does not keep it.
 -define(GEN, [{spawn_opt, [{priority, high}, {min_heap_size, 4185}]}]).
 
 -doc """
-Start a boid in an environment, below the supervisor of that
-environment. The boid stops with its environment, and it does not start
+Start a boid in a world, below the supervisor of that
+world. The boid stops with its world, and it does not start
 again after an error.
 
-`Environment` is the process of the environment, its name, or its space
+`World` is the process of the world, its name, or its space
 (the map of `boids:space/1`). `Module` is the module of the boid, and
 `init/1` of that module gets `Args`.
 
 A bad option of `init/1` gives `{error, {bad_option, {Key, Value}}}`,
-and an id that is in the environment `{error, {exists, Id}}`.
+and an id that is in the world `{error, {exists, Id}}`.
 """.
--spec start(boids:environment(), module(), term()) -> {ok, pid()} | ignore | {error, term()}.
-start(Environment, Module, Args) ->
-    start(Environment, Module, Args, #{}).
+-spec start(boids:world(), module(), term()) -> {ok, pid()} | ignore | {error, term()}.
+start(World, Module, Args) ->
+    start(World, Module, Args, #{}).
 
 -doc """
 As `start/3`, with options for the process: a map, or a list of `{Key,
 Value}`. The option is `name`, a name for the process: an atom,
 `{global, Term}` or `{via, Module, Term}`.
 """.
--spec start(boids:environment(), module(), term(), start_options()) -> {ok, pid()} | ignore | {error, term()}.
-start(Environment, Module, Args, Options0) ->
+-spec start(boids:world(), module(), term(), start_options()) -> {ok, pid()} | ignore | {error, term()}.
+start(World, Module, Args, Options0) ->
     Options = start_options(Options0),
-    Space = boids:space(Environment),
-    start_child(boids_environment:boid_sup(Space), Space, Module, Args, Options).
+    Space = boids:space(World),
+    start_child(boids_world:boid_sup(Space), Space, Module, Args, Options).
 
 -doc false.
 start_child(Sup, Space, Module, Args, Options) ->
@@ -221,28 +221,28 @@ start_child(Sup, Space, Module, Args, Options) ->
     end.
 
 -doc """
-Start a boid in an environment, with a link to the caller: for a
-supervisor of yours. Give the name of the environment, and not its pid,
-so that the boid finds an environment that started again.
+Start a boid in a world, with a link to the caller: for a
+supervisor of yours. Give the name of the world, and not its pid,
+so that the boid finds a world that started again.
 
 A bad option of `init/1` gives `{error, {shutdown, {bad_option, {Key,
-Value}}}}`, and an id that is in the environment `{error, {shutdown,
+Value}}}}`, and an id that is in the world `{error, {shutdown,
 {exists, Id}}}`.
 """.
--spec start_link(boids:environment(), module(), term()) -> {ok, pid()} | ignore | {error, term()}.
-start_link(Environment, Module, Args) ->
-    start_link(Environment, Module, Args, #{}).
+-spec start_link(boids:world(), module(), term()) -> {ok, pid()} | ignore | {error, term()}.
+start_link(World, Module, Args) ->
+    start_link(World, Module, Args, #{}).
 
 -doc "As `start_link/3`, with the options of `start/4`.".
--spec start_link(boids:environment(), module(), term(), start_options()) -> {ok, pid()} | ignore | {error, term()}.
-start_link(Environment, Module, Args, Options0) ->
+-spec start_link(boids:world(), module(), term(), start_options()) -> {ok, pid()} | ignore | {error, term()}.
+start_link(World, Module, Args, Options0) ->
     case start_options(Options0) of
         #{name := Name} when is_atom(Name) ->
-            gen_server:start_link({local, Name}, ?MODULE, {Environment, Module, Args}, ?GEN);
+            gen_server:start_link({local, Name}, ?MODULE, {World, Module, Args}, ?GEN);
         #{name := Name} ->
-            gen_server:start_link(Name, ?MODULE, {Environment, Module, Args}, ?GEN);
+            gen_server:start_link(Name, ?MODULE, {World, Module, Args}, ?GEN);
         _ ->
-            gen_server:start_link(?MODULE, {Environment, Module, Args}, ?GEN)
+            gen_server:start_link(?MODULE, {World, Module, Args}, ?GEN)
     end.
 
 start_options(Options0) ->
@@ -252,24 +252,24 @@ start_options(Options0) ->
 
 -doc """
 The specification of a boid as a child of a supervisor of yours, from
-`{Environment, Module, Args}` or `{Environment, Module, Args, Options}`
+`{World, Module, Args}` or `{World, Module, Args, Options}`
 (see `start_link/4`).
 
 ```erlang
 {ok, {#{strategy => rest_for_one}, [
-    boids:child_spec(#{name => my_environment}),
-    gen_boid:child_spec({my_environment, hawk, {50, 50}})
+    boids:child_spec(#{name => my_world}),
+    gen_boid:child_spec({my_world, hawk, {50, 50}})
 ]}}
 ```
 
-In Elixir, the child is `{:gen_boid, {:my_environment, Hawk, {50, 50}}}`.
+In Elixir, the child is `{:gen_boid, {:my_world, Hawk, {50, 50}}}`.
 """.
--spec child_spec({boids:environment(), module(), term()} | {boids:environment(), module(), term(), start_options()}) ->
+-spec child_spec({boids:world(), module(), term()} | {boids:world(), module(), term(), start_options()}) ->
     supervisor:child_spec().
-child_spec({Environment, Module, Args}) ->
-    child_spec({Environment, Module, Args, #{}});
-child_spec({Environment, Module, Args, Options}) ->
-    #{id => {?MODULE, Module, Args}, start => {?MODULE, start_link, [Environment, Module, Args, Options]}}.
+child_spec({World, Module, Args}) ->
+    child_spec({World, Module, Args, #{}});
+child_spec({World, Module, Args, Options}) ->
+    #{id => {?MODULE, Module, Args}, start => {?MODULE, start_link, [World, Module, Args, Options]}}.
 
 -doc "Stop a boid: its process stops with the reason `normal`.".
 -spec stop(boid()) -> ok.
@@ -345,7 +345,7 @@ check(Key, Value) -> error({bad_option, {Key, Value}}).
 %% --- gen_server ------------------------------------------------------
 
 -doc false.
-init({Environment, Module, Args}) ->
+init({World, Module, Args}) ->
     %% A boid with no module (boids:add/2) has its options as arguments.
     Given =
         case Module of
@@ -355,7 +355,7 @@ init({Environment, Module, Args}) ->
     case Given of
         {ok, Opts} ->
             try
-                Space = #{defaults := Defaults} = boids:space(Environment),
+                Space = #{defaults := Defaults} = boids:space(World),
                 {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
                 {Space, Server, boids_boid:new(maps:merge(#{id => self()}, BoidOpts))}
             of
@@ -376,10 +376,10 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
     end,
     %% The tools that show processes show which boid this process is.
     proc_lib:set_label({boids, boid, Id}),
-    case boids_environment:join(Space, self(), (boids_boid:entry(Boid))#{kind => server}) of
+    case boids_world:join(Space, self(), (boids_boid:entry(Boid))#{kind => server}) of
         ok ->
             %% The first tick comes after a random part of the period, so
-            %% the boids of an environment do not all move at the same time.
+            %% the boids of a world do not all move at the same time.
             Due =
                 case Tick of
                     manual -> undefined;
@@ -396,7 +396,7 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
                 %% and the steps from that search.
                 known => [],
                 steps => 0,
-                %% What the rules use to find a boid of the environment.
+                %% What the rules use to find a boid of the world.
                 tools => #{
                     lookup => fun(Other) -> boids_space:lookup(Space, Other) end,
                     related => fun(From, Label) -> boids_space:related(Space, From, Label) end
@@ -473,7 +473,7 @@ exported(Module, Function, Arity) -> erlang:function_exported(Module, Function, 
 %% --- One step --------------------------------------------------------
 
 %% Sense and decide, then the movement, with no write to the
-%% environment: the result is the boid after the movement.
+%% world: the result is the boid after the movement.
 plan(State0 = #{space := Space, boid := Boid0 = #{id := Id}, mod := Module, tools := Tools}, Dt0) ->
     Env = #{time_scale := Scale} = boids_space:env(Space),
     Dt = Dt0 * Scale,
@@ -499,7 +499,7 @@ decide(Module, Seen, Boid) ->
         false -> {ok, Boid}
     end.
 
-%% The boid moved: its module acts, then the environment gets its row.
+%% The boid moved: its module acts, then the world gets its row.
 act(Moved = #{id := Id}, State = #{space := Space, mod := Module}) ->
     Acted =
         case exported(Module, handle_act, 1) of
@@ -538,7 +538,7 @@ result({noreply, Boid}, State) -> {noreply, keep(Boid, State)};
 result({stop, Reason, Reply, Boid}, State) -> {stop, Reason, Reply, State#{boid := Boid}};
 result({stop, Reason, Boid}, State) -> {stop, Reason, State#{boid := Boid}}.
 
-%% Keep the boid that a callback gave. When it changed, the environment gets
+%% Keep the boid that a callback gave. When it changed, the world gets
 %% its row, and a step that the boid calculated before is not good.
 keep(Boid, State = #{boid := Boid}) ->
     State;

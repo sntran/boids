@@ -559,7 +559,7 @@ defmodule BoidsBoidTest do
   end
 
   describe "avoid, contain and follow" do
-    test "avoid uses the obstacles of the environment" do
+    test "avoid uses the obstacles of the world" do
       obstacles = [%{id: :rock, pos: {10, 0}, radius: 2}]
       opts = %{pos: {0, 1}, vel: {5, 0}}
       body = body({0, 1}, {5, 0})
@@ -587,7 +587,7 @@ defmodule BoidsBoidTest do
                {0.0, 0.0}
     end
 
-    test "contain uses the box of the environment, or its own box" do
+    test "contain uses the box of the world, or its own box" do
       opts = %{pos: {1, 50}, vel: {-1, 0}}
       seen = %{bounds: {{0, 0}, {100, 100}}}
       assert force({:contain, 1}, opts, [], seen) == {11.0, 0.0}
@@ -656,7 +656,7 @@ defmodule BoidsBoidTest do
   end
 
   describe "a rule of your own" do
-    test "a function gets the boid, the neighbors and the environment" do
+    test "a function gets the boid, the neighbors and the world" do
       me = self()
 
       rule = fn boid, neighbors, seen ->

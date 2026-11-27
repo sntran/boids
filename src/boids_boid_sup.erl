@@ -2,8 +2,8 @@
 -moduledoc false.
 -behavior(supervisor).
 
-%% The supervisor of the boids of one environment. A boid that stops with an
-%% error does not start again: it goes from the environment, and the other
+%% The supervisor of the boids of one world. A boid that stops with an
+%% error does not start again: it goes from the world, and the other
 %% boids continue. A boid that has an error at each step would start
 %% again without end.
 
@@ -13,7 +13,7 @@ start_link() ->
     supervisor:start_link(?MODULE, []).
 
 init([]) ->
-    %% See boids_environment:init/1.
+    %% See boids_world:init/1.
     process_flag(priority, high),
     Boid = #{id => gen_boid, start => {gen_boid, start_link, []}, restart => temporary},
     {ok, {#{strategy => simple_one_for_one}, [Boid]}}.

@@ -1,7 +1,7 @@
 defmodule BoidsSite.Scene do
   @moduledoc """
-  A scene: one environment with its boids, which one visitor sees. A
-  module of a scene starts the environment, and tells how the page draws
+  A scene: one world with its boids, which one visitor sees. A
+  module of a scene starts the world, and tells how the page draws
   its boids.
 
   The site has a limit of the scenes at one time (`BOIDS_SCENES`, default
@@ -59,7 +59,7 @@ defmodule BoidsSite.Scene do
             :stop -> :ok
           end
 
-          :boids.stop_environment(scene.space)
+          :boids.stop_world(scene.space)
           :counters.sub(count, 1, 1)
         end)
         |> then(&{:ok, Map.merge(scene, %{module: module, guard: &1})})

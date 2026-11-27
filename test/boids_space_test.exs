@@ -481,7 +481,7 @@ defmodule BoidsSpaceTest do
     end
   end
 
-  describe "the environment" do
+  describe "the world" do
     setup do
       %{space: :boids_space.new(%{bounds: {{0, 0}, {50, 50}}})}
     end

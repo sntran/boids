@@ -50,14 +50,14 @@
     </div>
     <div>
       <h3>A shot sends a message</h3>
-      <p>A shot senses the rock that it touches, and sends <code>hit</code> to that process. The rock starts two smaller rocks, and stops. The environment removes a boid that stops.</p>
+      <p>A shot senses the rock that it touches, and sends <code>hit</code> to that process. The rock starts two smaller rocks, and stops. The world removes a boid that stops.</p>
     </div>
     <div>
       <h3>The drones have a relation</h3>
       <p>Each drone has the relation <code>guards</code> to its queen, and follows it. A drone that sees the ship changes its rules: it hunts the ship, and shoots bolts at it. The lines show the relations.</p>
     </div>
     <div>
-      <h3>The environment is a graph</h3>
+      <h3>The world is a graph</h3>
       <p>The number of swarms comes from <code>boids:graph/2</code> and <code>graph:components/1</code>, one time each second.</p>
     </div>
   </section>

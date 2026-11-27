@@ -17,7 +17,7 @@ defmodule BoidsSpecTest do
   # models of Space a little slower.
   @workers [workers: :auto]
 
-  describe "specs/Members.tla: the members of an environment" do
+  describe "specs/Members.tla: the members of a world" do
     test "a boid that runs has its row, and no row of a process that stopped stays" do
       assert {:ok, %{distinct_states: states}} = Checker.check(@members, @workers)
       assert states > 1000
@@ -28,7 +28,7 @@ defmodule BoidsSpecTest do
       assert states > 1000
     end
 
-    test "an environment that keeps the row of a process that stopped refuses the process that starts again" do
+    test "a world that keeps the row of a process that stopped refuses the process that starts again" do
       assert {:error, %{kind: :invariant, property: "Fair"}, _} =
                Checker.check(@members, config(@members, "Keep"))
     end
@@ -55,7 +55,7 @@ defmodule BoidsSpecTest do
                Checker.check(@space, config(@space, "Gap"))
     end
 
-    test "an environment that removes only the copy of the row leaves a copy of a boid that stopped in a write" do
+    test "a world that removes only the copy of the row leaves a copy of a boid that stopped in a write" do
       assert {:error, %{kind: :invariant, property: "Gone"}, _} =
                Checker.check(@space, config(@space, "Leak"))
     end
@@ -72,7 +72,7 @@ defmodule BoidsSpecTest do
       assert states > 1000
     end
 
-    test "a boid that moves when it calculates changes the environment for the next boid" do
+    test "a boid that moves when it calculates changes the world for the next boid" do
       assert {:error, %{kind: :invariant, property: "Quiet"}, _} =
                Checker.check(@step, config(@step, "OnePart"))
     end

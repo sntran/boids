@@ -214,7 +214,7 @@ defmodule BoidsSite.ScenesTest do
       assert bad.(%{"kinds" => [Map.put(@hawks, "shape", "star")]}) =~ "shape"
       assert bad.(%{"box" => [10, 10], "kinds" => [@hawks]}) =~ "sides of the box"
       assert bad.(%{"rocks" => [[1, 2]], "kinds" => [@hawks]}) =~ "rock is"
-      # A scene that the site refuses starts no environment.
+      # A scene that the site refuses starts no world.
       assert :counters.get(:persistent_term.get(BoidsSite.Scene), 1) == 0
     end
   end
