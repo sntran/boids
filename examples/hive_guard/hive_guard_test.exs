@@ -67,7 +67,7 @@ defmodule BoidsExamples.Games.HiveGuardTest do
   test "the zones are the path, the hive and the posts of the bees" do
     path = HiveGuard.zones()
     assert length(path) == length(HiveGuard.path())
-    assert List.last(path) |> Enum.at(4) == "warm"
+    assert List.last(path) |> Enum.slice(4, 2) == ["gold", "Hive"]
     [post] = HiveGuard.zones([{:scout, {20.0, 30.0}}]) -- path
     assert post == [18.5, 28.5, 21.5, 31.5, "cool"]
   end

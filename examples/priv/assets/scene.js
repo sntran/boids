@@ -379,8 +379,12 @@
       ctx.beginPath();
       ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h);
       ctx.fillStyle = c[z[4]] || c.cool;
-      ctx.globalAlpha = 0.16; ctx.fill();
-      ctx.globalAlpha = 0.45; ctx.strokeStyle = c[z[4]] || c.cool; ctx.lineWidth = 2; ctx.setLineDash([8, 6]); ctx.stroke(); ctx.setLineDash([]);
+      // A zone with a label is a place (a pen, an exit): it has a line of
+      // dashes. A zone with no label (a path, a post) has only a soft fill.
+      ctx.globalAlpha = z[5] ? 0.16 : 0.22; ctx.fill();
+      if (z[5]) {
+        ctx.globalAlpha = 0.45; ctx.strokeStyle = c[z[4]] || c.cool; ctx.lineWidth = 2; ctx.setLineDash([8, 6]); ctx.stroke(); ctx.setLineDash([]);
+      }
       ctx.globalAlpha = 1;
       if (z[5]) {
         ctx.fillStyle = c[z[4]] || c.cool; ctx.font = "600 " + Math.round(canvas.width / 55) + "px sans-serif";
@@ -471,8 +475,18 @@
           ctx.fillStyle = c.shade;
           ellipse(body * 0.12, body * 0.18, body * 0.75, body * 0.42, -boid.angle);
           ctx.fill();
+          ctx.save();
           if (!still[boid.kind.shape]) { ctx.rotate(-boid.angle); }
           sprite(body, now, phase, c[boid.kind.color] || c.ink, c, boid.size / 10);
+          ctx.restore();
+          // A kind with a badge shows the size of the boid as a number
+          // (for example the health of a large beetle).
+          if (boid.kind.badge && boid.size > 0) {
+            ctx.font = "700 " + Math.round(body * 0.7) + "px sans-serif";
+            ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.lineWidth = 3; ctx.strokeStyle = c.panel; ctx.strokeText(String(boid.size), 0, -body * 0.95);
+            ctx.fillStyle = c.ink; ctx.fillText(String(boid.size), 0, -body * 0.95);
+          }
         } else if (boid.kind.shape === "rock") {
           rock(boid.number, size * Math.max(boid.size, 1), now);
         } else if (boid.kind.shape === "dot") {

@@ -29,7 +29,7 @@ defmodule BoidsExamples.Games.HiveGuard do
   hive, the nectar, and the bees.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   alias BoidsExamples.Scene
 
@@ -481,11 +481,11 @@ defmodule BoidsExamples.Games.HiveGuard do
       @path
       |> Enum.zip(tl(@path))
       |> Enum.map(fn {{x1, y1}, {x2, y2}} ->
-        [min(x1, x2) - 3, min(y1, y2) - 3, max(x1, x2) + 3, max(y1, y2) + 3, "rock"]
+        [min(x1, x2) - 3, min(y1, y2) - 3, max(x1, x2) + 3, max(y1, y2) + 3, "fur"]
       end)
 
     {hx, hy} = @hive
-    hive = [hx - 6, hy - 8, min(hx + 6, @width), hy + 8, "warm"]
+    hive = [hx - 6, hy - 8, min(hx + 6, @width), hy + 8, "gold", "Hive"]
     posts = for {kind, {x, y}} <- guards, do: [x - 1.5, y - 1.5, x + 1.5, y + 1.5, color(kind)]
     path ++ [hive] ++ posts
   end
@@ -515,15 +515,15 @@ defmodule BoidsExamples.Games.HiveGuard do
   end
 
   @impl BoidsExamples.Scene
-  def header(_scene), do: %{zones: zones()}
+  def header(_scene), do: %{ground: "grass", zones: zones()}
 
   @impl BoidsExamples.Scene
   def kinds(_scene) do
     [
-      %{name: "beetles", shape: "dart", color: "ink", size: 1.3},
-      %{name: "large beetles", shape: "hex", color: "ink", size: 2.0},
-      %{name: "scouts", shape: "dart", color: "cool", size: 1.5},
-      %{name: "soldiers", shape: "dart", color: "warm", size: 2.1}
+      %{name: "beetles", shape: "beetle", color: "ink", size: 1.3},
+      %{name: "large beetles", shape: "beetle", color: "plum", size: 2.1, badge: true},
+      %{name: "scouts", shape: "bee", color: "gold", size: 1.4},
+      %{name: "soldiers", shape: "bee", color: "warm", size: 1.9}
     ]
   end
 
