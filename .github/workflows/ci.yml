@@ -81,6 +81,36 @@ jobs:
       - run: rebar3 xref
       - run: rebar3 dialyzer
 
+  # The site (site/): its tests, and the build of the file that runs on
+  # Cloudflare Workers.
+  site:
+    name: Site (tests, build of app.com)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+      - name: Get the dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Check the format
+        run: mix format --check-formatted
+      - name: Run the tests
+        run: mix test
+      - name: Build app.com
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
   # The tests with beam.com as the only tool: Erlang/OTP, Elixir, Mix, Hex
   # and rebar3 in one file (https://github.com/sntran/BEAM.com).
   beam-com:

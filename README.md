@@ -92,22 +92,27 @@ them.
 
 ## See a flock
 
-`examples/game.exs` is a small game in the browser: a ship in a field of
-rocks, and a queen with drones that hunt the ship.
+The directory [`site`](site) is a site for the library, made with the
+library: a home page with a flock, a game, and a playground.
 
 ```sh
-mix run examples/game.exs
+cd site
+mix deps.get
+mix run --no-halt
 ```
 
-Then open `http://localhost:4000`. The arrow keys turn the ship and give
-thrust, and the space bar shoots. With no key for 5 seconds, an
-autopilot flies the ship. The example has no dependency: it is a small
-server on top of the library, and a page that draws the boids.
+Then open `http://localhost:4000`.
 
-Each thing in the game is a boid, with a module that has the behavior
-`gen_boid`:
+- **The game** (`/game`) is a ship in a field of rocks, and a queen with
+  drones that hunt the ship. The arrow keys turn the ship and give
+  thrust, and the space bar shoots. Each thing in the game is a module
+  with the behavior `gen_boid`: see
+  [`site/lib/boids_site/scenes/game.ex`](site/lib/boids_site/scenes/game.ex).
+- **The playground** (`/playground`) starts a flock from a definition
+  that you write: kinds of boids, their rules, what they do when they
+  see another kind, and chains of boids that follow each other.
 
-| Boid | What it shows |
+| Boid of the game | What it shows |
 |---|---|
 | The ship | A boid that a person controls. Its force is a rule of its own, a function that reads the keys. The autopilot is a list of rules of the library. |
 | A rock | A message to a boid: a rock that gets `hit` starts two smaller rocks, and stops. The flock removes a boid that stops. |
@@ -115,10 +120,9 @@ Each thing in the game is a boid, with a module that has the behavior
 | A drone | A relation: each drone has the relation `guards` to its queen, and follows it. A drone that sees the ship changes its rules. |
 | The queen | A boid that starts other boids. |
 
-The number of the swarms of drones comes from `boids:graph/2`.
-
-`mix run examples/game.exs record run.html` writes a run of 40 seconds
-with the autopilot to one page, which plays with no server.
+The site also runs on Cloudflare Workers, with the BEAM in WebAssembly
+([beam.com](https://github.com/sntran/BEAM.com)): see
+[`site/README.md`](site/README.md).
 
 `examples/terminal.exs` draws a flock of birds and a hawk in the
 terminal, and `examples/speed.exs` measures the speed of a flock on your
@@ -548,7 +552,9 @@ CI (`.github/workflows/ci.yml`) runs for each push:
 - the tests on Erlang/OTP 29;
 - `rebar3 compile`, `rebar3 xref` and `rebar3 dialyzer`;
 - the tests with [beam.com](https://github.com/sntran/BEAM.com) as the
-  only tool.
+  only tool;
+- the tests of the site, and the build of its file for Cloudflare
+  Workers.
 
 ## License
 

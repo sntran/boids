@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boids</title>
+<meta name="description" content="Flocks of boids for Erlang and Elixir, with one process for each boid.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/" aria-current="page">Home</a>
+    <a href="/game">Game</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Flocks of boids for Erlang and Elixir</h1>
+    <p class="lead">Each boid is one process: an agent that senses its neighbors, decides, and acts, on its own clock. Many boids together move as a flock of birds, a school of fish or a crowd of people.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="600" role="img" aria-label="A flock of birds and a hawk that move around two rocks"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <section class="notes">
+    <div>
+      <h3>A boid is alone</h3>
+      <p>It reads its neighbors, calculates its force, moves, and writes its position. It sends no message to do this.</p>
+    </div>
+    <div>
+      <h3>A boid is yours</h3>
+      <p>A module with the behavior <code>gen_boid</code> tells what a boid perceives, what it decides and what it does. The hawk above hunts while it has energy, then it rests.</p>
+    </div>
+    <div>
+      <h3>A boid has relations</h3>
+      <p>A boid follows a leader, or fears an enemy. The flock keeps the relations as a graph.</p>
+    </div>
+    <div>
+      <h3>No dependency</h3>
+      <p>The library is Erlang code. It uses only <code>kernel</code> and <code>stdlib</code>, from Erlang/OTP 29.</p>
+    </div>
+  </section>
+
+  <section class="two">
+    <div>
+      <h2>A first flock</h2>
+      <pre>{ok, Flock} = boids:start_flock(#{
+    bounds =&gt; {{0, 0}, {100, 100}},
+    wrap =&gt; true
+}),
+{ok, Ids} = boids:populate(Flock, 200, #{}),
+boids:snapshot(Flock).</pre>
+      <p class="lead">The 200 boids now move in real time. <code>snapshot/1</code> reads their positions.</p>
+    </div>
+    <div>
+      <h2>A boid with a behavior</h2>
+      <pre>-module(hawk).
+-behavior(gen_boid).
+
+init(Pos) -&gt;
+    {ok, #{pos =&gt; Pos, group =&gt; hawks,
+           rules =&gt; [{wander, 1.0}]}}.
+
+handle_sense(Seen = #{neighbors := Near}, Boid) -&gt;
+    Prey = [N || N = #{group := birds} &lt;- Near],
+    {ok, Seen#{prey =&gt; Prey}, Boid}.
+
+handle_decide(#{prey := [_ | _]}, Boid) -&gt;
+    Hunt = [{pursue, 1.0, #{target =&gt; {group, birds}}}],
+    {ok, boids_boid:update(Boid, #{rules =&gt; Hunt})};
+handle_decide(_Seen, Boid) -&gt;
+    {ok, Boid}.</pre>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div>
+      <h3><a href="/game">Play the game</a></h3>
+      <p>A ship in a field of rocks, and a queen with drones that hunt it. Each thing is a boid with its own module.</p>
+    </div>
+    <div>
+      <h3><a href="/playground">Make your own boids</a></h3>
+      <p>Define kinds of boids and their rules, and see them move.</p>
+    </div>
+    <div>
+      <h3><a href="https://github.com/sntran/boids#readme">Read the documentation</a></h3>
+      <p>The rules, the callbacks, the relations, the flock as a graph, and the speed.</p>
+    </div>
+  </section>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var scene = Boids.scene({name: "flock", canvas: el("field"), readings: el("readings"), source: el("source")});
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+</script>
+</body>
+</html>

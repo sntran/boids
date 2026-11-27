@@ -1,0 +1,26 @@
+// The site of boids on Cloudflare Workers: npm run build, then npm run
+// deploy. The Worker needs no secret.
+{
+  "name": "boids",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  // The VM of the Durable Object serves all its requests.
+  "compatibility_flags": ["no_handle_cross_request_promise_resolution"],
+  // app.com goes into the Worker as bytes. Without this rule, the import of
+  // worker.js puts the bytes into the JavaScript.
+  "rules": [{ "type": "Data", "globs": ["**/*.com"], "fallthrough": true }],
+  // Stateful: one Durable Object runs the VM with the flocks of all the
+  // visitors.
+  "durable_objects": { "bindings": [{ "name": "BEAM", "class_name": "Beam" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Beam"] }],
+  // A new deploy makes a new snapshot of the VM.
+  "version_metadata": { "binding": "BEAM_VERSION" },
+  "vars": {
+    // The VM in WebAssembly has one processor and no JIT: the boids make
+    // 10 steps in a second, and the site shows fewer boids at one time.
+    "BOIDS_TICK": "100",
+    "BOIDS_SCENES": "4",
+    "BOIDS_MAX": "80",
+    "BEAM_MAX_WEBSOCKETS": "16"
+  }
+}

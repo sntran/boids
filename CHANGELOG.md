@@ -45,4 +45,6 @@ The first version. It needs Erlang/OTP 29.
   native checker of Accord, and replay a real flock process against
   `specs/Flock.tla`.
 - The processes of a flock and of a boid have a label.
-- A small game in the browser as an example (`examples/game.exs`).
+- A site for the library, made with the library (`site/`): a home page,
+  a game and a playground. It runs on a computer and on Cloudflare
+  Workers.

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boids Playground</title>
+<meta name="description" content="Define kinds of boids and their rules, and see them move.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/game">Game</a>
+    <a href="/playground" aria-current="page">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Playground</h1>
+    <p class="lead">Define kinds of boids and their rules, then run the scene. The server starts one process for each boid of your definition.</p>
+  </div>
+
+  <section class="two">
+    <div>
+      <div class="row">
+        <label for="preset">Start from</label>
+        <select id="preset"></select>
+        <button class="main" id="run" type="button">Run</button>
+      </div>
+      <textarea id="definition" spellcheck="false" aria-label="The definition of the scene, in JSON"></textarea>
+      <p class="error" id="error" role="alert"></p>
+    </div>
+    <div>
+      <div class="field">
+        <canvas id="field" width="1600" height="900" role="img" aria-label="The boids of your definition"></canvas>
+        <span class="source" id="source">Connecting</span>
+      </div>
+      <div class="strip">
+        <div class="readings" id="readings"></div>
+        <div class="controls">
+          <button id="pause" type="button" aria-pressed="false">Pause</button>
+          <button id="links" type="button" aria-pressed="true">Relations</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="two">
+    <div>
+      <h2>A scene</h2>
+      <div class="wide"><table>
+        <tr><th>Key</th><th>Value</th></tr>
+        <tr><td><code>box</code></td><td><code>[WIDTH, HEIGHT]</code>, each from 40 to 400</td></tr>
+        <tr><td><code>wrap</code></td><td><code>true</code>: each side continues at the opposite side</td></tr>
+        <tr><td><code>rocks</code></td><td>A list of <code>[X, Y, RADIUS]</code>. The rule <code>avoid</code> moves a boid around them.</td></tr>
+        <tr><td><code>kinds</code></td><td>The kinds of boids: 6 kinds at most. The server has a limit of the boids of a scene, and tells it.</td></tr>
+      </table></div>
+      <h2>A kind</h2>
+      <div class="wide"><table>
+        <tr><th>Key</th><th>Value</th></tr>
+        <tr><td><code>name</code></td><td>The group of its boids</td></tr>
+        <tr><td><code>count</code></td><td>The number of its boids</td></tr>
+        <tr><td><code>speed</code></td><td><code>[MINIMUM, MAXIMUM]</code></td></tr>
+        <tr><td><code>perception</code></td><td>The distance that a boid sees (default 10)</td></tr>
+        <tr><td><code>rules</code></td><td>A list of <code>[NAME, WEIGHT]</code> or <code>[NAME, WEIGHT, OPTIONS]</code></td></tr>
+        <tr><td><code>when</code></td><td>A list of <code>{"sees": GROUP, "rules": RULES}</code>: the rules of a boid while it sees a boid of that group</td></tr>
+        <tr><td><code>follows</code></td><td><code>"chain"</code>: each boid has the relation <code>follows</code> to the boid before it. The target <code>"leader"</code> of a rule is that boid.</td></tr>
+        <tr><td><code>combine</code></td><td><code>"priority"</code>: the first rules use the force first</td></tr>
+        <tr><td><code>shape</code>, <code>color</code>, <code>size</code></td><td><code>dart</code>, <code>dot</code>, <code>hex</code> or <code>rock</code>; <code>ink</code>, <code>warm</code>, <code>cool</code> or <code>rock</code>; a number</td></tr>
+      </table></div>
+    </div>
+    <div>
+      <h2>The rules</h2>
+      <div class="wide"><table>
+        <tr><th>Rule</th><th>Options</th></tr>
+        <tr><td><code>separation</code>, <code>alignment</code>, <code>cohesion</code></td><td><code>radius</code>, <code>groups</code> (<code>"all"</code>, <code>"same"</code> or a list of names)</td></tr>
+        <tr><td><code>seek</code>, <code>flee</code>, <code>arrive</code></td><td><code>target</code>; <code>radius</code> for <code>flee</code></td></tr>
+        <tr><td><code>pursue</code>, <code>evade</code></td><td><code>target</code>, <code>radius</code>, <code>max_time</code></td></tr>
+        <tr><td><code>leader</code></td><td><code>target</code>, <code>distance</code></td></tr>
+        <tr><td><code>wander</code></td><td><code>jitter</code>, <code>distance</code>, <code>radius</code></td></tr>
+        <tr><td><code>cruise</code></td><td><code>speed</code></td></tr>
+        <tr><td><code>avoid</code></td><td><code>lookahead</code>, <code>clearance</code></td></tr>
+        <tr><td><code>dodge</code></td><td><code>radius</code>, <code>horizon</code></td></tr>
+        <tr><td><code>contain</code></td><td><code>margin</code></td></tr>
+        <tr><td><code>follow</code></td><td><code>path</code> (a list of points), <code>loop</code></td></tr>
+        <tr><td><code>flow</code></td><td><code>field</code> (a vector <code>[X, Y]</code>)</td></tr>
+      </table></div>
+      <p class="lead">A target is a point <code>[X, Y]</code>, the name of a group (the nearest boid of that group), or <code>"leader"</code>.</p>
+      <p class="lead">A definition is data, and not code. For a boid with code of your own, write a module with the behavior <code>gen_boid</code>: see <a href="/game">the game</a>.</p>
+    </div>
+  </section>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var presets = {
+    "Birds and a hawk": {
+      box: [160, 90], wrap: true, rocks: [[40, 60, 7], [118, 30, 9]],
+      kinds: [
+        {name: "birds", count: 70, speed: [6, 12], combine: "priority", search: 2,
+         rules: [["avoid", 4, {lookahead: 1.5}], ["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1]],
+         when: [{sees: "hawks", rules: [["avoid", 4], ["evade", 3, {target: "hawks"}], ["separation", 1.5, {radius: 3}]]}]},
+        {name: "hawks", count: 2, speed: [4, 14], perception: 26, color: "warm", size: 2.4, combine: "priority",
+         rules: [["avoid", 4], ["wander", 1], ["cruise", 0.5, {speed: 5}]],
+         when: [{sees: "birds", rules: [["avoid", 4], ["pursue", 1, {target: "birds"}]]}]}
+      ]
+    },
+    "A convoy": {
+      box: [160, 90], wrap: true, rocks: [[80, 45, 10]],
+      kinds: [
+        {name: "convoy", count: 12, speed: [3, 11], follows: "chain", color: "cool", size: 1.6, combine: "priority",
+         rules: [["avoid", 4], ["leader", 2, {target: "leader", distance: 3}], ["separation", 1, {radius: 2}], ["wander", 0.6], ["cruise", 0.4, {speed: 7}]]},
+        {name: "birds", count: 40, speed: [6, 12],
+         rules: [["avoid", 4], ["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1]]}
+      ]
+    },
+    "Two tribes": {
+      box: [140, 80], wrap: true,
+      kinds: [
+        {name: "north", count: 40, speed: [5, 11], color: "cool",
+         rules: [["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1], ["separation", 2.5, {radius: 9, groups: ["south"]}]]},
+        {name: "south", count: 40, speed: [5, 11], color: "warm",
+         rules: [["separation", 1.5, {radius: 3}], ["alignment", 1], ["cohesion", 1], ["separation", 2.5, {radius: 9, groups: ["north"]}]]}
+      ]
+    },
+    "Fish in a tank": {
+      box: [120, 70], wrap: false,
+      kinds: [
+        {name: "fish", count: 60, speed: [4, 9], shape: "dart", color: "cool",
+         rules: [["contain", 3, {margin: 8}], ["separation", 1.5, {radius: 2.5}], ["alignment", 1], ["cohesion", 1], ["wander", 0.4]]},
+        {name: "food", count: 3, speed: [0, 1], shape: "dot", color: "warm", size: 1,
+         rules: [["contain", 3, {margin: 10}], ["wander", 1]]}
+      ]
+    }
+  };
+
+  var select = el("preset");
+  Object.keys(presets).forEach(function (name) { select.appendChild(document.createElement("option")).textContent = name; });
+  function show(name) { el("definition").value = JSON.stringify(presets[name], null, 2); }
+
+  function run() {
+    var definition;
+    el("error").textContent = "";
+    try {
+      definition = JSON.parse(el("definition").value);
+    } catch (error) {
+      el("error").textContent = "The definition is not JSON: " + error.message;
+      return;
+    }
+    if (!scene.send({scene: definition})) { el("error").textContent = "There is no connection to the server. Load the page again."; }
+  }
+
+  var scene = Boids.scene({
+    name: "playground", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onOpen: run,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  select.addEventListener("change", function () { show(select.value); run(); });
+  el("run").addEventListener("click", run);
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  Boids.toggle(el("links"), scene.links);
+  show(select.value);
+</script>
+</body>
+</html>
