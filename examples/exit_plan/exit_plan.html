@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exit Plan</title>
+<meta name="description" content="A puzzle made with boids: place pillars and signs in a full hall, then sound the alarm.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .field { touch-action: manipulation; }
+  .field.placing { cursor: crosshair; }
+  #marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .levels { display: flex; flex-wrap: wrap; gap: 8px; }
+  .levels button { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 64px; padding: 6px 10px; }
+  .levels button .stars { font-size: 0.8rem; letter-spacing: 1px; color: var(--warm); min-height: 1.1em; }
+  .levels button[aria-current="true"] { border-color: var(--ink); outline: 2px solid var(--ink); }
+  .levels button:disabled { opacity: 0.4; cursor: default; }
+  .tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .tools button { padding: 10px 8px; }
+  .counts { color: var(--muted); font-size: 0.9rem; font-family: var(--data); }
+  .result { border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .result .big { font-size: 1.8rem; letter-spacing: 4px; color: var(--warm); line-height: 1; }
+  .status { font-size: 1.02rem; min-height: 1.6em; }
+  .hint { color: var(--muted); font-size: 0.94rem; }
+  .main { font-size: 1rem; padding: 10px 22px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Exit Plan</h1>
+    <p class="lead">A hall is full of people. Before the alarm, place pillars and signs. Then sound the alarm: each person goes to a door. Bring all the people out fast, with no one hurt in the crush.</p>
+  </div>
+
+  <div class="levels" id="levels" aria-label="The levels"></div>
+
+  <section class="two">
+    <div>
+      <div class="field" id="box">
+        <canvas id="field" width="1600" height="960" role="img" aria-label="A hall with people, doors, pillars and signs"></canvas>
+        <canvas id="marks" width="1600" height="960" aria-hidden="true"></canvas>
+        <span class="source" id="source">Connecting</span>
+      </div>
+      <div class="strip">
+        <div class="readings" id="readings"></div>
+      </div>
+    </div>
+    <div>
+      <h2 id="name">Level 1</h2>
+      <p class="hint" id="hint"></p>
+      <p class="status" id="status" role="status">Make your plan, then sound the alarm.</p>
+
+      <div id="planning">
+        <h3>Your plan</h3>
+        <p class="hint">Choose a tool, then click in the hall.</p>
+        <div class="tools" role="group" aria-label="Tools">
+          <button type="button" data-tool="pillar" aria-pressed="true">Pillar</button>
+          <button type="button" data-tool="left" aria-pressed="false">Sign ←</button>
+          <button type="button" data-tool="right" aria-pressed="false">Sign →</button>
+          <button type="button" data-tool="up" aria-pressed="false">Sign ↑</button>
+          <button type="button" data-tool="down" aria-pressed="false">Sign ↓</button>
+          <button type="button" data-tool="remove" aria-pressed="false">Remove</button>
+        </div>
+        <p class="counts" id="counts"></p>
+        <div class="row">
+          <button class="main" id="alarm" type="button">Sound the alarm</button>
+          <button id="clear" type="button">Clear the plan</button>
+        </div>
+      </div>
+
+      <div class="result" id="result" hidden>
+        <div class="big" id="stars" aria-hidden="true"></div>
+        <p id="text"></p>
+        <div class="row">
+          <button class="main" id="next" type="button">Next level</button>
+          <button id="again" type="button">Try again with this plan</button>
+        </div>
+      </div>
+      <p class="error" id="error" role="alert"></p>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div>
+      <h3>A crowd is boids</h3>
+      <p>Each person is a <code>gen_boid</code> process. It goes to the nearest door, walks around the pillars, keeps a distance, and walks slower in a dense crowd. No person knows the plan of the crowd.</p>
+    </div>
+    <div>
+      <h3>Rules that are functions</h3>
+      <p>The walls, the signs and the doors are rules that are functions. Each one reads the hall, the doors and the signs from the state of the person.</p>
+    </div>
+    <div>
+      <h3>Obstacles while the world runs</h3>
+      <p>Each pillar is an obstacle of the world (<code>boids:set_obstacle/4</code>). The people see it at once with the rule <code>avoid</code>.</p>
+    </div>
+    <div>
+      <h3>A crush that no person makes</h3>
+      <p>No rule says "make a crush". It comes from many people that go to one door. A pillar a little in front of a door divides the crowd, and fewer people get hurt.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/exit_plan.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+(function () {
+  "use strict";
+  var el = function (id) { return document.getElementById(id); };
+  var box = [110, 66];
+  var tool = "pillar";
+  var last = null;
+  var level = 1;
+  var stars = {};
+
+  // The stars of each level stay in this browser.
+  try { stars = JSON.parse(localStorage.getItem("exit-plan-stars") || "{}") || {}; } catch (e) { stars = {}; }
+  function save() { try { localStorage.setItem("exit-plan-stars", JSON.stringify(stars)); } catch (e) { /* no storage */ } }
+
+  var scene = Boids.scene({
+    name: "exit-plan", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onStart: function (header) { box = header.box; },
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+
+  function starText(n) { return "★★★".slice(0, n) + "☆☆☆".slice(0, 3 - n); }
+
+  function levels(count) {
+    var list = el("levels");
+    if (list.children.length !== count) {
+      list.textContent = "";
+      for (var n = 1; n <= count; n++) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.dataset.level = n;
+        button.appendChild(document.createElement("span")).textContent = "Level " + n;
+        var s = button.appendChild(document.createElement("span"));
+        s.className = "stars";
+        button.addEventListener("click", function (event) {
+          scene.send({level: Number(event.currentTarget.dataset.level)});
+        });
+        list.appendChild(button);
+      }
+    }
+    Array.prototype.forEach.call(list.children, function (button) {
+      var n = Number(button.dataset.level);
+      // A level opens when the level before it has a star.
+      button.disabled = n > 1 && !stars[n - 1];
+      button.setAttribute("aria-current", n === level ? "true" : "false");
+      button.lastChild.textContent = stars[n] ? starText(stars[n]) : "";
+    });
+  }
+
+  function show(x) {
+    last = x;
+    level = x.level;
+    levels(x.levels);
+    el("name").textContent = "Level " + x.level + ": " + x.name;
+    el("hint").textContent = x.hint;
+    el("counts").textContent = "Pillars: " + x.pillars + " of " + x.pillars_most + "   Signs: " + x.signs.length + " of " + x.signs_most;
+    el("planning").hidden = x.phase !== "planning";
+    el("result").hidden = x.phase !== "done";
+    el("box").classList.toggle("placing", x.phase === "planning");
+
+    if (x.phase === "planning") {
+      el("status").textContent = "Make your plan, then sound the alarm. Goal: all out in " + Math.round(x.good) + " seconds, with no one hurt.";
+    } else if (x.phase === "leaving") {
+      el("status").textContent = "The alarm sounds. The people go out.";
+    } else if (x.result) {
+      el("status").textContent = "";
+      el("stars").textContent = starText(x.result.stars);
+      el("text").textContent = x.result.text;
+      el("next").hidden = x.result.stars === 0 || x.level >= x.levels;
+      // Keep the best stars of each level.
+      if (x.result.stars > (stars[x.level] || 0)) { stars[x.level] = x.result.stars; save(); levels(x.levels); }
+    }
+    marks(x);
+  }
+
+  // The arrows of the signs, over the hall.
+  function marks(x) {
+    var canvas = el("marks");
+    var ctx = canvas.getContext("2d");
+    canvas.width = 1600;
+    canvas.height = Math.round(1600 * box[1] / box[0]);
+    var scale = canvas.width / box[0];
+    var color = getComputedStyle(document.documentElement).getPropertyValue("--warm").trim();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    walls(ctx, x.doors, scale);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 4;
+    var dirs = {left: [-1, 0], right: [1, 0], up: [0, 1], down: [0, -1]};
+    x.signs.forEach(function (sign) {
+      var d = dirs[sign[2]];
+      var cx = sign[0] * scale, cy = (box[1] - sign[1]) * scale;
+      var len = 4.5 * scale;
+      var ex = cx + d[0] * len, ey = cy - d[1] * len;
+      ctx.beginPath();
+      ctx.moveTo(cx - d[0] * len, cy + d[1] * len);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(ex + d[0] * 18, ey - d[1] * 18);
+      ctx.lineTo(ex - d[1] * 14, ey - d[0] * 14);
+      ctx.lineTo(ex + d[1] * 14, ey + d[0] * 14);
+      ctx.closePath();
+      ctx.fill();
+    });
+  }
+
+  // The walls of the hall, with a gap and a mark for each door.
+  function walls(ctx, doors, scale) {
+    var style = getComputedStyle(document.documentElement);
+    var ink = style.getPropertyValue("--boid").trim();
+    var cool = style.getPropertyValue("--cool").trim();
+    var w = box[0] * scale, h = box[1] * scale, t = 8;
+    // Each wall: its two ends on the canvas, and the length of the wall in the world.
+    var sides = {
+      left: [[t / 2, h], [t / 2, 0], box[1]],
+      right: [[w - t / 2, h], [w - t / 2, 0], box[1]],
+      bottom: [[0, h - t / 2], [w, h - t / 2], box[0]],
+      top: [[0, t / 2], [w, t / 2], box[0]]
+    };
+    Object.keys(sides).forEach(function (side) {
+      var from = sides[side][0], to = sides[side][1], length = sides[side][2];
+      var point = function (along) {
+        var k = along / length;
+        return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
+      };
+      var gaps = doors.filter(function (d) { return d[0] === side; }).sort(function (a, b) { return a[1] - b[1]; });
+      var start = 0;
+      ctx.lineWidth = t;
+      ctx.strokeStyle = ink;
+      gaps.concat([[side, length, length]]).forEach(function (gap) {
+        var a = point(start), b = point(gap[1]);
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+        start = gap[2];
+      });
+      gaps.forEach(function (gap) {
+        var a = point(gap[1]), b = point(gap[2]);
+        ctx.strokeStyle = cool;
+        ctx.lineWidth = t * 1.5;
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+        ctx.lineWidth = t;
+        ctx.strokeStyle = ink;
+      });
+    });
+  }
+
+  // The tools of the plan.
+  Array.prototype.forEach.call(document.querySelectorAll("[data-tool]"), function (button) {
+    button.addEventListener("click", function () {
+      tool = button.dataset.tool;
+      Array.prototype.forEach.call(document.querySelectorAll("[data-tool]"), function (b) {
+        b.setAttribute("aria-pressed", b === button ? "true" : "false");
+      });
+    });
+  });
+
+  // A click in the hall puts the tool there.
+  el("box").addEventListener("click", function (event) {
+    if (!last || last.phase !== "planning") { return; }
+    var rect = el("field").getBoundingClientRect();
+    var x = Math.round((event.clientX - rect.left) / rect.width * box[0] * 10) / 10;
+    var y = Math.round((box[1] - (event.clientY - rect.top) / rect.height * box[1]) * 10) / 10;
+    if (tool === "pillar") { scene.send({pillar: [x, y]}); }
+    else if (tool === "remove") { scene.send({remove: [x, y]}); }
+    else { scene.send({sign: [x, y, tool]}); }
+  });
+
+  el("alarm").addEventListener("click", function () { scene.send({alarm: true}); });
+  el("clear").addEventListener("click", function () { scene.send({clear: true}); });
+  el("again").addEventListener("click", function () { scene.send({again: true}); });
+  el("next").addEventListener("click", function () { scene.send({next: true}); });
+})();
+</script>
+</body>
+</html>
