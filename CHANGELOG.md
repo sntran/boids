@@ -59,12 +59,26 @@ The first version. It needs Erlang/OTP 29.
   models with the native checker of Accord, and replay the process of a
   real world against `specs/Members.tla`.
 - The processes of a world and of a boid have a label.
-- A site for the library, made with the library (`examples/`): a home page,
-  a playground, and five games in `/showcases`. It runs on a computer
-  and on Cloudflare Workers.
-  - Rock Patrol: a ship in a field of rocks, and drones that hunt it.
+- Games made with the library, in `examples/`: each game is a folder
+  with its module, its page and its tests, and a site shows them in
+  `/showcases`, with a home page and a playground. The site runs on a
+  computer and on Cloudflare Workers. The tests of the examples start
+  each game with the library of the same commit.
+  - Rock Patrol: a ship in a field of rocks, and drones that hunt it and shoot at it.
   - Long Flight: the rules of a flock are the cards of the person.
-  - Flock Lab: puzzles that teach programming to kids with rule blocks,
-    and show the same program as Erlang and Elixir code.
+  - Last Seen: a thief in a market crowd, and police who know only what the witnesses saw.
+  - Flock Lab: puzzles that teach programming to kids with rule blocks, and show
+    the same program as Erlang and Elixir code.
   - Quiet Herd: a stealth game, where fear goes from deer to deer.
   - Living Land: species whose rule weights are genes.
+  - Night Fold: a sheepdog brings the sheep into the fold before the wolves come.
+  - Exit Plan: pillars and signs bring a crowd out of a hall with no crush.
+  - Hive Guard: guard bees that each guard a post against waves of beetles.
+  - Deep Reef: a predator against a school of fish that confuses it.
+  - Duckling Line: a line of ducklings, each one follows the one before it.
+  - Ant Trail: ants make a trail to food with a scent.
+  - Tag Yard: children play tag, and the child that is "it" changes.
+  - Firefly Field: fireflies that see each other come to flash together.
+- The examples draw animals (birds, sheep, dogs, wolves, fish, deer,
+  foxes, bees, beetles, ants, ducks, fireflies and people) on a ground
+  of grass, water, sand, a floor or night.

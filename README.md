@@ -98,8 +98,9 @@ gives the process of an id.
 ## See a flock
 
 The directory [`examples`](https://github.com/sntran/boids/tree/main/examples)
-is a site for the library, made with the library: a home page with a
-flock, five games in `/showcases`, and a playground.
+has games made with the library, and a site that shows them: a home page
+with a flock, 14 games in `/showcases`, and a playground. The site runs
+at <https://boids.mkfifo.workers.dev>.
 
 ```sh
 cd examples
@@ -109,45 +110,32 @@ mix run --no-halt
 
 Then open `http://localhost:4000`.
 
-- **Rock Patrol** (`/showcases/rock-patrol`) is a ship in a field of rocks, and a queen with
-  drones that hunt the ship and shoot at it. The arrow keys turn the
-  ship and give thrust, and the space bar shoots. Each thing in the game is a
-  module with the behavior `gen_boid`: see
-  [`examples/rock_patrol/rock_patrol.ex`](https://github.com/sntran/boids/blob/main/examples/rock_patrol/rock_patrol.ex).
-- **Long Flight** (`/showcases/long-flight`) is a game where you lead a flock through
-  lands with rocks and hawks, and never control a bird. After each land
-  you take a card (a rule, or a change of the birds), and you put the
-  rules of the flock in an order: with `combine => priority`, the order
-  is the priority. See
-  [`examples/long_flight/long_flight.ex`](https://github.com/sntran/boids/blob/main/examples/long_flight/long_flight.ex).
-- **Flock Lab** (`/showcases/flock-lab`) is a set of puzzles for young
-  programmers. A kid builds a program from blocks ("Go to the flag",
-  "Do not bump", "When I see the wolf"), presses Run, and sees if the
-  sheep reach the pen. Each level teaches one idea: steps, numbers,
-  order, conditions, relations. "Show the code" gives the same program
-  as Erlang and Elixir. See
-  [`examples/flock_lab/flock_lab.ex`](https://github.com/sntran/boids/blob/main/examples/flock_lab/flock_lab.ex).
-- **Quiet Herd** (`/showcases/quiet-herd`) is a stealth game: move a fox
-  across a field of deer. Each deer has a fear that changes its rules,
-  and fear goes from deer to deer. No code makes the wave of fear: it
-  comes from the rules of each deer. See
-  [`examples/quiet_herd/quiet_herd.ex`](https://github.com/sntran/boids/blob/main/examples/quiet_herd/quiet_herd.ex).
-- **Living Land** (`/showcases/living-land`) has grazers and hunters
-  whose rule weights, speed and sight are genes. An animal with enough
-  energy starts a young process with changed genes, and an animal with
-  no energy stops. You change the land, and see what evolves. See
-  [`examples/living_land/living_land.ex`](https://github.com/sntran/boids/blob/main/examples/living_land/living_land.ex).
-- **The playground** (`/playground`) starts boids from a definition
-  that you write: kinds of boids, their rules, what they do when they
-  see another kind, and chains of boids that follow each other.
+Each game is a folder of `examples/` with its module, its page and its
+tests. Each thing that moves in a game is a boid: a module with the
+behavior `gen_boid`. The tests of the examples start each game with the
+library of the same commit, so CI fails when a change of the library
+breaks a game.
 
-| Boid of the game | What it shows |
-|---|---|
-| The ship | A boid that a person controls. Its force is a rule of its own, a function that reads the keys. The autopilot is a list of rules of the library. |
-| A rock | A message to a boid: a rock that gets `hit` starts two smaller rocks, and stops. The world removes a boid that stops. |
-| A shot | A boid that lives for a short time. It senses the boid that it touches, and sends `hit` to that process. |
-| A drone | A relation: each drone has the relation `guards` to its queen, and follows it. A drone that sees the ship changes its rules, hunts the ship, and shoots bolts at it. |
-| The queen | A boid that starts other boids. |
+| Game | What you do | What it shows of the library |
+|---|---|---|
+| [Rock Patrol](https://github.com/sntran/boids/blob/main/examples/rock_patrol/rock_patrol.ex) | Fly a ship in a field of rocks. A queen makes drones, and the drones hunt you and shoot at you. | A boid that a person controls, a rule that is a function, messages between boids, boids that start other boids, and a relation from each drone to its queen. |
+| [Long Flight](https://github.com/sntran/boids/blob/main/examples/long_flight/long_flight.ex) | Lead a flock to the exit of each land, past rocks and hawks. You never control a bird: after each land, you take a card and put the rules of the flock in an order. | Rules as data that change while the boids run, the priority order of the rules, and relations to elders. |
+| [Last Seen](https://github.com/sntran/boids/blob/main/examples/last_seen/last_seen.ex) | Steal purses in a busy market, then leave through a gate. The police know only what the witnesses tell them: walk with the crowd, and change your coat. | Information that goes from boid to boid with delays (a witness, a call, officers that share), boids that act on old information, and a crowd as cover. |
+| [Flock Lab](https://github.com/sntran/boids/blob/main/examples/flock_lab/flock_lab.ex) | Puzzles for young programmers. Snap rule blocks together to tell the sheep what to do, then press Run and see if they reach the pen. | A program as a list of rules, an order, numbers that change a behavior, "when" blocks, and the same program as Erlang and Elixir code. |
+| [Quiet Herd](https://github.com/sntran/boids/blob/main/examples/quiet_herd/quiet_herd.ex) | Cross a field of grazing deer to reach the far side. A deer that sees you too near becomes afraid, and fear goes from deer to deer. Do not start a wave. | A state of each boid (its fear) that changes its rules, and a behavior of the herd that no boid has: the wave of fear. |
+| [Living Land](https://github.com/sntran/boids/blob/main/examples/living_land/living_land.ex) | Grazers eat, have young, and die. Their young get the weights of their rules with small changes. Hunters do the same. Change the land, and see what evolves. | Processes that are born and die all the time, rule weights as genes, and a world that a person changes while it runs. |
+| [Night Fold](https://github.com/sntran/boids/blob/main/examples/night_fold/night_fold.ex) | You are a sheepdog. Bring the scattered sheep into the fold before the night: they run from you, so come from the right side. At night, wolves take the sheep that are outside. | One boid that a person controls moves a whole flock, because each sheep flees from it, and the flock is something that no sheep is (flocks/2). |
+| [Exit Plan](https://github.com/sntran/boids/blob/main/examples/exit_plan/exit_plan.ex) | Place pillars and signs in a full hall, then sound the alarm. Bring all the people out fast, with no one hurt in the crush at the doors. | A crowd as boids, rules that are functions, obstacles that a person places while the world runs, and a crush that no person makes alone. |
+| [Hive Guard](https://github.com/sntran/boids/blob/main/examples/hive_guard/hive_guard.ex) | Waves of beetles walk along a path to your hive. Place guard bees with your nectar. Each bee guards its post, chases the beetles that it sees, and stings them. | The rule follow along a path, pursue of a group, messages that change the state of another boid, and boids that the person starts while the world runs. |
+| [Deep Reef](https://github.com/sntran/boids/blob/main/examples/deep_reef/deep_reef.ex) | Be the predator of a reef, and catch small fish for 90 seconds. A fish in a school is hard to catch, because its neighbors confuse you. Split a school, and catch the fish that stay alone. | A school that protects each fish with no fish that knows it: the confusion comes from the neighbors of the target. Also the rule evade, and the schools from flocks/2. |
+| [Duckling Line](https://github.com/sntran/boids/blob/main/examples/duckling_line/duckling_line.ex) | Swim as a mother duck, and collect the lost ducklings into a line behind you. Lead the line around the rocks and the pikes to the nest. Do not go too fast, or the line breaks. | Relations that the boids make and remove while the game runs, a chain of leaders, and the rule leader with the target {related, follows}. |
+| [Ant Trail](https://github.com/sntran/boids/blob/main/examples/ant_trail/ant_trail.ex) | Ants search for food, and an ant with food leaves a scent on its way home. Place food and rocks, and see the ants make a trail. | The rule flow with a field that is a function, a grid of scent that the boids read and write, and a trail that no ant knows. |
+| [Tag Yard](https://github.com/sntran/boids/blob/main/examples/tag_yard/tag_yard.ex) | Play tag in a school yard. Run from the child that is "it". When it touches you, you are it, and you must touch another child. | A state that goes from boid to boid by a message, rules that change with the state, and a role that moves through a crowd. |
+| [Firefly Field](https://github.com/sntran/boids/blob/main/examples/firefly_field/firefly_field.ex) | Lead groups of fireflies with a lantern at night. The fireflies that see each other flash together. Make all of them flash at one moment before the dawn. | Data that the neighbors see as a signal (the time of a flash), a sync that no firefly makes: it comes from small changes of each clock. Also the groups from flocks/2. |
+
+**The playground** (`/playground`) starts boids from a definition that
+you write: kinds of boids with their animals, their rules, what they do
+when they see another kind, and chains of boids that follow each other.
 
 The site also runs on Cloudflare Workers, with the BEAM in WebAssembly
 ([beam.com](https://github.com/sntran/BEAM.com)): see
