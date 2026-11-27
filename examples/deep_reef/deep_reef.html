@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deep Reef</title>
+<meta name="description" content="A game made with boids: be the predator of a reef, and learn why fish swim in schools.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .panel { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+  .panel .message { margin: 0; flex: 1 1 320px; min-width: 0; }
+  .panel .message b { font-family: var(--display); font-weight: 600; }
+  .panel[data-state="over"] { border-color: var(--warm); }
+  .stamina { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 0.88rem; }
+  .stamina .bar { width: 140px; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .stamina .bar i { display: block; height: 100%; width: 100%; background: var(--warm); transition: width 0.1s linear; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; display: inline-block; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+  .legend i.round { clip-path: none; border-radius: 50%; }
+  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+  .keys .pad button, .keys .burst { padding: 0; min-width: 0; height: 44px; }
+  .keys .burst { width: 80px; }
+  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Deep Reef</h1>
+    <p class="lead">You are the predator of a reef. Catch as many small fish as you can in 90 seconds. A fish in a school is hard to catch, because the fish near it confuse you. Split a school, and catch the fish that stay alone.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A predator fish that hunts schools of small fish between rocks"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <div class="legend" aria-label="What the colors show">
+    <span><i style="background: var(--boid)"></i>Small fish</span>
+    <span><i style="background: var(--warm)"></i>You, the predator</span>
+    <span><i class="round" style="background: var(--rock)"></i>Rocks</span>
+  </div>
+
+  <div class="panel" id="panel" data-state="hunting" aria-live="polite">
+    <p class="message" id="message">Swim to a fish and touch it. A fish with many fish near it is hard to catch.</p>
+    <div class="stamina"><span>Stamina</span><span class="bar"><i id="stamina"></i></span></div>
+    <button class="main" id="go" type="button" hidden>Hunt again</button>
+  </div>
+
+  <div class="keys">
+    <div class="pad">
+      <button type="button" data-key="up" aria-label="Up">Up</button>
+      <button type="button" data-key="left" aria-label="Left">Left</button>
+      <button type="button" data-key="down" aria-label="Down">Down</button>
+      <button type="button" data-key="right" aria-label="Right">Right</button>
+    </div>
+    <button class="burst" type="button" data-key="burst">Burst</button>
+    <p>Use the arrow keys or W, A, S and D to swim. Hold Shift for a burst: you swim fast while you have stamina. With no burst, the stamina comes back.</p>
+  </div>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>A school that protects each fish</h3>
+      <p>No fish knows how to protect the others. Each fish only stays near its neighbors. But when you touch a fish, the fish near it confuse you: with 8 fish near it, you catch it only 1 time in 10. The protection comes from the neighbors.</p>
+    </div>
+    <div>
+      <h3>The rule evade</h3>
+      <p>A fish that sees you moves away from where you will be, with the rule <code>evade</code> of the library. A fish that is alone has no neighbors to hide it.</p>
+    </div>
+    <div>
+      <h3>The schools are flocks</h3>
+      <p>Each second, <code>boids:flocks/2</code> gives the schools of the reef. A school of 3 fish or fewer swims to the nearest larger school.</p>
+    </div>
+    <div>
+      <h3>You are a boid</h3>
+      <p>The predator is a <code>gen_boid</code> process. Its force is a rule of its own: a function that reads your keys. When it catches a fish, it sends a message to the process of that fish, which stops.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/lib/boids_examples/games/deep_reef.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+
+  function show(more) {
+    el("panel").setAttribute("data-state", more.state);
+    el("stamina").style.width = more.stamina + "%";
+    var go = el("go");
+
+    if (more.state === "hunting") {
+      el("message").textContent = more.caught === 0
+        ? "Swim to a fish and touch it. A fish with many fish near it is hard to catch."
+        : "You caught " + more.caught + " fish" + ". Misses: " + more.misses + ". Look for a fish that is alone.";
+      go.hidden = true;
+    } else {
+      el("message").innerHTML = "<b>The time is over. You caught " + more.caught + " fish.</b> Misses: " + more.misses + ". Your best: " + more.best + ".";
+      go.hidden = false;
+    }
+  }
+
+  var scene = Boids.scene({
+    name: "deep-reef", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+
+  // The keys of the person go to the predator: a list of the keys that are down.
+  var down = {};
+  var codes = {
+    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
+    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+    ShiftLeft: "burst", ShiftRight: "burst"
+  };
+  function send() { scene.send({keys: Object.keys(down)}); }
+  function set(name, on) {
+    if (!name || !!down[name] === on) { return; }
+    if (on) { down[name] = true; } else { delete down[name]; }
+    var button = document.querySelector('[data-key="' + name + '"]');
+    if (button) { button.classList.toggle("down", on); }
+    send();
+  }
+  window.addEventListener("keydown", function (event) {
+    var name = codes[event.code];
+    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
+  });
+  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
+  // A window that loses the focus gets no keyup: the predator stops.
+  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+    var name = button.getAttribute("data-key");
+    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+      button.addEventListener(type, function () { set(name, false); });
+    });
+  });
+  // The predator gets the keys again each second, while a key is down.
+  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+</script>
+</body>
+</html>
