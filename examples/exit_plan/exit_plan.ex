@@ -24,7 +24,7 @@ defmodule BoidsExamples.Games.ExitPlan do
   signs of the person, the phase, and the counts.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do
@@ -648,15 +648,15 @@ defmodule BoidsExamples.Games.ExitPlan do
   @impl true
   def kinds(_scene) do
     [
-      %{name: "people", shape: "dart", color: "ink", size: 1.0},
-      %{name: "hurt", shape: "dot", color: "warm", size: 0.9}
+      %{name: "people", shape: "person", color: "cool", size: 1.1},
+      %{name: "hurt", shape: "person", color: "warm", size: 1.1}
     ]
   end
 
   @impl true
   def header(%{director: director}) do
     %{h: %{zones: zones}} = Director.status(director)
-    %{zones: zones}
+    %{ground: "floor", zones: zones}
   end
 
   @impl true

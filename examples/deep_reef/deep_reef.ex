@@ -23,7 +23,7 @@ defmodule BoidsExamples.Games.DeepReef do
   predator caught, the misses, and the new schools that come.
   """
   @behaviour BoidsExamples.Scene
-  @behaviour BoidsExamples.Game
+  use BoidsExamples.Game
 
   @impl BoidsExamples.Game
   def info do
@@ -531,10 +531,13 @@ defmodule BoidsExamples.Games.DeepReef do
   @impl true
   def kinds(_scene) do
     [
-      %{name: "fish", shape: "dart", color: "ink", size: 0.9},
-      %{name: "predator", shape: "ship", color: "warm", size: 2.6}
+      %{name: "fish", shape: "fish", color: "gold", size: 1.0},
+      %{name: "predator", shape: "shark", color: "rock", size: 2.8}
     ]
   end
+
+  @impl true
+  def header(_scene), do: %{ground: "water"}
 
   @impl true
   def look(_scene, %{group: :predator, data: %{heading: heading}}), do: {1, heading, 0}
