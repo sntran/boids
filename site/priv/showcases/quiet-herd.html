@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiet Herd</title>
+<meta name="description" content="A stealth game made with boids: cross a field of deer with no wave of fear.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .panel { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+  .panel .message { margin: 0; flex: 1 1 320px; min-width: 0; }
+  .panel .message b { font-family: var(--display); font-weight: 600; }
+  .panel .rating { font-family: var(--data); font-size: 0.78rem; letter-spacing: 0.07em; text-transform: uppercase; border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; }
+  .panel[data-state="caught"] { border-color: var(--warm); }
+  .panel[data-state="done"] { border-color: var(--cool); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; display: inline-block; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+  .legend i.box { clip-path: none; width: 14px; height: 10px; opacity: 0.4; }
+  .legend i.hex { clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); }
+  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+  .keys .pad button, .keys .run { padding: 0; min-width: 0; height: 44px; }
+  .keys .run { width: 80px; }
+  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Quiet Herd</h1>
+    <p class="lead">Move the fox across a field of grazing deer to the far side. A deer that sees you too near becomes afraid, and fear goes from deer to deer. When too many deer are afraid, the guards come for you.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A fox that moves across a field of deer, with grass and guards"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <div class="legend" aria-label="What the colors show">
+    <span><i style="background: var(--rock)"></i>Calm deer</span>
+    <span><i style="background: var(--boid)"></i>Alert deer</span>
+    <span><i style="background: var(--warm)"></i>Afraid deer</span>
+    <span><i style="background: var(--cool)"></i>The fox</span>
+    <span><i class="hex" style="background: var(--boid)"></i>Guards</span>
+    <span><i class="box" style="background: var(--cool)"></i>Tall grass</span>
+    <span><i class="box" style="background: var(--warm)"></i>The far side</span>
+  </div>
+
+  <div class="panel" id="panel" data-state="sneaking" aria-live="polite">
+    <p class="message" id="message">Reach the far side, on the right. Walk slowly, and use the tall grass.</p>
+    <span class="rating" id="rating" hidden></span>
+    <button class="main" id="go" type="button" hidden>Next field</button>
+  </div>
+
+  <div class="keys">
+    <div class="pad">
+      <button type="button" data-key="up" aria-label="Up">Up</button>
+      <button type="button" data-key="left" aria-label="Left">Left</button>
+      <button type="button" data-key="down" aria-label="Down">Down</button>
+      <button type="button" data-key="right" aria-label="Right">Right</button>
+    </div>
+    <button class="run" type="button" data-key="run">Run</button>
+    <p>Use the arrow keys or W, A, S and D to walk. Hold Shift to run: it is fast, but the deer notice you from far away. In the tall grass, a deer sees you only when you are very near.</p>
+  </div>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>A state in each boid</h3>
+      <p>Each deer is a <code>gen_boid</code> process with its fear as its state: calm, alert or afraid. Each level of fear has its own rules: a calm deer grazes, an alert deer stands and looks, and an afraid deer flees.</p>
+    </div>
+    <div>
+      <h3>A wave that no deer makes</h3>
+      <p>No code makes a wave. A deer looks only at its neighbors: it becomes afraid when it sees the fox too near, or afraid neighbors. The wave of fear comes from these local decisions.</p>
+    </div>
+    <div>
+      <h3>What the neighbors see</h3>
+      <p>The data of a boid is what its neighbors see. The fox shows its speed and if it is in the grass. A deer shows its fear and where the fear comes from. Each deer decides from that data.</p>
+    </div>
+    <div>
+      <h3>The fox is a boid that you control</h3>
+      <p>The force of the fox is a rule of its own: a function that reads your keys. The guards hunt it with the rule <code>pursue</code> of the library.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/site/lib/boids_site/scenes/herd.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var fields = 3;
+
+  function show(more) {
+    fields = more.fields || fields;
+    var panel = el("panel");
+    panel.setAttribute("data-state", more.state);
+    var rating = el("rating");
+    var go = el("go");
+
+    if (more.state === "sneaking") {
+      el("message").textContent = more.alarm
+        ? "The alarm rings: the guards come to the place of the fear. Hide in the grass, or go fast."
+        : "Field " + more.field + " of " + fields + ". Reach the far side, on the right. More than " + (more.limit - 1) + " afraid deer at one time ring the alarm.";
+      rating.hidden = true;
+      go.hidden = true;
+    } else if (more.state === "caught") {
+      el("message").innerHTML = "<b>A guard caught the fox.</b> Try field " + more.field + " again: walk slowly near the deer.";
+      rating.hidden = true;
+      go.hidden = false;
+      go.textContent = "Try again";
+    } else {
+      var last = more.field >= fields;
+      el("message").innerHTML = "<b>The fox crossed field " + more.field + " in " + more.time + " seconds.</b> The most afraid deer at one time: " + more.most + "." + (last ? " That was the last field." : "");
+      rating.hidden = false;
+      rating.textContent = more.most === 0 ? "Silent" : (more.alarms === 0 ? "Careful" : "Seen");
+      go.hidden = false;
+      go.textContent = last ? "Start again" : "Next field";
+    }
+  }
+
+  var scene = Boids.scene({
+    name: "herd", canvas: el("field"), readings: el("readings"), source: el("source"),
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+
+  // The keys of the person go to the fox: a list of the keys that are down.
+  var down = {};
+  var codes = {
+    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
+    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+    ShiftLeft: "run", ShiftRight: "run"
+  };
+  function send() { scene.send({keys: Object.keys(down)}); }
+  function set(name, on) {
+    if (!name || !!down[name] === on) { return; }
+    if (on) { down[name] = true; } else { delete down[name]; }
+    var button = document.querySelector('[data-key="' + name + '"]');
+    if (button) { button.classList.toggle("down", on); }
+    send();
+  }
+  window.addEventListener("keydown", function (event) {
+    var name = codes[event.code];
+    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
+  });
+  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
+  // A window that loses the focus gets no keyup: the fox stops.
+  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+    var name = button.getAttribute("data-key");
+    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+      button.addEventListener(type, function () { set(name, false); });
+    });
+  });
+  // The fox gets the keys again each second, while a key is down.
+  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+</script>
+</body>
+</html>
