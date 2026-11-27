@@ -508,17 +508,32 @@ count(World, local) ->
 Add an obstacle to a world, or change it: a circle (a sphere in
 3D) with the center `Pos`. The boids with the rule `avoid` move around
 it. Call this function again to move the obstacle.
+
+The process of the world writes the obstacle: this function sends it
+one message, and waits for its answer. A center or a radius that is not
+good gives the error `badarg`.
 """.
 -spec set_obstacle(world(), term(), vec(), number()) -> ok.
 set_obstacle(World, Id, Pos, Radius) ->
-    boids_space:set_obstacle(space(World), Id, Pos, Radius).
+    set(World, {obstacle, Id}, {Pos, Radius}).
 
 -doc "Remove an obstacle from a world.".
 -spec remove_obstacle(world(), term()) -> ok.
 remove_obstacle(World, Id) ->
-    boids_space:remove_obstacle(space(World), Id).
+    set(World, {obstacle, Id}, none).
 
--doc "The obstacles of a world: a list of maps with `id`, `pos` and `radius`.".
+%% Change a fact of a world. A bad value is an error of the caller.
+set(World, Key, Value) ->
+    case boids_world:set(World, Key, Value) of
+        ok -> ok;
+        {error, Reason} -> error(Reason)
+    end.
+
+-doc """
+All the obstacles of a world, in the order of their ids: a list of maps
+with `id`, `pos` and `radius`. A boid gets only the obstacles near it
+(`boids_boid:reach/1`).
+""".
 -spec obstacles(world()) -> [boids_space:obstacle()].
 obstacles(World) ->
     boids_space:obstacles(space(World)).
@@ -526,11 +541,12 @@ obstacles(World) ->
 -doc """
 Set the scale of the time of a world: the seconds of the boids
 for each second of the clock. With 0, the boids stop. The default is
-1.0.
+1.0. The process of the world writes it, as for `set_obstacle/4`. A
+scale that is not a number from 0 to 1.0e100 gives the error `badarg`.
 """.
 -spec set_time_scale(world(), number()) -> ok.
 set_time_scale(World, Scale) ->
-    boids_space:set_time_scale(space(World), Scale).
+    set(World, time_scale, Scale).
 
 %% --- The time --------------------------------------------------------
 
@@ -836,8 +852,8 @@ As `plan/3`, with the neighbors of `sense/2`: for a process that looks
 at its neighbors before the step.
 """.
 -spec plan(boids_space:space(), boids_boid:boid(), [boids_space:neighbor()], number()) -> boids_boid:boid().
-plan(Space, Boid, Neighbors, Dt) ->
-    Env = #{time_scale := Scale} = boids_space:env(Space),
+plan(Space, Boid = #{pos := Pos}, Neighbors, Dt) ->
+    Env = #{time_scale := Scale} = boids_space:env(Space, Pos, boids_boid:reach(Boid)),
     Lookup = fun(Id) -> boids_space:lookup(Space, Id) end,
     Related = fun(From, Label) -> boids_space:related(Space, From, Label) end,
     boids_boid:step(Boid, Neighbors, Env#{lookup => Lookup, related => Related}, Dt * Scale).

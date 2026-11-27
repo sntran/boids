@@ -1090,6 +1090,79 @@ defmodule BoidsTest do
       assert :boids.obstacles(world) == []
     end
 
+    test "the process of the world writes the facts of the world, one change after the other" do
+      world = world(cell_size: 1)
+      space = :boids.space(world)
+      # Only the process of the world can write these tables.
+      assert :ets.info(space.facts, :protection) == :protected
+      assert :ets.info(space.obstacle_cells, :protection) == :protected
+      assert :boids_world.set(world, :time_scale, 2) == :ok
+      assert :boids_world.set(space, {:obstacle, :rock}, {{5, 5}, 1}) == :ok
+      assert %{time_scale: 2, obstacles: [%{id: :rock, pos: {5, 5}, radius: 1}]} = :boids_space.env(space)
+      assert :boids_world.set(world, {:obstacle, :rock}, :none) == :ok
+      assert :boids.obstacles(world) == []
+
+      # Many processes move one obstacle at the same time. The world
+      # makes one change after the other: the index has only the cells
+      # of the last row.
+      tasks =
+        for n <- 1..8 do
+          Task.async(fn ->
+            for step <- 1..200, do: :ok = :boids.set_obstacle(world, :rock, {n * 10.5, step * 1.0}, 0.4)
+          end)
+        end
+
+      Task.await_many(tasks)
+      assert [%{id: :rock, pos: {x, y}}] = :boids.obstacles(world)
+      index = :ets.tab2list(space.obstacle_cells)
+
+      # The cells of a size that the rock touches.
+      touched = fn size ->
+        for i <- floor((x - 0.4) / size)..floor((x + 0.4) / size),
+            j <- floor((y - 0.4) / size)..floor((y + 0.4) / size),
+            do: {i, j}
+      end
+
+      assert Enum.sort(for {cell, :rock} <- index, not match?({:coarse, _}, cell), do: cell) == touched.(1)
+      assert Enum.sort(for {{:coarse, cell}, :rock} <- index, do: cell) == touched.(8)
+
+      assert [%{id: :rock}] = :boids_space.obstacles(space, {x, y}, 0)
+    end
+
+    test "a bad value of a fact is an error of the caller, and the world continues" do
+      world = world()
+      assert_raise ArgumentError, fn -> :boids.set_time_scale(world, -1) end
+      assert_raise ArgumentError, fn -> :boids.set_time_scale(world, :fast) end
+      assert_raise ArgumentError, fn -> :boids.set_obstacle(world, :rock, {1, 2}, -1) end
+      assert :boids_world.set(world, {:obstacle, :rock}, :there) == {:error, :badarg}
+      assert :boids_world.set(world, :weather, :rain) == {:error, :badarg}
+      assert Process.alive?(world)
+      assert :boids.obstacles(world) == []
+      assert :boids_space.env(:boids.space(world)).time_scale == 1.0
+    end
+
+    test "a read finds an obstacle one time while the process of the world moves it" do
+      world = world(cell_size: 1)
+      space = :boids.space(world)
+      # Many obstacles far away: a read uses the cells.
+      for id <- 1..100, do: :ok = :boids.set_obstacle(world, id, {id * 1.0, -20.0}, 0.4)
+      :ok = :boids.set_obstacle(world, :rock, {0.5, 0.5}, 0.4)
+
+      mover =
+        spawn_link(fn ->
+          Stream.cycle([{0.5, 0.5}, {3.5, 0.5}, {3.5, 3.5}, {0.5, 3.5}])
+          |> Enum.each(fn pos -> :ok = :boids.set_obstacle(world, :rock, pos, 0.4) end)
+        end)
+
+      # This process reads with no message, as a boid does.
+      results =
+        for _ <- 1..20_000, do: Enum.count(:boids_space.obstacles(space, {2, 2}, 3), &(&1.id == :rock))
+
+      Process.unlink(mover)
+      Process.exit(mover, :kill)
+      assert Enum.frequencies(results) == %{1 => 20_000}
+    end
+
     test "a boid with the rule avoid moves around an obstacle" do
       world = world()
       :boids.set_obstacle(world, :rock, {30, 0}, 5)

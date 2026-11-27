@@ -52,10 +52,25 @@ The first version. It needs Erlang/OTP 29.
   for tests and for simulations that do not follow the clock.
 - A boid that stops with an error does not start again, so a boid with
   an error at each step cannot stop its world.
+- The obstacles are in an index of cells, as the boids. A boid gets only
+  the obstacles that it can reach (`boids_boid:reach/1`), so an obstacle
+  far from the boids costs almost nothing: with 1,000 boids and 400
+  obstacles, a step takes about 14 ms, and it took 128 ms before. This
+  is a change: the key `obstacles` of `Seen` has only these obstacles,
+  not all the obstacles of the world. `boids:obstacles/1` and
+  `boids_space:env/1` continue to give all of them. A read finds an
+  obstacle that moves one time (`boids_space:obstacles/3`).
+- Only the process of a world writes the obstacles and the scale of the
+  time (`boids_world:set/3`): `boids:set_obstacle/4`,
+  `boids:remove_obstacle/2` and `boids:set_time_scale/2` send it one
+  message, and the boids read with no message. This is a change: with
+  the space of a world as the argument, these three functions wrote to
+  the tables with no message before. A bad scale of the time now gives
+  the error `badarg`.
 - Specifications of the flows in TLA+ (`specs/`, `docs/specs.md`): the
-  members of a world, a write against a read of its space, the step in
-  two parts, and the move of a boid to another node, on two nodes and
-  on three nodes. The tests check the models and the fault
+  members of a world, a write against a read of its space (of the boids
+  and of the obstacles), the step in two parts, and the move of a boid
+  to another node, on two nodes and on three nodes. The tests check the models and the fault
   models with the native checker of Accord, and replay the process of a
   real world against `specs/Members.tla`.
 - The processes of a world and of a boid have a label.

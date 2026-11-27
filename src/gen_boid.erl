@@ -79,8 +79,9 @@ Each callback can also give `{stop, Reason, Boid}`. `handle_call/3` can
 give `{stop, Reason, Reply, Boid}`.
 
 `Seen` is a map with what the boid perceives in this step: `neighbors`
-(the boids that it sees, the nearest first), `obstacles`, `bounds`,
-`wrap`, and `dt` (the seconds of the step). `handle_sense/2` can add
+(the boids that it sees, the nearest first), `obstacles` (the obstacles
+to the distance `boids_boid:reach/1`), `bounds`, `wrap`, and `dt` (the
+seconds of the step). `handle_sense/2` can add
 keys of yours, or change `neighbors`. The rules get `Seen` too, so a rule
 of yours (a function) reads your keys.
 
@@ -547,8 +548,8 @@ exported(Module, Function, Arity) -> erlang:function_exported(Module, Function, 
 
 %% Sense and decide, then the movement, with no write to the
 %% world: the result is the boid after the movement.
-plan(State0 = #{space := Space, boid := Boid0 = #{id := Id}, mod := Module, tools := Tools}, Dt0) ->
-    Env = #{time_scale := Scale} = boids_space:env(Space),
+plan(State0 = #{space := Space, boid := Boid0 = #{id := Id, pos := Pos}, mod := Module, tools := Tools}, Dt0) ->
+    Env = #{time_scale := Scale} = boids_space:env(Space, Pos, boids_boid:reach(Boid0)),
     Dt = Dt0 * Scale,
     {Neighbors, State} = look(State0),
     Seen0 = maps:merge(Env, Tools#{neighbors => Neighbors, dt => Dt}),

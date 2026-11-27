@@ -26,7 +26,7 @@ world to the design.
 | Specification | The flow | The code |
 |---|---|---|
 | `specs/Members.tla` | The members of a world: a process asks for the row of an id, the world watches it, and the row goes when the process stops, leaves, or is removed. | `boids_world`, `boids:add/2`, `boids:remove/2`, `boids:join/2`, `boids:leave/2` |
-| `specs/Space.tla` | A write of a row against a read of the grid. | `boids_space:put/2`, `boids_space:near/3` |
+| `specs/Space.tla` | A write of a row against a read of the grid, and a write of an obstacle against a read of the obstacles near a boid. | `boids_space:put/2`, `boids_space:near/3`, `boids_world:set/3`, `boids_space:set_obstacle/4`, `boids_space:obstacles/3` |
 | `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 | `specs/Move.tla` | The move of a boid to another node of its world. | `gen_boid` (`settle`, `adopt/2`), `boids_world` (the join of a boid that comes, `moved/3`) |
 | `specs/MoveMany.tla` | The same move in a world on three nodes: a boid with a process on each node, and a decision for two processes at a time. | `boids_world` (`adopt/5`, the messages `census`, `claim` and `yield`) |
@@ -112,6 +112,55 @@ the order of `MCSpaceGap.cfg`. The first version of `remove/2` was
 `MCSpaceLeak.cfg`: a review found copies in the grid after the kill of
 boids that wrote at that moment. The row now keeps the copy before its
 last write, and `remove/2` removes the two copies.
+
+#### The obstacles
+
+The second part of `Space.tla` has the obstacles. The constants: the
+obstacles (`Obstacles`), the processes that write them (`Writers`), the
+writes of each writer (`Moves`, a bound of the model), and a guard for a
+fault model. Each obstacle has a row, and an index has the cell of each
+obstacle (in the code, each cell that it touches). In the models of the
+boids, there is no obstacle, and in the models of the obstacles, no
+boid.
+
+Only the owner of the space writes the obstacles. In a world, the owner
+is the process of the world, and each change is a message to it
+(`boids_world:set/3`). So the library has one writer, and its writes
+come one after the other. The tables of the obstacles are protected:
+another process cannot write them. When the process of the world stops,
+its tables go with it, so no write stays in its middle. The scale of
+the time has the same writer. It is one row, so it needs no
+specification: a read sees it before or after a write.
+
+| Action | When it can occur | In the code |
+|---|---|---|
+| `Get(w, o, c)` | The writer does not write: it gets a change, the obstacle `o` moves to the cell `c`. | the next message `{set, {obstacle, Id}, Value}` of the process of the world |
+| `Open(w)` | A new version, and the read of the row. | `ets:update_counter/3`, `ets:lookup/2` |
+| `AddCell(w)` | The new cell goes into the index. | `ets:insert/2` |
+| `MoveRow(w)` | The row changes. | `ets:insert/2` |
+| `DropCell(w)` | The old cell goes from the index. | `ets:delete_object/2` |
+| `Close(w)` | A new version. | `ets:update_counter/3` |
+| `Look` | A read starts. With a write that runs, it reads all the rows. | `obstacles/3`: the version is odd |
+| `LookAt(c)` | The reader reads the obstacles of the cell `c`. | one `ets:lookup/2` |
+| `Check` | Each cell is read. With a new version, the reader reads all the rows. | the second read of the version |
+| `LookAll` | The reader reads all the rows: each obstacle one time. | `ets:match_object/2` |
+
+| Invariant or property | What it says | The fault that it stops |
+|---|---|---|
+| `Exact` | A read finds each obstacle one time, also an obstacle that moves during the read. | A boid that does not see a rock that moves, and goes into it. |
+| `Indexed` | At each moment, the index has the cell of the row of each obstacle. | An obstacle that no boid sees again. |
+| `Clean` | When no write runs, the index has only the cells of the rows. | An index that grows with each move. |
+| `ReadsObstacles` | The read ends. | |
+
+The small models: `MCSpaceObstacles.cfg` has two obstacles, and one
+writer that moves them two times in all. `MCSpaceObstaclesLong.cfg` has
+one writer that moves an obstacle three times during one read.
+`MCSpaceTwoWriters.cfg` has two writers: `Indexed` violated (two writes
+of one obstacle at the same time remove the cell of the row). That is
+why only one process writes the obstacles. `MCSpaceNoCheck.cfg` has a
+reader that does not check the version: `Exact` violated (the reader
+reads the new cell before the obstacle comes, and the old cell after it
+goes).
 
 ### `specs/Step.tla`
 
@@ -374,6 +423,11 @@ join, the process of the row stopped, or not. The result is `:ok`,
   it knows, one row at a time. `Space.tla` is about the read of the
   grid. A read of one row sees the row before or after a write, and
   never a part of it.
+- In `Space.tla`, an obstacle is in one cell. In the code, it is in each
+  cell that it touches. The read of all the rows of the obstacles is one
+  step of the model: the code uses a read of an ETS table of the kind
+  `set`, which gets each row one time, also a row that a write changes
+  during the read.
 
 ## How to run the checks
 
@@ -383,6 +437,7 @@ mix test test/boids_spec_test.exs test/boids_members_spec_test.exs
 ```
 
 A change of `boids_world`, of `boids_space:put/2` and `near/3`, of the
-two parts of `boids:step/2`, or of the move of a boid to another node
+writes and the reads of the obstacles, of the two parts of
+`boids:step/2`, or of the move of a boid to another node
 changes its specification in the same commit, and the tests of the
 models and the replay must pass.

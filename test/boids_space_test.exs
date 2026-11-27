@@ -21,7 +21,7 @@ defmodule BoidsSpaceTest do
       assert %{cell_size: 10.0, bounds: :undefined, wrap: false, defaults: %{}} = space
       assert space.owner == self()
 
-      for table <- [space.rows, space.grid, space.meta, space.links],
+      for table <- [space.rows, space.grid, space.meta, space.links, space.facts, space.obstacle_cells],
           do: assert(:ets.info(table, :owner) == self())
 
       assert :boids_space.count(space) == 0
@@ -537,13 +537,220 @@ defmodule BoidsSpaceTest do
       assert :boids_space.obstacles(space) == []
     end
 
+    test "env/3 gives the obstacles near a point, and env/1 all the obstacles", %{space: space} do
+      :boids_space.set_obstacle(space, :near, {12, 10}, 1)
+      :boids_space.set_obstacle(space, :far, {40, 40}, 1)
+
+      assert %{obstacles: [%{id: :near}], bounds: {{0, 0}, {50, 50}}, time_scale: 1.0} =
+               :boids_space.env(space, {10, 10}, 3)
+
+      assert [%{id: :far}, %{id: :near}] = :boids_space.env(space).obstacles
+    end
+
     test "set_time_scale/2 sets the scale of the time", %{space: space} do
       assert :boids_space.set_time_scale(space, 0) == :ok
       assert :boids_space.env(space).time_scale == 0
       assert :boids_space.set_time_scale(space, 86_400.0) == :ok
       assert :boids_space.env(space).time_scale == 86_400.0
-      assert_raise FunctionClauseError, fn -> :boids_space.set_time_scale(space, -1) end
-      assert_raise FunctionClauseError, fn -> :boids_space.set_time_scale(space, 1.0e200) end
+      assert_raise ArgumentError, fn -> :boids_space.set_time_scale(space, -1) end
+      assert_raise ArgumentError, fn -> :boids_space.set_time_scale(space, 1.0e200) end
+      assert_raise ArgumentError, fn -> :boids_space.set_time_scale(space, :fast) end
+      assert :boids_space.env(space).time_scale == 86_400.0
+    end
+  end
+
+  describe "the obstacles near a point" do
+    # The obstacles to the distance, with a read of all the obstacles.
+    defp brute_obstacles(space, pos, reach) do
+      for o = %{pos: at, radius: radius} <- :boids_space.obstacles(space),
+          tuple_size(at) == tuple_size(pos),
+          :boids_vec.norm(:boids_space.offset(space, pos, at)) <= reach + radius,
+          do: o
+    end
+
+    # The rows of the index of an obstacle: its cells, or [:large]. Its
+    # coarse cells are apart.
+    defp cells(space, id),
+      do:
+        Enum.sort(
+          for {cell, ^id} <- :ets.tab2list(space.obstacle_cells), not match?({:coarse, _}, cell), do: cell
+        )
+
+    defp coarse(space, id),
+      do: Enum.sort(for {{:coarse, cell}, ^id} <- :ets.tab2list(space.obstacle_cells), do: cell)
+
+    test "gives the obstacles to the distance, also one with its center in a far cell" do
+      space = :boids_space.new(%{cell_size: 2})
+      # The center is 20 away, and the edge 5 away.
+      :boids_space.set_obstacle(space, :hill, {20, 0}, 15)
+      :boids_space.set_obstacle(space, :rock, {1, 1}, 0.5)
+      :boids_space.set_obstacle(space, :far, {100, 100}, 1)
+      assert [%{id: :hill}, %{id: :rock}] = :boids_space.obstacles(space, {0, 0}, 6)
+      assert [%{id: :rock}] = :boids_space.obstacles(space, {0, 0}, 4)
+      assert :boids_space.obstacles(space, {-50, -50}, 4) == []
+      # The obstacles are in the order of their ids, as in obstacles/1.
+      assert :boids_space.obstacles(space, {0, 0}, 1000) == :boids_space.obstacles(space)
+    end
+
+    test "an obstacle larger than a cell is in each cell that it touches" do
+      space = :boids_space.new(%{cell_size: 1})
+      :boids_space.set_obstacle(space, :pond, {0.5, 0.5}, 10)
+      assert length(cells(space, :pond)) == 21 * 21
+      assert [%{id: :pond}] = :boids_space.obstacles(space, {10.4, 0.5}, 0.1)
+      assert :boids_space.obstacles(space, {11, 0.5}, 0.1) == []
+    end
+
+    test "an obstacle larger than 1,024 cells is a large obstacle, which each read gets" do
+      space = :boids_space.new(%{cell_size: 1})
+      :boids_space.set_obstacle(space, :sea, {0, 0}, 100)
+      for id <- 1..50, do: :boids_space.set_obstacle(space, id, {id * 10, 500}, 1)
+      assert cells(space, :sea) == [:large]
+      assert [%{id: :sea}] = :boids_space.obstacles(space, {0, 101}, 2)
+      assert :boids_space.obstacles(space, {0, 104}, 2) == []
+      # A large obstacle that becomes small goes into its cells.
+      :boids_space.set_obstacle(space, :sea, {0, 0}, 1)
+      assert length(cells(space, :sea)) == 9
+      assert :ets.lookup(space.obstacle_cells, :large) == []
+    end
+
+    test "an obstacle that moves goes to its new cells, and leaves its old cells" do
+      space = :boids_space.new(%{cell_size: 10})
+      :boids_space.set_obstacle(space, :rock, {5, 5}, 1)
+      assert cells(space, :rock) == [{0, 0}]
+      :boids_space.set_obstacle(space, :rock, {15, 5}, 6)
+      # From {9, -1} to {21, 11}.
+      assert cells(space, :rock) == for(x <- 0..2, y <- -1..1, do: {x, y})
+      # A coarse cell is 8 cells long on each side.
+      assert coarse(space, :rock) == [{0, -1}, {0, 0}]
+      :boids_space.set_obstacle(space, :rock, {55, 55}, 1)
+      assert cells(space, :rock) == [{5, 5}]
+      assert coarse(space, :rock) == [{0, 0}]
+      assert :boids_space.obstacles(space, {5, 5}, 5) == []
+      assert [%{id: :rock, pos: {55, 55}}] = :boids_space.obstacles(space, {50, 50}, 7)
+      :boids_space.remove_obstacle(space, :rock)
+      assert :ets.tab2list(space.obstacle_cells) == []
+      assert :boids_space.obstacles(space, {50, 50}, 7) == []
+    end
+
+    test "with wrap, a point gets an obstacle across a side" do
+      space = :boids_space.new(%{cell_size: 5, bounds: {{0, 0}, {100, 100}}, wrap: true})
+      :boids_space.set_obstacle(space, :rock, {98, 50}, 1)
+      :boids_space.set_obstacle(space, :pole, {50, 1}, 2)
+      assert [%{id: :rock}] = :boids_space.obstacles(space, {1, 50}, 3)
+      assert [%{id: :pole}] = :boids_space.obstacles(space, {50, 98}, 2)
+      assert :boids_space.obstacles(space, {50, 50}, 10) == []
+      # An obstacle that crosses a side is in the cells of the two sides.
+      assert cells(space, :pole) == [{9, 0}, {9, 19}, {10, 0}, {10, 19}]
+    end
+
+    test "an obstacle with a center of another size is not in the result" do
+      space = :boids_space.new(%{})
+      :boids_space.set_obstacle(space, :ball, {1, 1, 1}, 1)
+      :boids_space.set_obstacle(space, :rock, {1, 1}, 1)
+      assert [%{id: :rock}] = :boids_space.obstacles(space, {0, 0}, 5)
+      # With few obstacles, a read of all the rows costs less than a read
+      # of the cells: the result is the same.
+      assert [%{id: :rock}] = :boids_space.obstacles(space, {0, 0}, 50)
+    end
+
+    property "gives the obstacles that a read of all the obstacles gives" do
+      check all(
+              wrap <- boolean(),
+              cell_size <- one_of([constant(1), constant(4), float(min: 0.5, max: 20)]),
+              obstacles <-
+                list_of(tuple({float(min: 0, max: 99), float(min: 0, max: 99), float(min: 0, max: 30)}),
+                  max_length: 40
+                ),
+              moves <-
+                list_of(tuple({integer(0..39), float(min: 0, max: 99), float(min: 0, max: 99)}),
+                  max_length: 10
+                ),
+              points <-
+                list_of(tuple({float(min: -10, max: 110), float(min: -10, max: 110), float(min: 0, max: 40)}),
+                  length: 5
+                )
+            ) do
+        space = :boids_space.new(%{cell_size: cell_size, bounds: {{0, 0}, {100, 100}}, wrap: wrap})
+        for {{x, y, r}, id} <- Enum.with_index(obstacles), do: :boids_space.set_obstacle(space, id, {x, y}, r)
+        for {id, x, y} <- moves, id < length(obstacles), do: :boids_space.set_obstacle(space, id, {x, y}, 2)
+
+        for {x, y, reach} <- points,
+            do: assert(:boids_space.obstacles(space, {x, y}, reach) == brute_obstacles(space, {x, y}, reach))
+
+        :boids_space.delete(space)
+      end
+    end
+
+    test "a read finds an obstacle that moves one time: not two times, and not zero times" do
+      space = :boids_space.new(%{cell_size: 1})
+      # Many obstacles far away: a read uses the cells (49 cells here).
+      for id <- 1..100, do: :boids_space.set_obstacle(space, id, {id * 1.0, -20.0}, 0.4)
+      :boids_space.set_obstacle(space, :rock, {0.5, 0.5}, 0.4)
+
+      # Another process reads, as a boid does.
+      reader =
+        Task.async(fn ->
+          Enum.frequencies(
+            for _ <- 1..20_000, do: Enum.count(:boids_space.obstacles(space, {2, 2}, 3), &(&1.id == :rock))
+          )
+        end)
+
+      # The owner moves the rock from cell to cell, near the point of the
+      # reads. A read can see a write in its middle: then it reads all
+      # the rows.
+      moves =
+        Stream.cycle([{0.5, 0.5}, {3.5, 0.5}, {3.5, 3.5}, {0.5, 3.5}])
+        |> Enum.reduce_while(0, fn pos, moves ->
+          :boids_space.set_obstacle(space, :rock, pos, 0.4)
+          if Process.alive?(reader.pid), do: {:cont, moves + 1}, else: {:halt, moves + 1}
+        end)
+
+      assert Task.await(reader) == %{1 => 20_000}
+      assert moves > 100
+    end
+
+    test "a read during a write reads all the rows, and not the cells" do
+      space = :boids_space.new(%{cell_size: 1})
+      for id <- 1..100, do: :boids_space.set_obstacle(space, id, {id * 1.0, -20.0}, 0.4)
+      :boids_space.set_obstacle(space, :rock, {5, 5}, 1)
+      # The state in the middle of a write: an odd version, and an index
+      # that does not have the cells of the rock.
+      :ets.update_counter(space.facts, :obstacle_version, 1)
+
+      for row = {_cell, :rock} <- :ets.tab2list(space.obstacle_cells),
+          do: :ets.delete_object(space.obstacle_cells, row)
+
+      assert [%{id: :rock}] = :boids_space.obstacles(space, {5, 5}, 1)
+      # With an even version, a read uses the cells.
+      :ets.update_counter(space.facts, :obstacle_version, 1)
+      assert :boids_space.obstacles(space, {5, 5}, 1) == []
+    end
+
+    test "only the owner of the space writes the obstacles and the scale of the time" do
+      space = :boids_space.new(%{cell_size: 1})
+      :boids_space.set_obstacle(space, :rock, {5, 5}, 1)
+
+      tables = fn ->
+        {Enum.sort(:ets.tab2list(space.facts)), Enum.sort(:ets.tab2list(space.obstacle_cells))}
+      end
+
+      before = tables.()
+
+      Task.await(
+        Task.async(fn ->
+          assert_raise ArgumentError, fn -> :boids_space.set_obstacle(space, :rock, {50, 50}, 1) end
+          assert_raise ArgumentError, fn -> :boids_space.set_obstacle(space, :pole, {1, 1}, 1) end
+          assert_raise ArgumentError, fn -> :boids_space.remove_obstacle(space, :rock) end
+          assert_raise ArgumentError, fn -> :boids_space.set_time_scale(space, 2) end
+          # A read needs no message, from each process.
+          assert [%{id: :rock, pos: {5, 5}}] = :boids_space.obstacles(space, {5, 5}, 1)
+          assert :boids_space.env(space).time_scale == 1.0
+        end)
+      )
+
+      # Nothing changed: the version is even, as before.
+      assert tables.() == before
+      assert rem(:ets.lookup_element(space.facts, :obstacle_version, 2), 2) == 0
     end
   end
 

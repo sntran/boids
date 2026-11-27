@@ -131,6 +131,27 @@ defmodule GenBoidTest do
   end
 
   describe "handle_sense/2" do
+    test "the obstacles in what the boid perceives are those to its reach", %{world: world} do
+      me = self()
+
+      defmodule LooksAtObstacles do
+        @behaviour :gen_boid
+        def init({owner, options}), do: {:ok, Map.put(options, :state, owner)}
+
+        def handle_sense(seen, boid) do
+          send(boid.state, {:obstacles, Enum.map(seen.obstacles, & &1.id)})
+          {:ok, seen, boid}
+        end
+      end
+
+      # The reach is 11: max_speed 10 for 1 second, and a clearance of 1.
+      {:ok, _} = :gen_boid.start(world, LooksAtObstacles, {me, %{id: :a, pos: {0, 0}, rules: []}})
+      :ok = :boids.set_obstacle(world, :near, {12, 0}, 2)
+      :ok = :boids.set_obstacle(world, :far, {20, 0}, 2)
+      :boids.step(world, 0.1)
+      assert_received {:obstacles, [:near]}
+    end
+
     test "runs at each step, with what the boid perceives", %{world: world} do
       me = self()
 

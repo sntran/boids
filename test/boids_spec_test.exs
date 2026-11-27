@@ -66,6 +66,26 @@ defmodule BoidsSpecTest do
       assert {:error, %{kind: :invariant, property: "OneTime"}, _} =
                Checker.check(@space, config(@space, "Twice"))
     end
+
+    test "a reader finds each obstacle one time, also an obstacle that the one writer moves" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@space, config(@space, "Obstacles"))
+      assert states > 1000
+    end
+
+    test "the same with three moves of an obstacle during one read" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@space, config(@space, "ObstaclesLong"))
+      assert states > 1000
+    end
+
+    test "two processes that write the obstacles lose the cell of an obstacle" do
+      assert {:error, %{kind: :invariant, property: "Indexed"}, _} =
+               Checker.check(@space, config(@space, "TwoWriters"))
+    end
+
+    test "a reader that does not check the version does not find an obstacle that moves" do
+      assert {:error, %{kind: :invariant, property: "Exact"}, _} =
+               Checker.check(@space, config(@space, "NoCheck"))
+    end
   end
 
   describe "specs/Step.tla: one step of all the boids" do

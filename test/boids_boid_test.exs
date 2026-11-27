@@ -330,6 +330,22 @@ defmodule BoidsBoidTest do
     assert :boids_boid.entry(boid) == %{id: :a, pos: {1, 2}, vel: {3, 4}, group: :g, data: 5}
   end
 
+  describe "reach/1" do
+    test "is the distance that the rule avoid can touch, or the perception" do
+      # The defaults: max_speed 10, lookahead 1 second, clearance a tenth of perception.
+      assert :boids_boid.reach(boid()) == 11.0
+      assert :boids_boid.reach(boid(perception: 50, max_speed: 1)) == 50.0
+      assert :boids_boid.reach(boid(max_speed: 4, rules: [{:avoid, 1, lookahead: 3, clearance: 2}])) == 14.0
+      # A rule avoid with a short lookahead: the perception.
+      assert :boids_boid.reach(boid(max_speed: 4, rules: [{:avoid, 1, lookahead: 0.5, clearance: 0}])) == 10.0
+      # Two rules avoid: the largest.
+      rules = [{:avoid, 1}, {{:avoid, :walls}, 1, lookahead: 5}, {:seek, 1, target: {0, 0}}]
+      assert :boids_boid.reach(boid(max_speed: 4, rules: rules)) == 21.0
+      # A boid faster than its max_speed.
+      assert :boids_boid.reach(boid(max_speed: 4, vel: {20, 0})) == 21.0
+    end
+  end
+
   describe "perceive/2" do
     setup do
       pos = {0, 0}

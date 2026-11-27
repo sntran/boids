@@ -19,6 +19,27 @@ With `wrap`, each side of the box `bounds` continues at the opposite
 side. Then `near/3` gives each neighbor at its nearest position, which
 can be out of the box.
 
+## The obstacles
+
+An obstacle has one row, and a second grid of cells is the index of the
+obstacles: an obstacle is in each cell that it touches, and in each
+coarse cell (8 cells long on each side) that it touches. A boid gets
+only the obstacles near it (`obstacles/3`), with a read of the coarse
+cells near it, and of the cells near it when the coarse cells have many
+obstacles. An obstacle that touches more than 1,024 cells is not in the
+cells: each read gets it, as a large obstacle.
+
+Only the owner of the space writes the obstacles and the scale of the
+time: their tables are protected. In a world, the owner is the process
+of the world, and each change is a message to it
+(`boids_world:set/3`). Each process reads them with no message.
+
+A write of an obstacle changes more than one row, and it changes a
+version at its start and at its end. A read that sees a write during
+the read reads the rows of all the obstacles again (specs/Space.tla,
+Check). So a read finds an obstacle that moves one time: not two times,
+and not zero times.
+
 ## Tiles and nodes
 
 A world can be on several nodes. The tables of a space are of one node.
@@ -34,7 +55,7 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
 -export([lookup/2, owner/2, servers/1, near/3, seen/4, all/1, count/1, dim/1, fit/2, offset/3]).
 -export([relate/4, related/3, related_to/3, relations/2]).
 -export([show/2, nodes/1, set_nodes/2, home/2, place/3]).
--export([env/1, obstacles/1, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
+-export([env/1, env/3, obstacles/1, obstacles/3, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
 
 -export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0]).
 
@@ -48,6 +69,8 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
     bounds := {vec(), vec()} | undefined,
     wrap := boolean(),
     links := ets:table(),
+    facts := ets:table(),
+    obstacle_cells := ets:table(),
     defaults := map(),
     tile := number(),
     name => atom()
@@ -115,18 +138,33 @@ new(Opts) ->
     Space = options(Opts),
     Rows = ets:new(boids_rows, [set, public, {read_concurrency, true}, {write_concurrency, true}]),
     Grid = ets:new(boids_grid, [duplicate_bag, public, {read_concurrency, true}, {write_concurrency, true}]),
+    %% The table has the size of the vectors of the first boid, and the
+    %% nodes that have a part of the world: one node, until the world of
+    %% this node finds the same world on other nodes.
     Meta = ets:new(boids_meta, [set, public, {read_concurrency, true}]),
-    %% The table has the scale of the time, the size of the vectors of
-    %% the first boid, and one row for each obstacle.
-    ets:insert(Meta, {time_scale, 1.0}),
-    %% The nodes that have a part of the world: one node, until the
-    %% world of this node finds the same world on other nodes.
     ets:insert(Meta, {nodes, [node()]}),
+    %% The facts of the world, which only the owner writes: the scale of
+    %% the time, one row for each obstacle ({{obstacle, Id}, Pos,
+    %% Radius}), and the version of the obstacles.
+    Facts = ets:new(boids_facts, [set, protected, {read_concurrency, true}]),
+    ets:insert(Facts, [{time_scale, 1.0}, {obstacle_version, 0}]),
+    %% The index of the obstacles: {Cell, Id} for each cell that an
+    %% obstacle touches, {{coarse, Cell}, Id} for each coarse cell, and
+    %% {large, Id} for a large obstacle. Only the owner writes it.
+    Cells = ets:new(boids_obstacle_cells, [bag, protected, {read_concurrency, true}]),
     %% The relations between the boids, for the reads of the boids:
     %% {{out, From, Label}, [To]} and {{in, To, Label}, [From]}. Only
     %% the owner writes them.
     Links = ets:new(boids_links, [set, protected, {read_concurrency, true}]),
-    Space#{rows => Rows, grid => Grid, meta => Meta, links => Links, owner => self()}.
+    Space#{
+        rows => Rows,
+        grid => Grid,
+        meta => Meta,
+        links => Links,
+        facts => Facts,
+        obstacle_cells => Cells,
+        owner => self()
+    }.
 
 -doc """
 Check the options of a space, and give them with their defaults. A bad
@@ -156,7 +194,9 @@ ok(_, _) -> false.
 
 -doc "Delete the tables of a space. Only the owner can do this.".
 -spec delete(space()) -> ok.
-delete(#{rows := Rows, grid := Grid, meta := Meta, links := Links}) ->
+delete(#{rows := Rows, grid := Grid, meta := Meta, links := Links, facts := Facts, obstacle_cells := Cells}) ->
+    ets:delete(Cells),
+    ets:delete(Facts),
     ets:delete(Links),
     ets:delete(Rows),
     ets:delete(Grid),
@@ -416,54 +456,211 @@ offset(_Space, From, To) ->
     boids_vec:sub(To, From).
 
 -doc """
-The facts of the world that each boid perceives: the box, the
-obstacles and the scale of the time. `boids_boid:step/4` uses them.
+The facts of the world: the box, all the obstacles and the scale of the
+time. A boid gets `env/3`.
 """.
 -spec env(space()) -> env().
-env(Space = #{bounds := Bounds, wrap := Wrap, meta := Meta}) ->
+env(Space = #{bounds := Bounds, wrap := Wrap, facts := Facts}) ->
     #{
         bounds => Bounds,
         wrap => Wrap,
         obstacles => obstacles(Space),
-        time_scale => ets:lookup_element(Meta, time_scale, 2)
+        time_scale => ets:lookup_element(Facts, time_scale, 2)
     }.
 
--doc "The obstacles of the space, in the order of their ids.".
+-doc """
+The facts of the world that a boid at `Pos` perceives: the box, the
+scale of the time, and the obstacles at the distance `Reach` or less
+(`obstacles/3`). `boids_boid:step/4` uses them, with the reach of
+`boids_boid:reach/1`.
+""".
+-spec env(space(), vec(), number()) -> env().
+env(Space = #{bounds := Bounds, wrap := Wrap, facts := Facts}, Pos, Reach) ->
+    #{
+        bounds => Bounds,
+        wrap => Wrap,
+        obstacles => obstacles(Space, Pos, Reach),
+        time_scale => ets:lookup_element(Facts, time_scale, 2)
+    }.
+
+-doc "All the obstacles of the space, in the order of their ids.".
 -spec obstacles(space()) -> [obstacle()].
-obstacles(#{meta := Meta}) ->
-    Found = ets:match_object(Meta, {{obstacle, '_'}, '_', '_'}),
-    [#{id => Id, pos => Pos, radius => Radius} || {{obstacle, Id}, Pos, Radius} <- lists:sort(Found)].
+obstacles(#{facts := Facts}) ->
+    [obstacle(Row) || Row <- all_obstacles(Facts)].
+
+-doc """
+The obstacles at the distance `Reach` or less from the point `Pos`, in
+the order of their ids. The distance is from `Pos` to the edge of the
+obstacle. With `wrap`, it is the shortest distance, across a side too.
+An obstacle with a center of another size is not in the result.
+
+The read uses the index of the cells, so an obstacle far from `Pos`
+costs nothing. A read finds each obstacle one time, also an obstacle
+that moves during the read.
+""".
+-spec obstacles(space(), vec(), number()) -> [obstacle()].
+obstacles(Space = #{facts := Facts, obstacle_cells := Cells}, Pos, Reach) when is_number(Reach), Reach >= 0 ->
+    case ets:info(Cells, size) of
+        %% No obstacle.
+        0 ->
+            [];
+        Size ->
+            Version = ets:lookup_element(Facts, obstacle_version, 2),
+            Found =
+                case Version band 1 =:= 0 andalso near_ids(Space, Pos, Reach, Size) of
+                    false -> false;
+                    Ids -> [Row || Id <- Ids, Row <- ets:lookup(Facts, {obstacle, Id})]
+                end,
+            Rows =
+                case Found =/= false andalso ets:lookup_element(Facts, obstacle_version, 2) =:= Version of
+                    true ->
+                        Found;
+                    %% A write runs, or a read of all the rows costs
+                    %% less, or a write ran during the read. Such a
+                    %% write can hide an obstacle from the cells: read
+                    %% all the rows (specs/Space.tla, Check).
+                    false ->
+                        all_obstacles(Facts)
+                end,
+            [obstacle(Row) || Row <- Rows, reaches(Space, Pos, Reach, Row)]
+    end.
+
+%% The rows of all the obstacles, in the order of their ids. A row that
+%% a write changes during the read is in the result one time.
+all_obstacles(Facts) ->
+    lists:sort(ets:match_object(Facts, {{obstacle, '_'}, '_', '_'})).
+
+%% The ids of the obstacles in the cells to the distance Reach from Pos,
+%% and of the large obstacles, in their order. False when a read of all
+%% the rows costs less: more cells to read than rows in the index.
+%%
+%% The coarse cells come first: one to four reads (eight in 3D). A boid
+%% far from all the obstacles finds none there. When they have fewer
+%% obstacles than there are fine cells, their obstacles are the result:
+%% the read of their rows costs less than the read of the fine cells.
+%% Both are all the obstacles near Pos, and more: obstacles/3 keeps only
+%% those at the distance.
+near_ids(Space, Pos, Reach, Size) ->
+    Axes = axes(Space, Pos, Reach),
+    case cell_count(Axes) of
+        Count when Count =< 1024, Count < Size ->
+            Coarse = ids(Space, [large | [{coarse, Cell} || Cell <- cells_of(coarse(Space), Pos, Reach)]]),
+            case length(Coarse) =< Count of
+                true -> Coarse;
+                false -> ids(Space, [large | product([numbers(Axis) || Axis <- Axes])])
+            end;
+        _ ->
+            false
+    end.
+
+%% The ids of the obstacles in some cells of the index, with no copy.
+ids(#{obstacle_cells := Cells}, Keys) ->
+    lists:usort([Id || Key <- Keys, {_, Id} <- ets:lookup(Cells, Key)]).
+
+%% The space with the coarse cells of the index of the obstacles: each
+%% is 8 cells long on each side.
+coarse(Space = #{cell_size := Size}) ->
+    Space#{cell_size := Size * 8}.
+
+%% True when the obstacle of a row is at the distance Reach or less
+%% from Pos, with a center of the same size.
+reaches(Space, Pos, Reach, {{obstacle, _Id}, At, Radius}) when tuple_size(At) =:= tuple_size(Pos) ->
+    Limit = Reach + Radius,
+    boids_vec:norm2(offset(Space, Pos, At)) =< Limit * Limit;
+reaches(_Space, _Pos, _Reach, _Row) ->
+    false.
+
+obstacle({{obstacle, Id}, Pos, Radius}) ->
+    #{id => Id, pos => Pos, radius => Radius}.
 
 -doc """
 Add an obstacle, or change it: a circle (a sphere in 3D) with the center
-`Pos`. Each process can call this function, so an obstacle can move.
+`Pos`. Call it again to move the obstacle.
+
+Only the owner of the space calls this function: in a world, the
+process of the world (`boids_world:set/3`). Another process gets the
+error `badarg`, because the tables of the obstacles are protected. Thus
+the writes of the obstacles come one after the other.
+
 A center that is not a vector, or that does not have the size of the
 vectors of the space, gives the error `badarg`. So does a radius that is
 not a number of 0 or more.
+
+The obstacle goes into the cells that it touches. The write adds the
+new cells, then changes the row, then removes the old cells.
 """.
 -spec set_obstacle(space(), term(), vec(), number()) -> ok.
-set_obstacle(Space = #{meta := Meta}, Id, Pos, Radius) ->
+set_obstacle(Space = #{facts := Facts, obstacle_cells := Cells}, Id, Pos, Radius) ->
     Size = dim(Space),
     Good =
         boids_vec:is_vec(Pos) andalso boids_vec:is_size(Radius) andalso
             (Size =:= undefined orelse Size =:= tuple_size(Pos)),
     Good orelse error(badarg),
-    ets:insert(Meta, {{obstacle, Id}, Pos, Radius}),
-    ok.
+    New = obstacle_cells(Space, Pos, Radius),
+    Old = [Cell || {_, At, R} <- ets:lookup(Facts, {obstacle, Id}), Cell <- obstacle_cells(Space, At, R)],
+    write_obstacles(Facts, fun() ->
+        ets:insert(Cells, [{Cell, Id} || Cell <- New -- Old]),
+        ets:insert(Facts, {{obstacle, Id}, Pos, Radius}),
+        [ets:delete_object(Cells, {Cell, Id}) || Cell <- Old -- New]
+    end).
 
--doc "Remove an obstacle.".
+-doc """
+Remove an obstacle. Only the owner of the space calls this function, as
+for `set_obstacle/4`.
+""".
 -spec remove_obstacle(space(), term()) -> ok.
-remove_obstacle(#{meta := Meta}, Id) ->
-    ets:delete(Meta, {obstacle, Id}),
+remove_obstacle(Space = #{facts := Facts, obstacle_cells := Cells}, Id) ->
+    Old = [Cell || {_, At, R} <- ets:lookup(Facts, {obstacle, Id}), Cell <- obstacle_cells(Space, At, R)],
+    write_obstacles(Facts, fun() ->
+        ets:delete(Facts, {obstacle, Id}),
+        [ets:delete_object(Cells, {Cell, Id}) || Cell <- Old]
+    end).
+
+%% The keys of an obstacle in the index: the cells that it touches and
+%% its coarse cells, or [large] for an obstacle that touches more than
+%% 1,024 cells.
+obstacle_cells(Space, Pos, Radius) ->
+    case cells_of(Space, Pos, Radius) of
+        large -> [large];
+        Cells -> Cells ++ [{coarse, Cell} || Cell <- cells_of(coarse(Space), Pos, Radius)]
+    end.
+
+%% The cells that the ball of Radius at Pos touches, or large when they
+%% are more than 1,024.
+cells_of(Space, Pos, Radius) ->
+    Axes = axes(Space, Pos, Radius),
+    case cell_count(Axes) of
+        Count when Count > 1024 -> large;
+        _ -> product([numbers(Axis) || Axis <- Axes])
+    end.
+
+%% The number of cells of some axes.
+cell_count(Axes) ->
+    lists:foldl(fun(Axis, Acc) -> Acc * count_axis(Axis) end, 1, Axes).
+
+%% A write of the obstacles by the owner of the space. The version
+%% changes at the start and at the end of the write: it is odd during
+%% the write, so a reader knows that a write runs (specs/Space.tla, Open
+%% and Close). A process that is not the owner gets the error badarg
+%% here, before a change.
+write_obstacles(Facts, Write) ->
+    ets:update_counter(Facts, obstacle_version, 1),
+    Write(),
+    ets:update_counter(Facts, obstacle_version, 1),
     ok.
 
 -doc """
 Set the scale of the time: the seconds of the boids for each second of
-the caller. With 0, the boids stop. The default is 1.0.
+the caller. With 0, the boids stop. The default is 1.0. A scale that is
+not a number from 0 to 1.0e100 gives the error `badarg`.
+
+Only the owner of the space calls this function, as for
+`set_obstacle/4`.
 """.
 -spec set_time_scale(space(), number()) -> ok.
-set_time_scale(#{meta := Meta}, Scale) when is_number(Scale), Scale >= 0, Scale =< 1.0e100 ->
-    ets:insert(Meta, {time_scale, Scale}),
+set_time_scale(#{facts := Facts}, Scale) ->
+    is_number(Scale) andalso Scale >= 0 andalso Scale =< 1.0e100 orelse error(badarg),
+    ets:insert(Facts, {time_scale, Scale}),
     ok.
 
 %% --- The nodes of a world ---------------------------------------------
@@ -621,7 +818,7 @@ index(X, Width, Size) ->
 %% of all the rows costs less than a read of these cells.
 cells(Space = #{rows := Rows}, Pos, Radius) ->
     Axes = axes(Space, Pos, Radius),
-    Count = lists:foldl(fun(Axis, Acc) -> Acc * count_axis(Axis) end, 1, Axes),
+    Count = cell_count(Axes),
     %% A small number of cells needs no read of the size of the table.
     case Count > 27 andalso Count > ets:info(Rows, size) of
         true -> all;

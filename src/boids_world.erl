@@ -12,6 +12,13 @@ is an edge with a label. This process has the graph, and it writes a
 copy of the relations of each boid to a table, where the boids read
 them with no message.
 
+The facts of the world are what all its boids perceive, and that is not
+a boid: the obstacles and the scale of the time. Only this process
+writes them (`set/3`), one change after the other, and the boids read
+them with no message. A write of an obstacle changes more than one row
+of a table, and two processes that write at the same time can lose a
+part of it (`specs/Space.tla`).
+
 ## A world on several nodes
 
 A world with a name that is an atom is one world on all the connected
@@ -54,7 +61,7 @@ Use the functions of `boids`. A world starts with
 -behavior(gen_server).
 
 -export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/3]).
--export([relate/5, unrelate/4, relations/1]).
+-export([relate/5, unrelate/4, relations/1, set/3]).
 -export([settle/2, settle/3, find/2, find_local/2, moved/3, adopt/5]).
 
 %% A row of a boid of another node that gets no update in this time goes.
@@ -168,6 +175,29 @@ this node.
 -spec unrelate(boids_space:space(), term(), term(), term()) -> ok.
 unrelate(#{owner := Server}, From, Label, To) ->
     gen_server:call(Server, {unrelate, From, Label, To}).
+
+-doc """
+Change a fact of the world on this node. A fact is what all the boids
+of the world perceive, and that is not a boid:
+
+| Key | Value |
+|---|---|
+| `time_scale` | The scale of the time: a number from 0 to 1.0e100. |
+| `{obstacle, Id}` | An obstacle: `{Pos, Radius}`, or `none` to remove it. |
+
+Only this process writes the facts, one change after the other, to
+tables that only it can write. The boids read them with no message
+(`boids_space:env/3`). The result is `{error, badarg}` for a key that
+is not a fact, or for a bad value: the world does not change.
+
+`boids:set_time_scale/2`, `boids:set_obstacle/4` and
+`boids:remove_obstacle/2` use this function.
+""".
+-spec set(server() | boids_space:space(), time_scale | {obstacle, term()}, term()) -> ok | {error, badarg}.
+set(#{owner := Server}, Key, Value) ->
+    set(Server, Key, Value);
+set(Server, Key, Value) ->
+    gen_server:call(Server, {set, Key, Value}).
 
 -doc """
 Show a boid that wrote its row to the other nodes that it is near. The
@@ -376,6 +406,14 @@ handle_call({unrelate, From, Label, To}, _From, State = #{space := Space, links 
     {reply, ok, State#{links := Links}};
 handle_call(relations, _From, State = #{links := Links}) ->
     {reply, Links, State};
+handle_call({set, Key, Value}, _From, State = #{space := Space}) ->
+    %% A bad value of a caller must not stop the world: each write
+    %% checks its value before it changes a table.
+    try write(Space, Key, Value) of
+        ok -> {reply, ok, State}
+    catch
+        error:badarg -> {reply, {error, badarg}, State}
+    end;
 handle_call({leave, Id, Pid}, _From, State = #{space := Space}) ->
     %% A leave can come late: after the end of its process, and after
     %% another process has the id (specs/Members.tla, CheckOwner).
@@ -585,6 +623,14 @@ unrelate(Id, State = #{space := Space, links := Links0}) ->
         false ->
             State
     end.
+
+%% Write a fact of the world to the tables of this node. Each change of
+%% a fact comes here, and to no other place: a new kind of fact is a new
+%% clause. A bad value gives the error badarg, with no change.
+write(Space, time_scale, Scale) -> boids_space:set_time_scale(Space, Scale);
+write(Space, {obstacle, Id}, none) -> boids_space:remove_obstacle(Space, Id);
+write(Space, {obstacle, Id}, {Pos, Radius}) -> boids_space:set_obstacle(Space, Id, Pos, Radius);
+write(_Space, _Key, _Value) -> error(badarg).
 
 %% Write the relations with a label of boids to the table of the
 %% world, in the two directions: the boids read them there at each

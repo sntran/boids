@@ -232,9 +232,9 @@ end
   key `state` is for your module, and only the boid sees it. The key
   `data` is what the neighbors see.
 - `Seen` is a map with what the boid perceives in this step:
-  `neighbors` (the nearest first), `obstacles`, `bounds`, `wrap` and
-  `dt`. The rules get it too, so a rule of yours reads the keys that
-  `handle_sense/2` added.
+  `neighbors` (the nearest first), `obstacles` (those that the boid can
+  reach, see "The world"), `bounds`, `wrap` and `dt`. The rules get it
+  too, so a rule of yours reads the keys that `handle_sense/2` added.
 - Change the rules and the other options of the boid with the functions
   of `boids_boid` (`update/2`, `add_rule/2`, `delete_rule/2`), which
   check the new values.
@@ -329,8 +329,8 @@ gravity = fn _boid, _neighbors, _seen -> {0, -9.81} end
 
 - The boid and each neighbor are maps: `maps:get(pos, Boid)`,
   `maps:get(dist, Neighbor)`. `Seen` is what the boid perceives in this
-  step: `dt` (the seconds of the step), `obstacles`, `bounds` and
-  `wrap`.
+  step: `dt` (the seconds of the step), `obstacles` (those that the
+  boid can reach), `bounds` and `wrap`.
 - The functions of `boids_steer` and `boids_vec` are the parts of a new
   rule: for example `boids_steer:seek/2` to a point that the rule
   calculates.
@@ -406,7 +406,17 @@ view, and not for each step of a boid.
 - With `wrap => true`, each side of the box continues at the opposite
   side. A boid sees the boids across a side as its neighbors.
 - An obstacle is a circle, or a sphere in three dimensions:
-  `boids:set_obstacle/4`. Call it again to move the obstacle.
+  `boids:set_obstacle/4`. Call it again to move the obstacle. The
+  process of the world writes it, so the call is one message and its
+  answer. `boids:obstacles/1` gives all the obstacles of the world.
+- A boid gets only the obstacles that it can reach in this step: those
+  to the distance `boids_boid:reach/1` from it, which is the largest of
+  its `perception` and of `max_speed * lookahead + clearance` (the
+  options of the rule `avoid`). The world keeps the obstacles in an
+  index of cells, as it keeps the boids. Thus an obstacle far from the
+  boids costs almost nothing, and a level can have hundreds of rocks,
+  trees or posts. An obstacle that touches more than 1,024 cells is a
+  large obstacle: each boid reads it at each step.
 - All the boids of a world have two dimensions, or all have three.
 - The library has no unit of length. A speed is in units for each
   second.
@@ -619,6 +629,13 @@ removes it when the process of the boid stops. It also keeps the graph
 of the relations, and writes the relations of each boid to a table that
 the boids read.
 
+The process of the world is also the only process that writes the
+facts of the world: the obstacles and the scale of the time.
+`boids:set_obstacle/4`, `boids:remove_obstacle/2` and
+`boids:set_time_scale/2` send it one message, and it makes one change
+after the other. The boids read these facts from its tables, with no
+message.
+
 A boid reads the rows while the other boids write them. Thus the
 neighbors that it sees are not all of the same moment, as for a bird.
 `boids:step/2` gives one moment for all the boids.
@@ -648,8 +665,16 @@ mix run examples/speed.exs 6000
 | Boids | Steps of each boid in a second | The same, with `search => 4` |
 |---|---|---|
 | 4,000 | 19.3 | 19.6 |
+| 4,000, with 400 obstacles and the rule `avoid` | 15.3 | 16.2 |
 | 6,000 | 15.6 | 17.8 |
 | 12,000 | 7.5 | 8.7 |
+
+The row with obstacles is `mix run examples/speed.exs 4000 15 400`:
+obstacles of radius 1 at random places, and each boid also has the rule
+`avoid`. A boid reads only the obstacles near it, so an obstacle far
+from the boids costs almost nothing. With 1,000 boids and 400 obstacles
+away from them, a step of all the boids takes the same time as with no
+obstacle.
 
 - The boids make about 90,000 steps in a second, and about 105,000
   with `search => 4`. That is about 4,500 boids, or 5,000 boids, at 20

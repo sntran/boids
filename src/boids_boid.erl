@@ -66,6 +66,9 @@ A rule of your own is a function: `{Fun, Weight}`, where `Fun(Boid,
 Neighbors, Seen)` gives the force. `Neighbors` are the boids that the
 boid sees, the nearest first. `Seen` is what the boid perceives in this
 step: `dt` (the seconds of the step), `obstacles`, `bounds` and `wrap`.
+`obstacles` has only the obstacles to the distance `reach/1` from the
+boid, in the order of their ids: a rule that needs obstacles farther
+than that does not get them.
 Use `fun Module:Function/3` for a rule that stays when the code of the
 module changes.
 
@@ -93,7 +96,7 @@ force. Use it to see what each rule does, and to adjust the weights.
 
 -export([new/1, update/2, options/1, entry/1, to_map/1]).
 -export([add_rule/2, delete_rule/2, which_rules/1]).
--export([perceive/2, forces/3, force/3, integrate/4, step/4]).
+-export([perceive/2, reach/1, forces/3, force/3, integrate/4, step/4]).
 
 -export_type([boid/0, rule/0, name/0, target/0, seen/0]).
 
@@ -371,6 +374,27 @@ perceive(#{id := Id, vel := Vel, fov := Fov, max_neighbors := Max}, Near) ->
 
 in_view(#{dist := Dist}, _Heading, _Cos) when Dist == 0 -> true;
 in_view(#{offset := Offset, dist := Dist}, Heading, Cos) -> boids_vec:dot(Heading, Offset) / Dist >= Cos.
+
+-doc """
+The distance to which a boid gets the obstacles of its world, from its
+position to the edge of an obstacle: the largest of `perception` and of
+`Speed * lookahead + clearance`. `Speed` is the largest of `max_speed`
+and of the speed of the boid. `lookahead` and `clearance` are the options
+of the rule `avoid`, with their defaults when the boid has no such
+rule. Thus the rule `avoid` gets each obstacle that it can touch.
+""".
+-spec reach(boid()) -> float().
+reach(#{perception := Perception, max_speed := Max, vel := Vel, rules := Rules}) ->
+    Speed = max(Max, boids_vec:norm(Vel)),
+    Avoid = [Opts || {Name, _Weight, Opts} <- Rules, Name =:= avoid orelse is_tuple(Name) andalso element(1, Name) =:= avoid],
+    Ahead = [
+        Speed * maps:get(lookahead, Opts, 1.0) + maps:get(clearance, Opts, Perception / 10)
+     || Opts <- case Avoid of
+            [] -> [#{}];
+            _ -> Avoid
+        end
+    ],
+    float(lists:max([Perception | Ahead])).
 
 -doc """
 The force of each rule of a boid, in the order of its rules: a list of
