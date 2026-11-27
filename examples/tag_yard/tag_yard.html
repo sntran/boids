@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tag Yard</title>
+<meta name="description" content="A game of tag made with boids: run from the child that is it, and when you are it, touch another child.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+  .modes { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .modes .label { font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+  .modes p { margin: 0; flex: 1 1 280px; min-width: 0; color: var(--muted); font-size: 0.9rem; }
+  .panel { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+  .panel .message { margin: 0; flex: 1 1 320px; min-width: 0; }
+  .panel .message b { font-family: var(--display); font-weight: 600; }
+  .panel .last { display: block; color: var(--muted); font-size: 0.86rem; min-height: 1.3em; }
+  .panel[data-state="it"], .panel[data-state="lost"] { border-color: var(--warm); }
+  .panel[data-state="frozen"] { border-color: var(--rock); }
+  .panel[data-state="won"] { border-color: var(--cool); }
+  .stamina { display: inline-flex; align-items: center; gap: 8px; font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+  .stamina .bar { width: 96px; height: 8px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .stamina .bar i { display: block; height: 100%; width: 100%; background: var(--gold); }
+  .stamina[data-low="true"] .bar i { background: var(--warm); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.88rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; display: inline-block; border-radius: 50%; }
+  .keys .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 44px); gap: 6px; }
+  .keys .pad [data-key="up"] { grid-column: 2; grid-row: 1; }
+  .keys .pad [data-key="left"] { grid-column: 1; grid-row: 2; }
+  .keys .pad [data-key="down"] { grid-column: 2; grid-row: 2; }
+  .keys .pad [data-key="right"] { grid-column: 3; grid-row: 2; }
+  .keys .pad button, .keys .run { padding: 0; min-width: 0; height: 44px; }
+  .keys .run { width: 80px; }
+  .keys button.down { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a class="name" href="/">boids</a>
+    <a href="/">Home</a>
+    <a href="/showcases" aria-current="page">Showcases</a>
+    <a href="/playground">Playground</a>
+    <a href="https://github.com/sntran/boids">GitHub</a>
+  </nav>
+
+  <div class="head">
+    <h1>Tag Yard</h1>
+    <p class="lead">Play tag in a school yard. You are the gold child. Run from the child that is "it". When "it" touches you, you are it: then you must touch another child. A child that was it a moment ago cannot be tagged back.</p>
+  </div>
+
+  <div class="modes" role="group" aria-label="Mode">
+    <span class="label">Mode</span>
+    <button type="button" data-mode="classic" aria-pressed="true">Classic</button>
+    <button type="button" data-mode="freeze" aria-pressed="false">Freeze</button>
+    <p id="rules">One child is it. Be free when the bell rings after 90 seconds.</p>
+  </div>
+
+  <div class="field">
+    <canvas id="field" width="1600" height="900" role="img" aria-label="A school yard with trees, where children play tag"></canvas>
+    <span class="source" id="source">Connecting</span>
+  </div>
+  <div class="strip">
+    <div class="readings" id="readings"></div>
+    <div class="controls">
+      <button id="pause" type="button" aria-pressed="false">Pause</button>
+    </div>
+  </div>
+
+  <div class="legend" aria-label="What the colors show">
+    <span><i style="background: var(--gold)"></i>You</span>
+    <span><i style="background: var(--cool)"></i>Runners</span>
+    <span><i style="background: var(--warm)"></i>It</span>
+    <span><i style="background: var(--plum)"></i>A tired it</span>
+    <span><i style="background: var(--rock)"></i>Frozen</span>
+    <span><i style="background: var(--leaf)"></i>Trees</span>
+  </div>
+
+  <div class="panel" id="panel" data-state="runner" aria-live="polite">
+    <p class="message"><b id="headline"></b> <span id="detail">Run from the child that is it.</span><span class="last" id="last"></span></p>
+    <span class="stamina" id="stamina" data-low="false">Stamina <span class="bar" role="meter" aria-label="Stamina" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><i></i></span></span>
+    <button class="main" id="go" type="button">New round</button>
+  </div>
+
+  <div class="keys">
+    <div class="pad">
+      <button type="button" data-key="up" aria-label="Up">Up</button>
+      <button type="button" data-key="left" aria-label="Left">Left</button>
+      <button type="button" data-key="down" aria-label="Down">Down</button>
+      <button type="button" data-key="right" aria-label="Right">Right</button>
+    </div>
+    <button class="run" type="button" data-key="run">Run</button>
+    <p>Use the arrow keys or W, A, S and D to move. Hold Shift to run: running uses stamina, and the stamina comes back when you walk or stand.</p>
+  </div>
+  <p class="error" id="error" role="alert"></p>
+
+  <section class="notes">
+    <div>
+      <h3>A state that goes by a message</h3>
+      <p>Each child is a <code>gen_boid</code> process with its role as its state: runner, it, or frozen. When "it" touches a runner, it casts <code>{tagged, Name}</code> to the process of that runner. The runner becomes it, and the old "it" becomes a runner. No process decides who is it.</p>
+    </div>
+    <div>
+      <h3>Rules that change with the state</h3>
+      <p>Each role has its own rules. A runner flees "it" with the rule <code>evade</code>, "it" chases the nearest runner with <code>pursue</code>, and a frozen child has no rules. When the role changes, the child changes its rules.</p>
+    </div>
+    <div>
+      <h3>What the neighbors see</h3>
+      <p>The data of a child shows its role, if it cannot be tagged now ("no tag back"), and if it is a tired "it". A child that is it for a long time gets slower, and the runners come nearer to it. Then it can tag a runner, and the game does not stop.</p>
+    </div>
+    <div>
+      <h3>A role that moves through the crowd</h3>
+      <p>The role "it" goes from child to child, and the crowd moves away from it as a wave. You are a child too: your force is a rule of its own, a function that reads your keys. The director counts the time and the score, and makes a child it when no child is it.</p>
+    </div>
+  </section>
+  <p><a href="https://github.com/sntran/boids/blob/main/examples/tag_yard/tag_yard.ex">Read the code of the game.</a></p>
+
+  <footer>
+    This site is the library itself: one Erlang VM in WebAssembly, made with
+    <a href="https://github.com/sntran/BEAM.com">beam.com</a>. Each boid on a page is a process of that VM.
+  </footer>
+</div>
+<script src="/assets/scene.js"></script>
+<script>
+  var el = function (id) { return document.getElementById(id); };
+  var trees = [];
+  var marks = [];
+
+  var rules = {
+    classic: "One child is it. Be free when the bell rings after 90 seconds.",
+    freeze: "Three children are it, and a child that they touch is frozen. Touch a frozen child to free it. It wins when all the other children are frozen. The runners win at the bell after 60 seconds."
+  };
+
+  function show(more) {
+    Array.prototype.forEach.call(document.querySelectorAll("[data-mode]"), function (button) {
+      button.setAttribute("aria-pressed", button.getAttribute("data-mode") === more.mode ? "true" : "false");
+    });
+    el("rules").textContent = rules[more.mode] || "";
+
+    var headline = "", detail = "", state = more.you || "runner";
+    var left = more.left + " seconds to the bell.";
+    if (more.phase === "over") {
+      state = more.won ? "won" : "lost";
+      // In Freeze, the runners win or lose as a team.
+      if (more.mode === "freeze") {
+        headline = more.won ? "The runners win." : "It wins.";
+      } else {
+        headline = more.won ? "You win." : "You lose.";
+      }
+      detail = more.text + " Time free: " + more.free + " s. " +
+        (more.mode === "classic" ? "Your tags: " + more.tags + "." : "Your rescues: " + more.rescues + ".");
+      el("go").textContent = "Play again";
+    } else {
+      el("go").textContent = "New round";
+      if (more.you === "it") {
+        headline = "You are it.";
+        detail = "Touch another child. " + left;
+      } else if (more.you === "frozen") {
+        headline = "You are frozen.";
+        detail = "Wait for a free child to touch you. " + left;
+      } else if (more.mode === "freeze") {
+        detail = "Run from the children that are it, and free the frozen children. " + left;
+      } else {
+        detail = "Run from " + (more.its.length ? more.its.join(" and ") : "the child that is it") + ". " + left;
+      }
+    }
+    el("panel").setAttribute("data-state", state);
+    el("headline").textContent = headline;
+    el("detail").textContent = detail;
+    el("last").textContent = more.last || "";
+    marks = more.marks || [];
+
+    var stamina = Math.max(0, Math.min(100, more.stamina));
+    el("stamina").setAttribute("data-low", stamina < 25 ? "true" : "false");
+    el("stamina").querySelector("[role=meter]").setAttribute("aria-valuenow", String(stamina));
+    el("stamina").querySelector("i").style.width = stamina + "%";
+  }
+
+  // The trees are the rocks of the world: a crown of leaves on each, a
+  // line of chalk around the yard, and a ring under you and under each
+  // child that is it (the option beneath of Boids.scene).
+  function beneath(ctx, scale, height, c) {
+    ctx.save();
+    ctx.strokeStyle = c.panel; ctx.globalAlpha = 0.55; ctx.lineWidth = 3; ctx.setLineDash([14, 10]);
+    ctx.strokeRect(4 * scale, 4 * scale, 152 * scale, (height - 8) * scale);
+    ctx.restore();
+    trees.forEach(function (tree, n) {
+      var x = tree[0] * scale, y = (height - tree[1]) * scale, r = tree[2] * scale;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.fillStyle = c.shade;
+      ctx.beginPath(); ctx.ellipse(r * 0.25, r * 0.3, r * 1.25, r * 1.15, 0, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = c.leaf;
+      for (var k = 0; k < 7; k++) {
+        var a = k * 2 * Math.PI / 7 + n;
+        ctx.beginPath(); ctx.arc(Math.cos(a) * r * 0.55, Math.sin(a) * r * 0.55, r * 0.6, 0, 2 * Math.PI); ctx.fill();
+      }
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.7, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.3, r * 0.4, 0, 2 * Math.PI); ctx.fill();
+      ctx.restore();
+    });
+    marks.forEach(function (mark) {
+      ctx.save();
+      ctx.translate(mark[0] * scale, (height - mark[1]) * scale);
+      ctx.fillStyle = ctx.strokeStyle = mark[2] === "you" ? c.gold : c.warm;
+      ctx.globalAlpha = 0.22; ctx.beginPath(); ctx.arc(0, 0, 3.4 * scale, 0, 2 * Math.PI); ctx.fill();
+      ctx.globalAlpha = 0.8; ctx.lineWidth = 3; ctx.stroke();
+      ctx.restore();
+    });
+  }
+
+  var scene = Boids.scene({
+    name: "tag-yard", canvas: el("field"), readings: el("readings"), source: el("source"),
+    beneath: beneath,
+    onStart: function (header) { trees = header.rocks || []; },
+    onMore: show,
+    onError: function (text) { el("error").textContent = text; }
+  });
+  Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
+  el("go").addEventListener("click", function () { scene.send({go: true}); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-mode]"), function (button) {
+    button.addEventListener("click", function () { scene.send({mode: button.getAttribute("data-mode")}); });
+  });
+
+  // The keys of the person go to its child: a list of the keys that are down.
+  var down = {};
+  var codes = {
+    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
+    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
+    ShiftLeft: "run", ShiftRight: "run"
+  };
+  function send() { scene.send({keys: Object.keys(down)}); }
+  function set(name, on) {
+    if (!name || !!down[name] === on) { return; }
+    if (on) { down[name] = true; } else { delete down[name]; }
+    var button = document.querySelector('[data-key="' + name + '"]');
+    if (button) { button.classList.toggle("down", on); }
+    send();
+  }
+  window.addEventListener("keydown", function (event) {
+    var name = codes[event.code];
+    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
+  });
+  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
+  // A window that loses the focus gets no keyup: the child stops.
+  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
+    var name = button.getAttribute("data-key");
+    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
+    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+      button.addEventListener(type, function () { set(name, false); });
+    });
+  });
+  // The child gets the keys again each second, while a key is down.
+  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
+</script>
+</body>
+</html>
