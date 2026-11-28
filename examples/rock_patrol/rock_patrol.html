@@ -34,11 +34,7 @@
       <button id="links" type="button" aria-pressed="true">Relations</button>
     </div>
   </div>
-  <div class="keys">
-    <button type="button" data-key="left">Left</button>
-    <button type="button" data-key="thrust">Thrust</button>
-    <button type="button" data-key="right">Right</button>
-    <button type="button" data-key="fire">Shoot</button>
+  <div class="keys plain" id="keys">
     <span>Or use the arrow keys and the space bar. With no key for 5 seconds, the autopilot flies the ship.</span>
   </div>
   <p class="error" id="error" role="alert"></p>
@@ -72,34 +68,22 @@
 <script>
   var el = function (id) { return document.getElementById(id); };
   var scene = Boids.scene({
-    name: "rock-patrol", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "rock-patrol",
+    keys: {
+      into: el("keys"),
+      actions: [
+        {key: "left", label: "Left", codes: ["ArrowLeft", "KeyA"]},
+        {key: "thrust", label: "Thrust", codes: ["ArrowUp", "KeyW"]},
+        {key: "right", label: "Right", codes: ["ArrowRight", "KeyD"]},
+        {key: "fire", label: "Shoot", codes: ["Space"]}
+      ]
+    },
+    canvas: el("field"), readings: el("readings"), source: el("source"),
     onError: function (text) { el("error").textContent = text; }
   });
   Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
   Boids.toggle(el("links"), scene.links);
 
-  // The keys of the person go to the ship: a list of the keys that are down.
-  var down = {};
-  var names = {ArrowLeft: "left", ArrowRight: "right", ArrowUp: "thrust", " ": "fire", a: "left", d: "right", w: "thrust"};
-  function send() { scene.send({keys: Object.keys(down)}); }
-  function set(name, on) {
-    if (!name || !!down[name] === on) { return; }
-    if (on) { down[name] = true; } else { delete down[name]; }
-    send();
-  }
-  window.addEventListener("keydown", function (event) {
-    if (names[event.key]) { event.preventDefault(); set(names[event.key], true); }
-  });
-  window.addEventListener("keyup", function (event) { set(names[event.key], false); });
-  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
-    var name = button.getAttribute("data-key");
-    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
-    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
-      button.addEventListener(type, function () { set(name, false); });
-    });
-  });
-  // The ship gets the keys again each second, while a key is down.
-  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
 </script>
 </body>
 </html>

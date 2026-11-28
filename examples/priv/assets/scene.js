@@ -12,6 +12,15 @@
 // On a phone in portrait (a screen of 700 px wide or less, taller than
 // it is wide), the field has the class `phone`: it uses all the width of
 // the screen (site.css).
+//
+// The scene makes the keys of a game from the option `keys`, in the
+// element `into` of the page, before its text:
+//     keys: {into: element, pad: true, actions: [...]}
+// `pad: true` gives four arrows, with the arrow keys and W, A, S and D of
+// a keyboard. An action is `{label, key, codes}` (a key that the person
+// holds) or `{label, send, codes}` (a message at each press). `codes` are
+// the codes of the keys of a keyboard. While a key is down, the server
+// gets the list of the keys that are down: `{keys: ["left", "run"]}`.
 (function () {
   "use strict";
 
@@ -26,6 +35,86 @@
     function layout() { field.classList.toggle("phone", phone.matches); }
     if (phone.addEventListener) { phone.addEventListener("change", layout); } else if (phone.addListener) { phone.addListener(layout); }
     layout();
+
+    // --- The keys of a game --------------------------------------------
+
+    var down = {};      // the keys that are down: "pad-up" for an arrow, or the name of a key
+    var buttons = {};
+
+    function sendKeys() {
+      send({ keys: Object.keys(down).map(function (id) { return id.indexOf("pad-") === 0 ? id.slice(4) : id; }) });
+    }
+
+    function setKey(id, on) {
+      if (!id || !!down[id] === on) { return; }
+      if (on) { down[id] = true; } else { delete down[id]; }
+      if (buttons[id]) { buttons[id].classList.toggle("down", on); }
+      sendKeys();
+    }
+
+    function button(label, className) {
+      var element = document.createElement("button");
+      element.type = "button";
+      element.className = className;
+      element.textContent = label;
+      return element;
+    }
+
+    // A key that the person holds.
+    function hold(element, id) {
+      buttons[id] = element;
+      element.addEventListener("pointerdown", function (event) { event.preventDefault(); setKey(id, true); });
+      ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
+        element.addEventListener(type, function () { setKey(id, false); });
+      });
+      // A long touch opens no menu.
+      element.addEventListener("contextmenu", function (event) { event.preventDefault(); });
+    }
+
+    function makeKeys(spec) {
+      var codes = {};
+      var all = [];
+      if (spec.pad) {
+        var pad = document.createElement("div");
+        pad.className = "pad";
+        [["up", "Up", ["ArrowUp", "KeyW"]], ["left", "Left", ["ArrowLeft", "KeyA"]],
+         ["down", "Down", ["ArrowDown", "KeyS"]], ["right", "Right", ["ArrowRight", "KeyD"]]].forEach(function (one) {
+          var element = pad.appendChild(button(one[1], ""));
+          element.setAttribute("data-key", one[0]);
+          element.setAttribute("aria-label", one[1]);
+          hold(element, "pad-" + one[0]);
+          one[2].forEach(function (code) { codes[code] = { hold: "pad-" + one[0] }; });
+        });
+        all.push(pad);
+      }
+      (spec.actions || []).forEach(function (action) {
+        var element = button(action.label, "key");
+        if (action.key) {
+          element.setAttribute("data-key", action.key);
+          hold(element, action.key);
+        } else {
+          element.addEventListener("click", function () { send(action.send); });
+        }
+        (action.codes || []).forEach(function (code) { codes[code] = action.key ? { hold: action.key } : { send: action.send }; });
+        all.push(element);
+      });
+      // The keys are before the text of the element.
+      all.reverse().forEach(function (element) { spec.into.insertBefore(element, spec.into.firstChild); });
+
+      window.addEventListener("keydown", function (event) {
+        var code = codes[event.code];
+        if (!code || event.target.closest("textarea, input, select")) { return; }
+        event.preventDefault();
+        if (code.hold) { setKey(code.hold, true); } else if (!event.repeat) { send(code.send); }
+      });
+      window.addEventListener("keyup", function (event) { if (codes[event.code]) { setKey(codes[event.code].hold, false); } });
+      // A window that loses the focus gets no keyup: the keys go up.
+      window.addEventListener("blur", function () { Object.keys(down).forEach(function (id) { setKey(id, false); }); });
+      // The server gets the keys again each second, while a key is down.
+      setInterval(function () { if (Object.keys(down).length > 0) { sendKeys(); } }, 1000);
+    }
+
+    if (options.keys) { makeKeys(options.keys); }
     var run = null;        // the box, the kinds and the rocks
     var before = {};       // the boids of the moment before the last moment, by their number
     var last = null;       // the last moment

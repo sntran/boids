@@ -75,14 +75,7 @@
     <button class="main" id="go" type="button">New round</button>
   </div>
 
-  <div class="keys">
-    <div class="pad">
-      <button type="button" data-key="up" aria-label="Up">Up</button>
-      <button type="button" data-key="left" aria-label="Left">Left</button>
-      <button type="button" data-key="down" aria-label="Down">Down</button>
-      <button type="button" data-key="right" aria-label="Right">Right</button>
-    </div>
-    <button class="key" type="button" data-key="run">Run</button>
+  <div class="keys" id="keys">
     <p>Use the arrow keys or W, A, S and D to move. Hold Shift to run: running uses stamina, and the stamina comes back when you walk or stand.</p>
   </div>
   <p class="error" id="error" role="alert"></p>
@@ -203,7 +196,9 @@
   }
 
   var scene = Boids.scene({
-    name: "tag-yard", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "tag-yard",
+    keys: {into: el("keys"), pad: true, actions: [{key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]}]},
+    canvas: el("field"), readings: el("readings"), source: el("source"),
     beneath: beneath,
     onStart: function (header) { trees = header.rocks || []; },
     onMore: show,
@@ -215,37 +210,6 @@
     button.addEventListener("click", function () { scene.send({mode: button.getAttribute("data-mode")}); });
   });
 
-  // The keys of the person go to its child: a list of the keys that are down.
-  var down = {};
-  var codes = {
-    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
-    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
-    ShiftLeft: "run", ShiftRight: "run"
-  };
-  function send() { scene.send({keys: Object.keys(down)}); }
-  function set(name, on) {
-    if (!name || !!down[name] === on) { return; }
-    if (on) { down[name] = true; } else { delete down[name]; }
-    var button = document.querySelector('[data-key="' + name + '"]');
-    if (button) { button.classList.toggle("down", on); }
-    send();
-  }
-  window.addEventListener("keydown", function (event) {
-    var name = codes[event.code];
-    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
-  });
-  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
-  // A window that loses the focus gets no keyup: the child stops.
-  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
-  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
-    var name = button.getAttribute("data-key");
-    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
-    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
-      button.addEventListener(type, function () { set(name, false); });
-    });
-  });
-  // The child gets the keys again each second, while a key is down.
-  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
 </script>
 </body>
 </html>

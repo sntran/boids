@@ -56,6 +56,18 @@ defmodule BoidsExamples.GamesTest do
     end
   end
 
+  # The scene makes the keys of a game from data of the page (the option
+  # keys of Boids.scene): on a phone it changes an arrow of the screen to
+  # a direction of the world. The page has no key of its own.
+  test "the keys of each game come from data of its page" do
+    for game <- @games do
+      %{slug: slug} = game.info()
+      page = game.page()
+      refute page =~ ~r/<button[^>]*data-key=/, "#{slug}: a key in the markup of the page"
+      refute page =~ "keys: Object.keys(", "#{slug}: the page sends the keys itself"
+    end
+  end
+
   test "the server gives the list, the page of each game, and moves the old addresses" do
     assert {200, _, body} = get("/showcases")
     for game <- @games, do: assert(body =~ game.info().title)

@@ -60,14 +60,7 @@
     <button class="main" id="go" type="button" hidden>Next level</button>
   </div>
 
-  <div class="keys">
-    <div class="pad">
-      <button type="button" data-key="up" aria-label="Up">Up</button>
-      <button type="button" data-key="left" aria-label="Left">Left</button>
-      <button type="button" data-key="down" aria-label="Down">Down</button>
-      <button type="button" data-key="right" aria-label="Right">Right</button>
-    </div>
-    <button class="key" type="button" data-key="fast">Fast</button>
+  <div class="keys" id="keys">
     <p>Use the arrow keys or W, A, S and D to move the lantern, or click or touch a point of the field: the lantern goes there. The fireflies in its light follow it. Hold Shift (or Fast) to move the lantern faster than the fireflies: it leaves them where they are.</p>
   </div>
   <p class="error" id="error" role="alert"></p>
@@ -159,7 +152,9 @@
   }
 
   var scene = Boids.scene({
-    name: "firefly-field", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
+    name: "firefly-field",
+    keys: {into: el("keys"), pad: true, actions: [{key: "fast", label: "Fast", codes: ["ShiftLeft", "ShiftRight"]}]},
+    canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
     onStart: function (header) { box = header.box; },
     onMore: show,
     onError: function (text) { el("error").textContent = text; }
@@ -172,37 +167,6 @@
     scene.send({lantern: scene.toWorld(event)});
   });
 
-  // The keys of the person move the lantern: a list of the keys that are down.
-  var down = {};
-  var codes = {
-    ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
-    ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
-    ShiftLeft: "fast", ShiftRight: "fast"
-  };
-  function send() { scene.send({keys: Object.keys(down)}); }
-  function set(name, on) {
-    if (!name || !!down[name] === on) { return; }
-    if (on) { down[name] = true; } else { delete down[name]; }
-    var button = document.querySelector('[data-key="' + name + '"]');
-    if (button) { button.classList.toggle("down", on); }
-    send();
-  }
-  window.addEventListener("keydown", function (event) {
-    var name = codes[event.code];
-    if (name && !event.target.closest("textarea, input, select")) { event.preventDefault(); set(name, true); }
-  });
-  window.addEventListener("keyup", function (event) { set(codes[event.code], false); });
-  // A window that loses the focus gets no keyup: the lantern stops.
-  window.addEventListener("blur", function () { Object.keys(down).forEach(function (name) { set(name, false); }); });
-  Array.prototype.forEach.call(document.querySelectorAll("[data-key]"), function (button) {
-    var name = button.getAttribute("data-key");
-    button.addEventListener("pointerdown", function (event) { event.preventDefault(); set(name, true); });
-    ["pointerup", "pointerleave", "pointercancel"].forEach(function (type) {
-      button.addEventListener(type, function () { set(name, false); });
-    });
-  });
-  // The lantern gets the keys again each second, while a key is down.
-  setInterval(function () { if (Object.keys(down).length > 0) { send(); } }, 1000);
 </script>
 </body>
 </html>
