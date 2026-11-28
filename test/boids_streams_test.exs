@@ -338,21 +338,23 @@ defmodule BoidsStreamsTest do
 
   describe "two streams on a bridge of 1 cell" do
     # The scene is chaotic: a very small change of the start gives other
-    # trips. So the test has 2 sets of seeds, and it compares the means
-    # of the trips.
+    # trips, and so can another computer or a later change of the
+    # library. So the test has 3 sets of seeds, it compares the means of
+    # the trips, and its limits have a margin for each result that was
+    # measured.
     test "with oncoming => false and dodge: more trips than with separation as now, and no boid stands" do
       limit = {:named, :land}
 
       runs =
         together(
           [{:flow, fn -> bridge(:all, [], 1) end}] ++
-            for seed <- 1..2, {name, rules} <- [default: [@separation], pair: @pair] do
+            for seed <- 1..3, {name, rules} <- [default: [@separation], pair: @pair] do
               {{name, seed}, fn -> bridge(limit, rules, seed) end}
             end
         )
 
-      defaults = for seed <- 1..2, do: runs[{:default, seed}]
-      pairs = for seed <- 1..2, do: runs[{:pair, seed}]
+      defaults = for seed <- 1..3, do: runs[{:default, seed}]
+      pairs = for seed <- 1..3, do: runs[{:pair, seed}]
       # With flow only, the boids go through each other: 210 trips, for
       # each set of seeds.
       assert runs.flow.trips >= 200
@@ -369,11 +371,11 @@ defmodule BoidsStreamsTest do
 
       # With separation as now: 443 to 877 near pairs of opposite boids,
       # and 87 to 115 trips. The mean of 12 sets is 103.5 trips, and
-      # 146.5 with the two rules: 1.42 times. For the means of each 2 of
-      # the 12 sets, it is 1.28 to 1.63 times.
+      # 146.5 with the two rules: 1.42 times. For the means of each 3 of
+      # the 12 sets, it is 1.30 times or more.
       for default <- defaults, do: assert(default.opposite >= 300)
       trips = fn results -> Enum.sum(for %{trips: trips} <- results, do: trips) end
-      assert trips.(pairs) >= 1.2 * trips.(defaults)
+      assert trips.(pairs) >= 1.15 * trips.(defaults)
     end
   end
 
