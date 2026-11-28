@@ -5,8 +5,9 @@
 # The land is a grid of cells of 1 x 1, 40 cells wide and 36 cells high.
 # The river is the rows 14 to 20. The bridge is the columns from 19, as
 # wide as BRIDGE_WIDTH. Each boid goes from the nest to the food, and back
-# to the nest: that is one trip. A field of directions (a search of the
-# grid) leads each boid around the water, to the bridge.
+# to the nest: that is one trip. Two fields of directions of the world
+# (boids_field, one for each end) lead each boid around the water, to
+# the bridge.
 #
 # MODE:
 #   through  - flow only. The boids go through each other.
@@ -28,67 +29,27 @@ width = String.to_integer(width)
 [count, seconds] = Enum.map(rest ++ Enum.drop(["30", "120"], length(rest)), &String.to_integer/1)
 {cols, rows, bridge} = {40, 36, 19}
 water? = fn i, j -> j in 14..20 and not (i >= bridge and i < bridge + width) end
-open? = fn i, j -> i in 0..(cols - 1) and j in 0..(rows - 1) and not water?.(i, j) end
-around = for di <- -1..1, dj <- -1..1, {di, dj} != {0, 0}, do: {di, dj}
-
-# A step to a cell beside, with no cut across the corner of the water.
-step? = fn {i, j}, {di, dj} ->
-  open?.(i + di, j + dj) and (di == 0 or dj == 0 or (open?.(i + di, j) and open?.(i, j + dj)))
-end
-
-# The distances from the target to each open cell, and a field of directions.
-field = fn goal ->
-  spread = fn spread, edge, dist ->
-    {next, dist} =
-      for cell = {i, j} <- edge, d = {di, dj} <- around, step?.(cell, d), reduce: {[], dist} do
-        {next, dist} ->
-          cost = dist[cell] + if(di != 0 and dj != 0, do: :math.sqrt(2), else: 1.0)
-
-          if cost < Map.get(dist, {i + di, j + dj}, :infinity),
-            do: {[{i + di, j + dj} | next], Map.put(dist, {i + di, j + dj}, cost)},
-            else: {next, dist}
-      end
-
-    if next == [], do: dist, else: spread.(spread, Enum.uniq(next), dist)
-  end
-
-  dist = spread.(spread, [goal], %{goal => 0.0})
-  {gi, gj} = goal
-
-  fn {x, y} ->
-    cell = {floor(x), floor(y)}
-    {i, j} = cell
-
-    {tx, ty} =
-      case for(d = {di, dj} <- around, step?.(cell, d), do: {dist[{i + di, j + dj}], {i + di, j + dj}}) do
-        [] ->
-          {gi, gj}
-
-        near ->
-          with {d, best} <- Enum.min(near),
-               true <- d < Map.get(dist, cell, :infinity),
-               do: best,
-               else: (_ -> {gi, gj})
-      end
-
-    {dx, dy} = {tx + 0.5 - x, ty + 0.5 - y}
-    length = :math.sqrt(dx * dx + dy * dy)
-    if length == 0, do: {0.0, 0.0}, else: {dx / length, dy / length}
-  end
-end
-
 {nest, food} = {{20, 4}, {12, 29}}
 
 # The land as a grid: the library asks one time for each cell if it is
-# water.
-land = :boids_grid.new(size: {cols, rows}, blocked: fn {x, y} -> water?.(floor(x), floor(y)) end)
+# water. A cell near the water costs more (3 beside it, 2 at two cells):
+# the ways keep away from the water where they can, and the boids do
+# not all go around the same corner at the ends of the bridge.
+near = fn i, j ->
+  Enum.min([3 | for(di <- -2..2, dj <- -2..2, water?.(i + di, j + dj), do: max(abs(di), abs(dj)))])
+end
 
-:persistent_term.put(:bridge, %{
-  mode: mode,
-  water?: water?,
-  ends: %{food: food, nest: nest},
-  fields: %{food: field.(food), nest: field.(nest)}
-})
+costs =
+  for i <- 0..(cols - 1),
+      j <- 0..(rows - 1),
+      not water?.(i, j),
+      near.(i, j) < 3,
+      do: {{i, j}, 4 - near.(i, j)}
+
+land =
+  :boids_grid.new(size: {cols, rows}, blocked: fn {x, y} -> water?.(floor(x), floor(y)) end, costs: costs)
+
+:persistent_term.put(:bridge, %{mode: mode, water?: water?, ends: %{food: food, nest: nest}})
 
 defmodule Carrier do
   @behaviour :gen_boid
@@ -112,10 +73,11 @@ defmodule Carrier do
      }}
   end
 
-  # The rules to go to the end Goal (food or nest).
+  # The rules to go to the end Goal (food or nest): the field of the
+  # world with the name of that end.
   def rules(goal) do
-    %{mode: mode, fields: fields} = :persistent_term.get(:bridge)
-    flow = [{:flow, 1.0, %{field: fields[goal]}}]
+    %{mode: mode} = :persistent_term.get(:bridge)
+    flow = [{:flow, 1.0, %{field: {:named, goal}}}]
 
     case mode do
       "through" -> flow
@@ -150,6 +112,9 @@ end
 :rand.seed(:exsss, {1, 2, 3})
 {:ok, world} = :boids.start_world(%{bounds: {{0.0, 0.0}, {cols * 1.0, rows * 1.0}}, cell_size: 2.0})
 :ok = :boids.set_grid(world, :land, land)
+# The ways to each end: one field for all the boids that go there.
+:ok = :boids.set_field(world, :food, :boids_field.new(land, [food]))
+:ok = :boids.set_field(world, :nest, :boids_field.new(land, [nest]))
 
 for seed <- 1..count do
   {:ok, _} = :gen_boid.start(world, Carrier, {{16 + :rand.uniform() * 8, 2 + :rand.uniform() * 5}, seed})
