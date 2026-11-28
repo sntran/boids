@@ -154,6 +154,8 @@ defmodule BoidsBoidTest do
         {:dodge, 1, radius: 1, horizon: 3, groups: :all},
         {:flow, 1, field: {1, 0}},
         {:flow, 1, field: fn pos -> pos end, predict: 1},
+        {:walls, 1},
+        {:walls, 1, margin: 2.5},
         {{:seek, :home}, 1, target: {1, 2}},
         {{:wander, 2}, 1},
         {{:cohesion, {:of, "friends"}}, 1, groups: [:a]}
@@ -217,6 +219,8 @@ defmodule BoidsBoidTest do
             {:flow, 1, field: fn a, b -> {a, b} end},
             {:flow, 1, field: {1, 0, 0}},
             {:flow, 1, field: :wind},
+            {:walls, 1, margin: -1},
+            {:walls, 1, distance: 2},
             {{:boids_vec, "zero", []}, 1},
             {"separation", 1}
           ] do

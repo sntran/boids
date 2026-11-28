@@ -17,7 +17,7 @@ gives it.
 -export([seek/2, flee/2, arrive/3, pursue/4, evade/4, wander/4]).
 -export([separation/2, alignment/2, cohesion/2]).
 -export([avoid/4, contain/3, follow/5]).
--export([cruise/2, leader/5, dodge/4, flow/2]).
+-export([cruise/2, leader/5, dodge/4, flow/2, walls/3]).
 
 -export_type([body/0, neighbor/0, obstacle/0]).
 
@@ -372,3 +372,47 @@ field at the position of the boid. A zero vector gives no force.
 -spec flow(body(), vec()) -> vec().
 flow(#{vel := Vel, max_speed := Max}, Direction) ->
     wanted(Direction, Vel, Max).
+
+-doc """
+Move away from the walls near the boid, before the boid touches them.
+`Points` are the points of the walls (`boids_grid:walls/3`: one point
+for each straight wall that the boid can see). A point nearer than
+`Margin` pushes the boid away from it, with the weight `1 - D / Margin`
+at the distance `D`.
+
+The force is the mean of the directions away from the points, with
+their weights, multiplied by the maximum speed and by the weight of the
+nearest point. The weights of the mean add to 1. Thus:
+
+- the force is larger when a wall is nearer, and it comes to the maximum
+  speed at a wall;
+- two walls at the same distance on two sides give no force, and
+  between two walls the force goes to zero at the middle;
+- the force does not get larger with the number of the points: a thick
+  wall, a thin wall and a long wall at the same distance give the same
+  force.
+""".
+-spec walls(body(), [vec()], number()) -> vec().
+walls(#{pos := Pos, vel := Vel, max_speed := Max}, Points, Margin) ->
+    {Sum, Total, Most} =
+        lists:foldl(
+            fun(Point, Acc = {Sum0, Total0, Most0}) ->
+                Away = boids_vec:sub(Pos, Point),
+                Dist = boids_vec:norm(Away),
+                case Dist > 0 andalso Dist < Margin of
+                    true ->
+                        Weight = 1 - Dist / Margin,
+                        {boids_vec:add(Sum0, boids_vec:scale(Away, Weight / Dist)), Total0 + Weight, max(Most0, Weight)};
+                    false ->
+                        Acc
+                end
+            end,
+            {boids_vec:zero(boids_vec:dim(Vel)), 0.0, 0.0},
+            Points
+        ),
+    push(Sum, Total, Max * Most).
+
+%% The mean of the directions, with the length of the force. With no
+%% point, the sum is zero.
+push(Sum, Total, _Size) when Total == 0 -> Sum;
+push(Sum, Total, Size) -> boids_vec:scale(Sum, Size / Total).

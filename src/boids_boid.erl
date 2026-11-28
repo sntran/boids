@@ -55,6 +55,7 @@ is the three rules of a flock:
 | `leader` | `target`, `distance` (half of `perception`), `slow_radius` (`perception`) | Stay behind a leader, and move out of its way. |
 | `dodge` | `radius` (a quarter of `perception`), `horizon` (`2.0` seconds), `groups` (`all`) | Move away from a neighbor that comes too near in the time of the horizon. |
 | `flow` | `field`, `predict` (`0.5` second) | Move in the direction of a field: a vector, or a function of a position. |
+| `walls` | `margin` (half of `perception`) | Move away from the walls of the grid of the boid (`walkable`) that are nearer than the margin. |
 
 `groups` is `all`, `same` (the group of the boid) or a list of groups.
 
@@ -132,6 +133,11 @@ limit.
   dimensions and `walkable` other than `all` is a bad option.
 - **With `wrap`,** the cells are at their positions in the box: a boid
   that crosses a side of the box meets the walls of the opposite side.
+- **The rule `walls`.** The limit only stops a movement into a wall. The
+  rule `walls` moves a boid away from a wall before it touches it, so
+  that the movement is smooth and the limit acts only a little. The
+  force is larger when the wall is nearer, and it does not change with
+  the thickness or the length of a wall (`boids_steer:walls/3`).
 """.
 
 -export([new/1, update/2, options/1, entry/1, to_map/1]).
@@ -176,7 +182,8 @@ limit.
     | cruise
     | leader
     | dodge
-    | flow.
+    | flow
+    | walls.
 -type name() ::
     rule_name()
     | {rule_name(), Id :: term()}
@@ -386,6 +393,7 @@ keys(cruise) -> {[], [speed]};
 keys(leader) -> {[target], [distance, slow_radius]};
 keys(dodge) -> {[], [radius, horizon, groups]};
 keys(flow) -> {[field], [predict]};
+keys(walls) -> {[], [margin]};
 keys(_) -> custom.
 
 opt(Name, radius, N) when Name =:= wander; Name =:= dodge -> boids_vec:is_size(N);
@@ -666,6 +674,12 @@ apply_rule(flow, Opts = #{field := Field}, B = #{pos := Pos, vel := Vel}, _Ns, _
             false -> Field
         end,
     boids_steer:flow(B, Direction);
+apply_rule(walls, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Seen, _Memory, _Name) ->
+    Margin = maps:get(margin, Opts, Perception / 2),
+    case grid(B, Seen) of
+        none -> boids_vec:zero(boids_vec:dim(Pos));
+        Grid -> boids_steer:walls(B, boids_grid:walls(Grid, place(Seen, Pos), Margin, box(Seen)), Margin)
+    end;
 apply_rule(Fun, _Opts, B, Ns, Seen, _Memory, _Name) ->
     Fun(B, Ns, Seen).
 

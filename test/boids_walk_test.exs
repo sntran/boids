@@ -326,6 +326,111 @@ defmodule BoidsWalkTest do
     end
   end
 
+  describe "the rule walls" do
+    defp walls_force(grid, opts, rule \\ {:walls, 1.0}, more \\ %{}) do
+      boid =
+        boid(Map.merge(%{rules: [rule], max_speed: 4.0, perception: 2.0, max_force: 1.0e9}, Map.new(opts)))
+
+      {[{_, force}], _} = :boids_boid.forces(boid, [], Map.merge(%{grids: %{land: grid}}, more))
+      force
+    end
+
+    test "pushes a boid away from a wall near it, more when the wall is nearer" do
+      # The margin is half of the perception: 1.0.
+      assert_vec(walls_force(wall(), pos: {9.5, 5.0}), {-2.0, 0.0})
+      assert_vec(walls_force(wall(), pos: {9.9, 5.0}), {-3.6, 0.0})
+      assert_vec(walls_force(wall(), pos: {11.25, 5.0}), {3.0, 0.0})
+      # Far from the wall: no force.
+      assert walls_force(wall(), pos: {7.0, 10.0}) == {0.0, 0.0}
+      # A larger margin: the boid feels the wall from farther.
+      assert_vec(walls_force(wall(), [pos: {7.0, 10.0}], {:walls, 1.0, margin: 6.0}), {-2.0, 0.0})
+      # The weight of the rule multiplies the force.
+      assert_vec(walls_force(wall(), [pos: {9.5, 5.0}], {:walls, 2.5}), {-5.0, 0.0})
+    end
+
+    test "along a straight wall, the force is the same at each place, and at a right angle to the wall" do
+      for y <- [5.0, 5.3, 5.5, 5.99, 6.0, 6.01, 11.7] do
+        assert_vec(walls_force(wall(), pos: {9.5, y}), {-2.0, 0.0})
+      end
+    end
+
+    test "a thin wall and a thick wall at the same distance give the same force" do
+      thin =
+        :boids_grid.from_rows(["........", "........", "########", "........", "........", "........"], [])
+
+      thick =
+        :boids_grid.from_rows(["........", "........", "########", "########", "########", "########"], [])
+
+      long =
+        :boids_grid.from_rows(["........", "........", "..####..", "........", "........", "........"], [])
+
+      for pos <- [{3.5, 1.5}, {3.1, 1.9}, {4.0, 1.2}, {2.7, 1.05}], margin <- [0.5, 1.0, 2.5] do
+        rule = {:walls, 1.0, margin: margin}
+        force = walls_force(thin, [pos: pos], rule)
+        assert walls_force(thick, [pos: pos], rule) == force
+        # A short wall too, when the boid is in front of it.
+        if margin <= 1.0, do: assert(walls_force(long, [pos: pos], rule) == force)
+      end
+
+      # The force is not zero in these places.
+      assert_vec(walls_force(thick, [pos: {3.5, 1.5}], {:walls, 1.0, margin: 1.0}), {0.0, -2.0})
+    end
+
+    test "between two walls, the force is to the middle, and no force at the middle" do
+      bridge = :boids_grid.from_rows(["#.#", "#.#", "#.#"], [])
+      assert_vec(walls_force(bridge, pos: {1.5, 1.5}), {0.0, 0.0})
+      {x, y} = walls_force(bridge, pos: {1.4, 1.5})
+      assert x > 0 and x < 0.5
+      assert_in_delta y, 0.0, 1.0e-12
+      {x, _} = walls_force(bridge, pos: {1.9, 1.5})
+      assert x < -2.0
+    end
+
+    test "in a corner, the force is away from the two walls" do
+      corner = :boids_grid.from_rows(["..#", "..#", "###"], [])
+      assert_vec(walls_force(corner, pos: {1.5, 1.5}), {-1.0, -1.0})
+    end
+
+    test "with no grid, in a blocked cell, and in three dimensions, the rule gives no force" do
+      boid = boid(pos: {9.5, 5.0}, rules: [{:walls, 1.0}], perception: 2.0)
+      assert {[walls: {+0.0, +0.0}], _} = :boids_boid.forces(boid, [], %{grids: %{}})
+      assert {[walls: {+0.0, +0.0}], _} = :boids_boid.forces(boid, [], %{})
+      free = :boids_boid.update(boid, walkable: :all)
+      assert {[walls: {+0.0, +0.0}], _} = :boids_boid.forces(free, [], %{grids: %{land: wall()}})
+      assert walls_force(wall(), pos: {10.5, 5.0}) == {0.0, 0.0}
+      bird = :boids_boid.new(pos: {9.5, 5.0, 1.0}, rules: [{:walls, 1.0}])
+      assert {[walls: {+0.0, +0.0, +0.0}], _} = :boids_boid.forces(bird, [], %{grids: %{land: wall()}})
+    end
+
+    test "with wrap, a wall across a side of the box pushes too" do
+      grid = :boids_grid.new(size: {10, 10}, blocked: for(j <- 0..9, do: {0, j}))
+      wrap = %{wrap: true, bounds: {{0.0, 0.0}, {10.0, 10.0}}}
+      assert_vec(walls_force(grid, [pos: {9.5, 5.0}], {:walls, 1.0}, wrap), {-2.0, 0.0})
+      # With no wrap, the side of the grid is a wall at the same place.
+      assert_vec(walls_force(:boids_grid.new(size: {10, 10}), pos: {9.5, 5.0}), {-2.0, 0.0})
+    end
+
+    test "boids with the rule come near a wall more slowly, and do not stay in contact with it" do
+      grid = :boids_grid.new(size: {20, 10}, blocked: for(j <- 0..9, do: {10, j}))
+
+      nearest = fn rules ->
+        world = world(bounds: {{0, 0}, {20, 10}}, defaults: %{walkable: {:named, :land}, tick: :manual})
+        :ok = :boids.set_grid(world, :land, grid)
+        {:ok, id} = :boids.add(world, pos: {5.0, 5.0}, rules: rules, max_speed: 2.0, perception: 4.0)
+        for _ <- 1..80, do: :ok = :boids.step(world, 0.1)
+        {:ok, %{pos: {x, _}}} = :boids.lookup(world, id)
+        10.0 - x
+      end
+
+      seek = {:seek, 1.0, target: {15.0, 5.0}}
+      # With the limit only, the boid is at the wall.
+      assert nearest.([seek]) < 1.0e-5
+      # With the rule, it stops where the two forces are equal.
+      gap = nearest.([seek, {:walls, 2.0}])
+      assert gap > 0.5 and gap < 2.0
+    end
+  end
+
   describe "populate/3" do
     test "puts boids only in walkable places, and refuses an area with none" do
       grid = :boids_grid.from_rows(["#####", "#...#", "#####"], cell_size: 2.0)
@@ -385,7 +490,7 @@ defmodule BoidsWalkTest do
   defp rules do
     list_of(
       one_of([
-        tuple({member_of([:separation, :alignment, :cohesion, :wander, :contain]), weight()}),
+        tuple({member_of([:separation, :alignment, :cohesion, :wander, :contain, :walls]), weight()}),
         map(tuple({weight(), vec(2, 30.0)}), fn {w, t} -> {:seek, w, %{target: t}} end),
         map(tuple({weight(), vec(2, 30.0)}), fn {w, t} -> {:flee, w, %{target: t}} end),
         map(tuple({weight(), vec(2, 1.0)}), fn {w, f} -> {:flow, w, %{field: f}} end)

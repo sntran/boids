@@ -393,6 +393,45 @@ defmodule BoidsSteerTest do
     end
   end
 
+  describe "walls/3" do
+    test "pushes the boid away from a point of a wall, more when the point is nearer" do
+      boid = body({0, 0}, {1, 0}, 4.0)
+      assert_vec(:boids_steer.walls(boid, [{0.5, 0.0}], 1.0), {-2.0, 0.0})
+      assert_vec(:boids_steer.walls(boid, [{0.1, 0.0}], 1.0), {-3.6, 0.0})
+      assert_vec(:boids_steer.walls(boid, [{0.0, -0.75}], 1.0), {0.0, 1.0})
+      # The velocity of the boid changes nothing.
+      assert_vec(:boids_steer.walls(body({0, 0}, {-3, 2}, 4.0), [{0.5, 0.0}], 1.0), {-2.0, 0.0})
+    end
+
+    test "a point at the margin or farther, and a point at the boid, give no force" do
+      boid = body({0, 0}, {1, 0}, 4.0)
+      assert :boids_steer.walls(boid, [], 1.0) == {0.0, 0.0}
+      assert :boids_steer.walls(boid, [{1.0, 0.0}, {0.0, 3.0}, {0.0, 0.0}], 1.0) == {0.0, 0.0}
+      assert :boids_steer.walls(boid, [{0.5, 0.0}], 0) == {0.0, 0.0}
+    end
+
+    test "the weights of the points add to 1: more points do not make the force larger" do
+      boid = body({0, 0}, {0, 0}, 4.0)
+      one = :boids_steer.walls(boid, [{0.5, 0.0}], 1.0)
+      assert_vec(:boids_steer.walls(boid, [{0.5, 0.0}, {0.5, 0.0}, {0.5, 0.0}], 1.0), one)
+      # Two walls at the same distance on two sides: no force.
+      assert_vec(:boids_steer.walls(boid, [{0.5, 0.0}, {-0.5, 0.0}], 1.0), {0.0, 0.0})
+      # Between two walls, the force is to the middle, and it is small
+      # near the middle.
+      {x, y} = :boids_steer.walls(boid, [{0.4, 0.0}, {-0.6, 0.0}], 1.0)
+      assert_in_delta x, -4.0 * 0.6 * (0.6 - 0.4) / (0.6 + 0.4), 1.0e-9
+      assert y == 0.0
+      # In a corner, the force is away from the corner.
+      assert_vec(:boids_steer.walls(boid, [{0.5, 0.0}, {0.0, 0.5}], 1.0), {-1.0, -1.0})
+    end
+
+    test "in three dimensions" do
+      boid = body({0, 0, 0}, {0, 0, 0}, 4.0)
+      assert_vec(:boids_steer.walls(boid, [{0.0, 0.0, 0.5}], 1.0), {0.0, 0.0, -2.0})
+      assert :boids_steer.walls(boid, [], 1.0) == {0.0, 0.0, 0.0}
+    end
+  end
+
   describe "follow/5" do
     @path [{0, 0}, {10, 0}, {10, 10}]
 
