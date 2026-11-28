@@ -626,6 +626,25 @@ pairs of boids of the two streams that are nearer than 0.35 are 18 to
 34 with the two rules, and 1,356 to 1,631 with `oncoming => false` and
 no `dodge`.
 
+`examples/bridge.exs` has the two rules as its mode `streams`: boids
+that go two ways across a bridge, with a field of directions for each
+way (`mix run examples/bridge.exs streams 1`). The scene is chaotic, so
+the table has the means of 10 runs with different seeds, and the spread
+of one run in brackets. A near pair is a boid that goes one way and a
+boid that goes the other way with a distance less than 0.35, in one
+step.
+
+| Mode | Bridge | Trips | Near pairs |
+|---|---|---|---|
+| `through`: no `separation` | 1 cell | 210 | 654 (78) |
+| `walkable`: `separation` | 1 cell | 103 (10) | 574 (123) |
+| `streams`: the two rules | 1 cell | 146 (5) | 22 (4) |
+| `through` | 2 cells | 210 | 620 (56) |
+| `walkable` | 2 cells | 143 (3) | 526 (52) |
+| `streams` | 2 cells | 178 (1) | 5 (2) |
+
+With the two rules, no boid stands.
+
 ## The time
 
 - A boid makes a step each `tick` milliseconds of its own clock (the

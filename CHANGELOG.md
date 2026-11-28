@@ -69,6 +69,9 @@ The first version. It needs Erlang/OTP 29.
   moves each boid to its right when the two will be at the same point,
   so the streams make two lanes between walls. With `oncoming => false`
   and no `dodge`, the streams go through each other.
+  `examples/bridge.exs` has the two rules as its mode `streams`. Its
+  result has the near pairs of boids that go opposite ways, and it has
+  an argument for the seed.
 - `Seen` has the key `grids`: the grids that the boid uses, by their
   names. A boid keeps the grid that it read, and reads it again only
   after a change of a grid of its world (`specs/Kept.tla`).

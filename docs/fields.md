@@ -361,7 +361,11 @@ nearest open cell is the cell that the boid came from in most cases.
   of the bridge). A field does not know where the boids are: it has no
   cost for a place with many boids. The option `margin` moves the line
   away from the walls, but it is one line for the two directions. Use
-  the rules for neighbors (`separation`, `dodge`).
+  the rules for neighbors: `separation` with `oncoming => false`, and
+  `dodge` (see "Two streams in a narrow way" in the README). The mode
+  `streams` of the example has them: on the bridge of 1 cell, 146 (5)
+  trips against 103 (10) for `walkable`, and on the bridge of 2 cells,
+  178 (1) against 143 (3).
 - **The margin changes which way costs the least.** With `[3, 2]`, a
   cell of a way that is 1 or 2 cells wide costs 3 times the cost of a
   cell in open land. A way around it in open land that is less than 3

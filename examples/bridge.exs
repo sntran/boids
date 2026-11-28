@@ -1,6 +1,6 @@
 # Boids that carry things across a river on a bridge.
 #
-#     mix run examples/bridge.exs MODE BRIDGE_WIDTH [BOIDS] [SECONDS]
+#     mix run examples/bridge.exs MODE BRIDGE_WIDTH [BOIDS] [SECONDS] [SEED]
 #
 # The land is a grid of cells of 1 x 1, 40 cells wide and 36 cells high.
 # The river is the rows 14 to 20. The bridge is the columns from 19, as
@@ -21,12 +21,22 @@
 #              its blocked cells. A boid slides along the water.
 #   walls    - as "walkable", with the rule walls: a boid moves away from
 #              the water before it touches it.
+#   streams  - as "walkable", with the two rules for two streams in a
+#              narrow way: separation does not see a boid that comes from
+#              the front (oncoming => false), and dodge moves each boid to
+#              a side of a boid that comes to it.
 #
-# The result: the trips, the steps that a boid ended in the water, and
-# the seconds that boids stood (a speed less than 0.4 for 3 s or more).
+# The result: the trips, the steps that a boid ended in the water, the
+# seconds that boids stood (a speed less than 0.4 for 3 s or more), and
+# the near pairs: the pairs of a boid that goes to the food and a boid
+# that goes to the nest with a distance less than 0.35, in all the steps.
+#
+# The scene is chaotic: a very small change of the start gives other
+# numbers. To compare two modes, use the mean of some runs with different
+# values of SEED (1, 2, 3, ...). The default is 1.
 [mode, width | rest] = System.argv()
 width = String.to_integer(width)
-[count, seconds] = Enum.map(rest ++ Enum.drop(["30", "120"], length(rest)), &String.to_integer/1)
+[count, seconds, seed] = Enum.map(rest ++ Enum.drop(["30", "120", "1"], length(rest)), &String.to_integer/1)
 {cols, rows, bridge} = {40, 36, 19}
 water? = fn i, j -> j in 14..20 and not (i >= bridge and i < bridge + width) end
 {nest, food} = {{20, 4}, {12, 29}}
@@ -51,7 +61,7 @@ defmodule Carrier do
        max_speed: 4.0,
        max_force: 24.0,
        perception: 2.0,
-       walkable: if(mode in ["walkable", "walls"], do: {:named, :land}, else: :all),
+       walkable: if(mode in ["walkable", "walls", "streams"], do: {:named, :land}, else: :all),
        group: :food,
        rules: rules(:food),
        data: %{trips: 0},
@@ -69,6 +79,7 @@ defmodule Carrier do
       "through" -> flow
       "ways" -> flow ++ [{:separation, 1.5, %{radius: 0.7, groups: [goal]}}]
       "walls" -> flow ++ [{:separation, 1.5, %{radius: 0.7}}, {:walls, 1.0}]
+      "streams" -> flow ++ [{:separation, 1.5, %{radius: 0.7, oncoming: false}}, {:dodge, 4.0}]
       _ -> flow ++ [{:separation, 1.5, %{radius: 0.7}}]
     end
   end
@@ -95,7 +106,7 @@ defmodule Carrier do
   end
 end
 
-:rand.seed(:exsss, {1, 2, 3})
+:rand.seed(:exsss, {seed, 2, 3})
 {:ok, world} = :boids.start_world(%{bounds: {{0.0, 0.0}, {cols * 1.0, rows * 1.0}}, cell_size: 2.0})
 :ok = :boids.set_grid(world, :land, land)
 # The ways to each end: one field for all the boids that go there. The
@@ -106,29 +117,33 @@ end
 :ok = :boids.set_field(world, :food, :boids_field.new(land, [food], margin: [3, 2]))
 :ok = :boids.set_field(world, :nest, :boids_field.new(land, [nest], margin: [3, 2]))
 
-for seed <- 1..count do
-  {:ok, _} = :gen_boid.start(world, Carrier, {{16 + :rand.uniform() * 8, 2 + :rand.uniform() * 5}, seed})
+for n <- 1..count do
+  pos = {16 + :rand.uniform() * 8, 2 + :rand.uniform() * 5}
+  {:ok, _} = :gen_boid.start(world, Carrier, {pos, (seed - 1) * 1000 + n})
 end
 
 dt = 0.1
 
-{wet, stood, _} =
-  Enum.reduce(1..round(seconds / dt), {0, 0, %{}}, fn _, {wet, stood, slow} ->
+{wet, stood, near, _} =
+  Enum.reduce(1..round(seconds / dt), {0, 0, 0, %{}}, fn _, {wet, stood, near, slow} ->
     :ok = :boids.step(world, dt)
     rows = :boids.snapshot(world)
     wet = wet + Enum.count(rows, fn %{pos: {x, y}} -> water?.(floor(x), floor(y)) end)
+    out = for %{pos: pos, group: :food} <- rows, do: pos
+    back = for %{pos: pos, group: :nest} <- rows, do: pos
+    near = near + Enum.count(for(a <- out, b <- back, do: :boids_vec.dist(a, b)), &(&1 < 0.35))
 
     slow =
       Map.new(rows, fn %{id: id, vel: {vx, vy}} ->
         {id, if(vx * vx + vy * vy < 0.16, do: Map.get(slow, id, 0) + 1, else: 0)}
       end)
 
-    {wet, stood + Enum.count(slow, fn {_, steps} -> steps >= 30 end), slow}
+    {wet, stood + Enum.count(slow, fn {_, steps} -> steps >= 30 end), near, slow}
   end)
 
 trips = Enum.sum(for %{data: %{trips: trips}} <- :boids.snapshot(world), do: trips)
 
 IO.puts(
   "#{mode}, bridge #{width} wide, #{count} boids, #{seconds} s: #{trips} trips, " <>
-    "#{wet} steps in the water, #{Float.round(stood * dt, 1)} s stood"
+    "#{wet} steps in the water, #{Float.round(stood * dt, 1)} s stood, #{near} near pairs"
 )
