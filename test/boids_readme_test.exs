@@ -277,6 +277,79 @@ defmodule BoidsReadmeTest do
     end
   end
 
+  test "two streams in a narrow way" do
+    way =
+      :boids_grid.from_rows(
+        [~c"####################", ~c"....................", ~c"####################"],
+        %{cell_size: 2.0}
+      )
+
+    # 40 seconds in steps of 0.1 second. The result is for the last 20
+    # seconds: the mean speed of the boids in their direction as a part
+    # of the maximum speed, the distance between the two streams across
+    # the way, and the number of times that a boid is nearer than 0.35
+    # to a boid of the other stream.
+    run = fn streams ->
+      {:ok, world} =
+        :boids.start_world(%{bounds: {{0, 0}, {40, 6}}, wrap: true, defaults: %{walkable: {:named, :way}}})
+
+      :ok = :boids.set_grid(world, :way, way)
+      :rand.seed(:exsss, {1, 2, 3})
+      people = %{max_speed: 4, max_force: 24, perception: 2, tick: :manual}
+      east = %{group: :east, seed: 100, rules: [{:flow, 1.0, %{field: {1, 0}}} | streams]}
+      west = %{group: :west, seed: 200, rules: [{:flow, 1.0, %{field: {-1, 0}}} | streams]}
+      {:ok, _} = :boids.populate(world, 15, Map.merge(people, east))
+      {:ok, _} = :boids.populate(world, 15, Map.merge(people, west))
+
+      sums =
+        Enum.reduce(1..400, %{speed: 0.0, apart: 0.0, near: 0}, fn step, sums ->
+          :ok = :boids.step(world, 0.1)
+          rows = :boids.snapshot(world)
+          for %{pos: pos} <- rows, do: assert(:boids_grid.walkable(way, pos))
+          east = for %{group: :east, pos: pos, vel: {speed, _}} <- rows, do: {pos, speed}
+          west = for %{group: :west, pos: pos, vel: {speed, _}} <- rows, do: {pos, -speed}
+          side = fn stream -> Enum.sum(for {{_, y}, _} <- stream, do: y) / 15 end
+
+          near =
+            for {here, _} <- east, {there, _} <- west, reduce: 0 do
+              near ->
+                between = :boids_vec.shortest(:boids_vec.sub(there, here), {0.0, 0.0}, {40.0, 6.0})
+                if :boids_vec.norm(between) < 0.35, do: near + 1, else: near
+            end
+
+          if step > 200 do
+            %{
+              speed: sums.speed + Enum.sum(for {_, speed} <- east ++ west, do: speed) / (30 * 4),
+              # A boid that goes east has its right at -y.
+              apart: sums.apart + side.(west) - side.(east),
+              near: sums.near + near
+            }
+          else
+            sums
+          end
+        end)
+
+      :ok = :boids.stop_world(world)
+      %{speed: sums.speed / 200, apart: sums.apart / 200, near: sums.near}
+    end
+
+    # The two rules: the two streams go at their full speed, each along
+    # the wall at its right, and no boid touches a boid of the other
+    # stream.
+    streams = [{:separation, 1.5, %{radius: 0.7, oncoming: false}}, {:dodge, 4.0}]
+    together = run.(streams)
+    assert together.speed > 0.95
+    assert together.apart > 1.5
+    assert together.near == 0
+
+    # With oncoming => false and no dodge, the two streams go through
+    # each other.
+    through = run.([hd(streams)])
+    assert through.speed > 0.95
+    assert abs(through.apart) < 0.5
+    assert through.near > 100
+  end
+
   test "a world below a supervisor of yours" do
     children = [{:boids, name: :boids_readme_space, bounds: {{0, 0}, {100, 100}}}]
     {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one)

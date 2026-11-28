@@ -62,6 +62,13 @@ The first version. It needs Erlang/OTP 29.
   for its water.
 - `Seen` has the key `fields`: the fields that the boid uses, by their
   names. A boid keeps the field that it read, as it keeps its grid.
+- Two streams of boids that go in opposite directions pass each other
+  in a narrow way: the option `oncoming => false` of `separation`,
+  `alignment` and `cohesion`, with which a rule does not see a neighbor
+  that comes from the front, together with the rule `dodge`. `dodge`
+  moves each boid to its right when the two will be at the same point,
+  so the streams make two lanes between walls. With `oncoming => false`
+  and no `dodge`, the streams go through each other.
 - `Seen` has the key `grids`: the grids that the boid uses, by their
   names. A boid keeps the grid that it read, and reads it again only
   after a change of a grid of its world (`specs/Kept.tla`).

@@ -281,6 +281,8 @@ ok = boids:set_obstacle(World, rock, {30, 30}, 5).
   removes the second one.
 - `separation` sees all the groups. `alignment` and `cohesion` see only
   the group of the boid. The option `groups` of a rule changes this.
+- With `oncoming => false`, these three rules do not see a neighbor
+  that comes from the front (see "Two streams in a narrow way").
 
 ### The order of the rules
 
@@ -572,6 +574,57 @@ ok = boids:set_field(World, exit, boids_field:new(Land2, [{35, 5}], #{margin => 
 - A grid of 200 x 200 cells gives a field in about 40 milliseconds, and
   a field is 6 bytes for each cell. A read of a direction takes 0.3
   microsecond.
+
+## Two streams in a narrow way
+
+When two streams of boids go in opposite directions through a narrow
+way (a bridge, a door, a corridor), `separation` pushes each boid back
+from the boids that come to it, and the two streams stop each other.
+Use these two rules together: `separation` with `oncoming => false`,
+and `dodge`.
+
+```erlang
+%% A way of 40 x 2 between two walls. With wrap, it has no end: a boid
+%% that goes out at one end comes in at the other end.
+Way = boids_grid:from_rows([
+    "####################",
+    "....................",
+    "####################"
+], #{cell_size => 2.0}),
+{ok, World} = boids:start_world(#{bounds => {{0, 0}, {40, 6}}, wrap => true, defaults => #{walkable => {named, way}}}),
+ok = boids:set_grid(World, way, Way),
+Streams = [{separation, 1.5, #{radius => 0.7, oncoming => false}}, {dodge, 4.0}],
+People = #{max_speed => 4, max_force => 24, perception => 2},
+{ok, _East} = boids:populate(World, 15, People#{group => east, rules => [{flow, 1.0, #{field => {1, 0}}} | Streams]}),
+{ok, _West} = boids:populate(World, 15, People#{group => west, rules => [{flow, 1.0, #{field => {-1, 0}}} | Streams]}).
+```
+
+- **`separation` with `oncoming => false`** does not see a neighbor
+  that comes from the front: a neighbor whose velocity is against the
+  velocity of the boid (their dot product is negative). The boids that
+  go the same way keep their space. `alignment` and `cohesion` have the
+  option too. The default is `true`: a rule sees all its neighbors.
+- **`dodge`** moves a boid to a side of a boid that comes to it, before
+  the two touch. When the two will be at the same point, each of them
+  goes to its right. Between walls, the two streams thus make two
+  lanes, as the people on a road.
+- **The two rules are necessary.** `oncoming => false` with no `dodge`
+  lets the two streams go through each other: the boids of the two
+  streams are then as near to each other as with no `separation`.
+- **The weight of `dodge` is the adjustment.** A smaller weight lets
+  more boids through a very narrow way, and a larger weight keeps the
+  boids of the two streams farther apart.
+- **In three dimensions,** the option is the same. There is no right
+  there: `dodge` gives the same side to all the boids that go one way
+  (`boids_steer:dodge/4`).
+
+In a corridor of 40 x 1 with walls, 30 boids that go from end to end
+make 19 to 131 crossings in 120 seconds with `separation` and the
+default of the option, and 314 to 321 with the two rules. With no
+`separation`, they make 320 to 330. In the steps of that time, the
+pairs of boids of the two streams that are nearer than 0.35 are 18 to
+34 with the two rules, and 1,356 to 1,631 with `oncoming => false` and
+no `dodge`.
 
 ## The time
 
