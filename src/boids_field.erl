@@ -43,6 +43,28 @@ sources.
 `new/2` has no process and no state: call it in a process of your own
 when the grid is large, and give the result to `boids:set_field/3`.
 
+## The margin
+
+The shortest way goes around a corner with no distance from it, and
+along a wall. Boids that follow it touch the walls, and the boids of
+all the directions come to the same corners. With the option `margin`,
+the cells near a wall cost more, so a way keeps away from the walls
+where it has room, and goes near a wall only where it must: through a
+door of one cell, the way is the same.
+
+- The distance to a wall is in cells, in 8 directions: a cell that
+  touches a blocked cell at a side or at a corner is at 1 cell. So the
+  cell across the corner of a wall costs more too, and a way goes
+  around a corner at a distance.
+- The sides of the grid are walls for the margin, because a place
+  outside the grid is blocked (`boids_grid`).
+- The cost of the grid is multiplied: a cell with the cost 2 at 1 cell
+  from a wall, with `[3, 2]`, has the cost 6.
+- A goal cell near a wall has the margin too. The value of a goal is 0
+  with each cost, so only the cells around it change.
+- `distance/2` then gives the cost with the margin, which is more than
+  the length of the way.
+
 ## What the functions give
 
 - `direction/2`: a vector of length 1 down the costs, or zero at a goal
@@ -127,6 +149,7 @@ cells of the grid. The options (a map, or a list of `{Key, Value}`):
 | Option | Default | Description |
 |---|---|---|
 | `exact` | `8` | The cells at this number of cells or less from a goal, on each axis, start with the exact distance to it, when the straight line to the goal is in open cells of one cost. With `0`, only the goal has its exact cost. With many goals, the number is smaller: the cells of the start are 16,384 at most. |
+| `margin` | `[]` | A higher cost for the open cells near a wall: a list of numbers from 1. With `[3, 2]`, the cost of a cell at 1 cell from a blocked cell is multiplied by 3, and at 2 cells by 2. See "The margin". |
 
 A goal that is not an open cell of the grid gives the error
 `{bad_option, {goals, Goal}}`. A value that is not a grid gives the
@@ -140,15 +163,19 @@ cells more than 1 second (`docs/fields.md`).
 new(Grid, Goals0, Opts0) ->
     boids_grid:is_grid(Grid) orelse error(badarg),
     Opts = boids_boid:to_map(Opts0),
-    [error({bad_option, {Key, Value}}) || Key := Value <- Opts, Key =/= exact],
+    [error({bad_option, {Key, Value}}) || Key := Value <- Opts, Key =/= exact, Key =/= margin],
     Exact = maps:get(exact, Opts, 8),
     is_integer(Exact) andalso Exact >= 0 orelse error({bad_option, {exact, Exact}}),
+    Margin = maps:get(margin, Opts, []),
+    is_list(Margin) andalso lists:all(fun(Factor) -> boids_vec:is_size(Factor) andalso Factor >= 1 end, Margin) orelse
+        error({bad_option, {margin, Margin}}),
     is_list(Goals0) andalso Goals0 =/= [] orelse error({bad_option, {goals, Goals0}}),
     [error({bad_option, {goals, Goal}}) || Goal <- Goals0, not open(Grid, Goal)],
     Goals = lists:usort(Goals0),
     {Cols, Rows} = boids_grid:size(Grid),
     Width = Cols + 2,
-    {Costs, Least} = costs(Grid, Cols),
+    {Costs0, Least} = costs(Grid, Cols),
+    Costs = margin(Costs0, Margin, Width),
     Values = atomics:new(Width * (Rows + 2), [{signed, true}]),
     fill(Values, Width * (Rows + 2)),
     Reach = min(Exact, (trunc(math:sqrt(?START div length(Goals))) - 1) div 2),
@@ -193,6 +220,39 @@ costs(Grid, Cols) ->
 fixed(Least, Least) -> ?ONE;
 fixed(Cost, Least) when Cost > 0 -> round(Cost / Least * ?ONE);
 fixed(_Blocked, _Least) -> 0.
+
+%% The costs with the option margin: the cost of an open cell near a
+%% wall is multiplied by the number of its distance. The walls are the
+%% cells with the cost 0: the blocked cells, and the border.
+margin(Costs, [], _Width) ->
+    Costs;
+margin(Costs, Margin, Width) ->
+    Walls = [Ix || Ix <- lists:seq(1, tuple_size(Costs)), element(Ix, Costs) =:= 0],
+    Factors = layers(Walls, Margin, Costs, Width, #{}),
+    list_to_tuple([
+        round(Cost * maps:get(Ix, Factors, 1))
+     || {Ix, Cost} <- lists:enumerate(tuple_to_list(Costs))
+    ]).
+
+%% The cells at one more cell from the walls: the open cells around the
+%% cells of the last distance (in 8 directions) that have no number
+%% yet. They get the next number of the margin. A step from a cell of
+%% the border can come to another cell of the border, and to no open
+%% cell that is not beside it.
+layers(_From, [], _Costs, _Width, Factors) ->
+    Factors;
+layers(From, [Factor | Margin], Costs, Width, Factors) ->
+    Next = lists:usort([
+        To
+     || Ix <- From,
+        Step <- [-Width - 1, -Width, 1 - Width, -1, 1, Width - 1, Width, Width + 1],
+        To <- [Ix + Step],
+        To >= 1,
+        To =< tuple_size(Costs),
+        element(To, Costs) =/= 0,
+        not is_map_key(To, Factors)
+    ]),
+    layers(Next, Margin, Costs, Width, maps:merge(Factors, maps:from_keys(Next, Factor))).
 
 fill(_Values, 0) ->
     ok;

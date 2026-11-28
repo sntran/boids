@@ -597,6 +597,117 @@ defmodule BoidsFieldTest do
     end
   end
 
+  describe "the margin" do
+    # A wall in the middle of a land of 30 x 12, with the start and the
+    # goal below its two ends.
+    defp long_wall, do: :boids_grid.new(size: {30, 12}, blocked: for(i <- 5..24, do: {i, 5}))
+
+    test "is nothing by default" do
+      for grid <- [long_wall(), wall(), blocks()] do
+        assert :boids_field.new(grid, [{2, 2}]) == :boids_field.new(grid, [{2, 2}], margin: [])
+      end
+
+      refute :boids_field.new(long_wall(), [{2, 2}]) == :boids_field.new(long_wall(), [{2, 2}], margin: [2])
+    end
+
+    test "keeps a way away from a wall when the way has room" do
+      grid = long_wall()
+      near = :boids_field.path(:boids_field.new(grid, [{27, 6}]), {2.5, 6.5})
+      away = :boids_field.path(:boids_field.new(grid, [{27, 6}], margin: [3, 2]), {2.5, 6.5})
+      assert hd(away) == {2.5, 6.5} and List.last(away) == {27.5, 6.5}
+      # With no margin, the way is the straight line, beside the wall.
+      assert Enum.all?(near, fn {_x, y} -> y < 7.0 end)
+      # With the margin, the long part of the way is at more than 2 cells
+      # from the wall.
+      assert [{left, _}, {right, _}] = Enum.filter(away, fn {_x, y} -> y > 8.4 end)
+      assert left < 6.0 and right > 24.0
+      assert Enum.all?(away, &:boids_grid.walkable(grid, &1))
+      # The way is longer, and it costs less than the way beside the wall.
+      assert length_of(away) > length_of(near) + 1.0
+      field = :boids_field.new(grid, [{27, 6}], margin: [3, 2])
+      assert :boids_field.distance(field, {2.5, 6.5}) < 3 * 20
+    end
+
+    test "a way through a door of one cell still exists" do
+      # A wall with one door, between the start and the goal.
+      grid = :boids_grid.new(size: {21, 11}, blocked: for(j <- 0..10, j != 5, do: {10, j}))
+      plain = :boids_field.new(grid, [{18, 5}])
+      field = :boids_field.new(grid, [{18, 5}], margin: [3, 2])
+
+      for place <- [{2.5, 5.5}, {2.5, 1.5}, {8.5, 9.5}] do
+        assert :boids_field.has_way(field, place)
+        way = :boids_field.path(field, place)
+        assert List.last(way) == {18.5, 5.5}
+        # The way goes through the door: its lines are in open cells.
+        for [{ax, ay}, {bx, by}] <- Enum.chunk_every(way, 2, 1, :discard), part <- 0..40 do
+          assert :boids_grid.walkable(grid, {ax + (bx - ax) * part / 40, ay + (by - ay) * part / 40})
+        end
+
+        # The cost has the margin: it is more than with no margin.
+        assert :boids_field.distance(field, place) > :boids_field.distance(plain, place) + 2
+      end
+
+      # In the door, the direction is through it.
+      assert :boids_field.direction(field, {10.5, 5.5}) == {1.0, 0.0}
+    end
+
+    test "multiplies the cost of the grid, at each distance from a wall" do
+      # A way of one cell between two walls: each cell is at 1 cell from a wall.
+      narrow = :boids_grid.from_rows(["#####", "....2", "#####"], [])
+      assert_in_delta :boids_field.distance(:boids_field.new(narrow, [{0, 1}]), {4.5, 1.5}), 3 + 2, 1.0e-4
+
+      assert_in_delta :boids_field.distance(:boids_field.new(narrow, [{0, 1}], margin: [3]), {4.5, 1.5}),
+                      9 + 6,
+                      1.0e-4
+
+      # A number for each distance: 4 at 1 cell, 2.5 at 2 cells, and 1 after.
+      land = :boids_grid.new(size: {9, 9}, blocked: for(j <- 0..8, do: {0, j}))
+      field = :boids_field.new(land, [{6, 4}], margin: [4, 2.5])
+      to = fn i -> :boids_field.distance(field, {i + 0.5, 4.5}) end
+      assert_in_delta to.(5), 1.0, 1.0e-4
+      assert_in_delta to.(3), 3.0, 1.0e-4
+      assert_in_delta to.(2) - to.(3), 2.5, 1.0e-4
+      assert_in_delta to.(1) - to.(2), 4.0, 1.0e-4
+    end
+
+    test "has the sides of the grid as walls, and the cells across a corner of a wall" do
+      field = :boids_field.new(open(11), [{5, 5}], margin: [3])
+      # The cell at the side costs 3.
+      assert_in_delta :boids_field.distance(field, {0.5, 5.5}), 4 + 3, 1.0e-4
+      assert_in_delta :boids_field.distance(field, {5.5, 10.5}), 4 + 3, 1.0e-4
+      assert_in_delta :boids_field.distance(field, {1.5, 5.5}), 4, 1.0e-4
+      # One blocked cell: the 8 cells around it cost more, also the 4
+      # cells across its corners.
+      grid = :boids_grid.new(size: {11, 11}, blocked: [{7, 7}])
+      plain = :boids_field.new(grid, [{5, 5}])
+      block = :boids_field.new(grid, [{5, 5}], margin: [3])
+      assert_in_delta :boids_field.distance(plain, {6.5, 6.5}), :math.sqrt(2), 1.0e-4
+      assert :boids_field.distance(block, {6.5, 6.5}) > 3.0
+      assert :boids_field.distance(block, {8.5, 6.5}) > :boids_field.distance(plain, {8.5, 6.5}) + 1.5
+      assert_in_delta :boids_field.distance(block, {5.5, 7.5}), 2.0, 1.0e-4
+    end
+
+    test "a goal beside a wall has its way" do
+      grid = :boids_grid.new(size: {12, 12}, blocked: for(j <- 0..11, do: {6, j}))
+      field = :boids_field.new(grid, [{5, 6}, {0, 0}], margin: [3, 2])
+      assert :boids_field.goals(field) == [{0, 0}, {5, 6}]
+      assert :boids_field.distance(field, {5.5, 6.5}) == 0.0
+      assert :boids_field.distance(field, {0.5, 0.5}) == 0.0
+      assert :boids_field.direction(field, {5.5, 6.5}) == {0.0, 0.0}
+      assert List.last(:boids_field.path(field, {3.5, 6.5})) == {5.5, 6.5}
+      # The cell beside the goal, at 2 cells from the wall, costs 2.
+      assert_in_delta :boids_field.distance(field, {4.5, 6.5}), 2.0, 1.0e-4
+    end
+
+    test "is a list of numbers from 1" do
+      for bad <- [3, [0.5], [3, :far], [1.0e101], %{1 => 3}, [-2]] do
+        assert catch_error(:boids_field.new(wall(), [{0, 0}], margin: bad)) == {:bad_option, {:margin, bad}}
+      end
+
+      assert :boids_field.is_field(:boids_field.new(wall(), [{0, 0}], margin: [1, 1.5, 7]))
+    end
+  end
+
   describe "path/2" do
     test "gives the points where the way turns, and no point on a straight part" do
       field = :boids_field.new(wall(), [{8, 3}])
