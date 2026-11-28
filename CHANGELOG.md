@@ -79,6 +79,10 @@ The first version. It needs Erlang/OTP 29.
   - Ant Trail: ants make a trail to food with a scent.
   - Tag Yard: children play tag, and the child that is "it" changes.
   - Firefly Field: fireflies that see each other come to flash together.
+- On a phone in portrait, the site turns the world of a game by 90
+  degrees, so that all of it shows on the tall screen. The keys, the
+  readings and the message of the game are on the field. A check of
+  each page on a phone runs in CI (`examples/phone.js`).
 - The examples draw animals (birds, sheep, dogs, wolves, fish, deer,
   foxes, bees, beetles, ants, ducks, fireflies and people) on a ground
   of grass, water, sand, a floor or night.

@@ -67,7 +67,8 @@ npx wrangler deploy
 
 From GitHub: the workflow "Deploy the site"
 ([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)) does
-the same at each push to `main` that changes the site or the library.
+the same each time the workflow "CI" is good on `main`: CI has the tests
+of the examples and the check of each page on a phone.
 A person can also start it in the tab "Actions". It needs two secrets of
 the repository: `CLOUDFLARE_API_TOKEN` (a token that can edit Workers)
 and `CLOUDFLARE_ACCOUNT_ID` (the id of the account). Without them, the
@@ -90,18 +91,139 @@ Make a folder `my_game` here, with three files:
    in the list.
 2. `my_game.html`: its page. The page connects to the socket `/ws/SLUG`
    with `Boids.scene` of `/assets/scene.js`. `use BoidsExamples.Game`
-   puts the page in the module. A click or a touch on the field gives a
-   point of the world with `scene.toWorld(event)`. The page draws things
-   of its own on the field with the options `beneath` (under the boids)
-   and `above` (over the boids), not with a canvas over the field. The
-   keys of a game use the classes `pad` and `key` of
-   [`site.css`](priv/assets/site.css). On a phone in portrait, the field
-   uses all the width of the screen.
+   puts the page in the module.
 3. `my_game_test.exs`: its tests.
 
 The site finds the new game with no other change: the list of the
 showcases, the address of its page and its socket come from `info/0`.
 The common test starts it and checks its page.
+
+On a phone in portrait, the scene turns the world of the game (see
+[On a phone](#on-a-phone)). The module of the game does not know the
+turn, but its page must do these things:
+
+1. **The keys come from data.** The page gives the option `keys` to
+   `Boids.scene`, and has no key of its own. The scene makes the keys,
+   and changes an arrow of the screen to a direction of the world. For
+   another control with an arrow (the signs of Exit Plan), the page uses
+   `scene.direction("left")`.
+2. **A point of the field comes from `scene.toWorld(event)`.** The page
+   does not calculate it from the rectangle of the canvas.
+3. **A drawing with a top and a bottom is upright.** The page draws on
+   the field with the options `beneath` and `above`, in pixels of the
+   world, not on a canvas of its own. A circle or an arrow of the world
+   turns with the world, and that is correct. But a text, a stall or a
+   lantern has a top and a bottom: draw it with
+   `view.upright(x, y, function () { ... })`, where `view` is the last
+   argument of `beneath` and `above`. In the function, the point is
+   `0, 0`.
+4. **A text names a thing, not a direction.** "Reach the far side", not
+   "on the right": the right side of the world is the top of a phone.
+   This is also for the texts that the module sends (a hint, a label of
+   a zone).
+5. **The message of the game is in an element** that the page gives as
+   the option `message`. On a phone, the scene shows it on the field.
+   The button for the end of a level is in the list `mirror` of `keys`:
+   a copy of it shows on the field, and the message stays while the copy
+   shows.
+6. **The tools are just below the field**: an element with the tools of
+   the game has the attribute `data-phone="tools"`.
+
+The common test checks the parts that need no browser: no key in the
+markup of the page, no point from the rectangle of the canvas, no canvas
+over the field, no text that names a direction, a text of `beneath` or
+`above` only with `view.upright`, and the option `message` for a page
+with a message. [`phone.js`](phone.js) checks the pages in a browser.
+Look at its picture of your game before you make a pull request.
+
+## On a phone
+
+The world of a game is a box of 16 by 9, and a phone in portrait is 9 by
+16. So on a phone in portrait (a screen of 700 pixels wide or less,
+taller than it is wide), [`scene.js`](priv/assets/scene.js) turns the
+world by 90 degrees: the +x of the world is up on the screen.
+
+- All the world shows, and no game changes. On a screen of 390 by 844
+  pixels, one unit of the world is 4.3 pixels (2.4 with no turn), and
+  the animals are 1.25 times larger.
+- The height of the field has a limit (`100svh`): the field, its bar of
+  readings, its keys and the tools of the page are on the screen at one
+  time. With the bars of a browser (a screen of 390 by 664 pixels), one
+  unit is 3.8 pixels.
+- The turn is in the scene only: the transform of the canvas, and
+  `scene.toWorld(event)` (its inverse). The labels of the zones, the
+  numbers on the boids, the stones and the shadows are upright. The
+  server and the modules of the games do not know the turn.
+- The readings are in a bar at the top of the field.
+- The message of the game shows in a band below the readings: for some
+  seconds when the message changes, and at the end of a level or of the
+  game until the person presses the button. A number that changes (a
+  clock) is not a new message. A touch on the band removes it.
+- The scene makes the keys from the option `keys`. The arrows are
+  directions of the screen: the scene changes them to directions of the
+  world before it sends them. The keys are on the field at the bottom
+  corners, and the field shows through them. On a screen that has room
+  for the field at its full width and a bar, the keys are in a bar below
+  the canvas.
+- On a phone in landscape (a screen of 500 pixels high or less), there
+  is no turn: the field fills the height, with the keys at its two
+  sides. The tools of a page are lower in the page.
+
+A page tells `Boids.scene` what it needs:
+
+| Option or attribute | What |
+|---|---|
+| `keys: {into, pad, actions, mirror}` | The keys of the game. `into` is the element of the page that gets the keys on a large screen. `pad: true` gives four arrows. An action is `{label, key, codes}` (a key that the person holds) or `{label, send, codes}` (a message at each press); `side: "left"` puts it at the left corner. `mirror` is a list of buttons of the page: while a button shows in the page, a copy of it shows on the field. An entry can be `{button, when, end}`: `when` is a function that tells when the copy shows, and `end: false` is for a button that is not for the end of a level. |
+| `message: element` | The element with the message of the game, or a list of elements (the first one that shows and has a text). `{from, stay}` has a function `stay` that tells when the message stays: for a game with no copy of a button on the field. |
+| `data-phone="tools"` | An element of the page (the tools of a game) that is just below the field on a phone. `data-phone="open"` on an element between it and the column of the page lets it go there. |
+| `scene.toWorld(event)` | The point of the world under a click or a touch. |
+| `scene.direction("left")` | The direction of the world for a direction of the screen. |
+| `beneath`, `above` | Drawings of the page under and over the boids, in pixels of the world. Their last argument is the view: `view.upright(x, y, draw)` draws at a point with no turn. |
+| `turn: "down"`, `turn: false` | The +x of the world is down on the screen, or no turn. |
+| `crop: {shape, follow}` | No turn: the field shows all the height of the world and a part of its width, and follows the boids of these kinds. |
+
+- Hive Guard uses `turn: "down"`: the hive is at the bottom, near the
+  tools, and the beetles come down to it.
+- The home page uses `crop`: its world is 160 by 60, and turned it is
+  taller than the screen. The flock is a picture and not a game, so a
+  part of it that follows the hawk is sufficient.
+- The playground uses `turn: false`: a definition has coordinates, and
+  its x must go to the right. A visitor can give a tall box.
+
+### The check of each page on a phone
+
+[`phone.js`](phone.js) opens each page in Chromium at 390 by 844 pixels,
+with touch, and takes a picture of each page. It fails when:
+
+- a page has an error, or a sideways scroll;
+- a field does not get the moments of its scene;
+- a field, its bar of readings, its keys or the tools of its page are
+  not on the screen at one time;
+- a game does not show all its world, turned, with 3.5 pixels or more
+  for one unit;
+- a point of the screen and a point of the world do not agree, for a
+  boid;
+- an arrow does not move the animal the way of the arrow on the screen
+  (Quiet Herd and Night Fold);
+- a tap does not give the point of the world under the finger (Hive
+  Guard and Firefly Field).
+
+A page that did not load gets one more try. An error of a font of
+another host is not an error of the site.
+
+```sh
+cd examples
+npm install
+npx playwright install chromium
+mix run --no-halt &
+npm run phone -- http://localhost:4000 phone
+```
+
+The pictures are in `phone/`. CI runs the check in the job "Examples",
+at each push and for each pull request, and keeps the pictures of the
+pages as the artifact `phone-pictures` of the run: look at them before
+a deploy. The workflow "Deploy the site" starts only when CI is good on
+`main`.
 
 ## How it works
 
