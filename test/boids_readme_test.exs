@@ -243,6 +243,40 @@ defmodule BoidsReadmeTest do
     end
   end
 
+  test "the ways of a world" do
+    land = :boids_grid.new(%{size: {40, 30}, blocked: for(j <- 0..29, j != 14, j != 15, do: {20, j})})
+    {:ok, world} = :boids.start_world(%{bounds: {{0, 0}, {40, 30}}, defaults: %{walkable: {:named, :land}}})
+    on_exit(fn -> :boids.stop_world(world) end)
+    :ok = :boids.set_grid(world, :land, land)
+    :ok = :boids.set_field(world, :exit, :boids_field.new(land, [{35, 5}]))
+    rules = [{:flow, 1.0, %{field: {:named, :exit}}}, {:separation, 1.5, %{radius: 0.7}}]
+    {:ok, people} = :boids.populate(world, 30, %{area: {{2, 2}, {15, 28}}, rules: rules})
+    place = fn id -> elem(:boids.lookup(world, id), 1).pos end
+    assert Enum.all?(people, fn id -> elem(place.(id), 0) < 15 end)
+    # The people go around the wall, through the door.
+    assert eventually(fn -> Enum.any?(people, fn id -> elem(place.(id), 0) > 21 end) end, 500)
+    assert Enum.all?(people, fn id -> :boids_grid.walkable(land, place.(id)) end)
+
+    # The door closes, and another door opens: new walls, and new ways.
+    closed = :boids_grid.set_cost(land, [{20, 14}, {20, 15}], :blocked)
+    land2 = :boids_grid.set_cost(closed, [{20, 3}, {20, 4}], 1)
+    :ok = :boids.set_grid(world, :land, land2)
+    :ok = :boids.set_field(world, :exit, :boids_field.new(land2, [{35, 5}]))
+    assert {:ok, field} = :boids.field(world, :exit)
+    # At the left of the old door, the way now goes up, to the new door.
+    assert {_dx, dy} = :boids_field.direction(field, {18.5, 14.5})
+    assert dy < -0.9
+    # A person in the door that closed goes out of it at its next step.
+    # Then the people stay in the open cells of the new walls.
+    in_open_cells = fn -> Enum.all?(people, fn id -> :boids_grid.walkable(land2, place.(id)) end) end
+    assert eventually(in_open_cells)
+
+    for _ <- 1..10 do
+      Process.sleep(20)
+      assert in_open_cells.()
+    end
+  end
+
   test "a world below a supervisor of yours" do
     children = [{:boids, name: :boids_readme_space, bounds: {{0, 0}, {100, 100}}}]
     {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one)

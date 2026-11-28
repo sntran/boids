@@ -33,6 +33,29 @@ The first version. It needs Erlang/OTP 29.
   `walls` moves a boid away from a wall before it touches it. In a
   world on several nodes, a grid is on all the nodes, as the other
   facts of the world.
+- The ways of a world: a field of directions with a name is a fact of
+  the world (`boids:set_field/3`, `boids:remove_field/2`,
+  `boids:field/2`), and the rule `flow` reads it: `{flow, Weight, #{field
+  => {named, Name}}}`. One field leads all the boids that go to the
+  same goals. A new field for the same name changes the ways from the
+  next step of each boid. A boid with three dimensions cannot have a
+  field of the world. In a world on several nodes, a field is on all
+  the nodes, as the other facts of the world.
+- A field of directions from a grid (`boids_field`): `new/2` makes it
+  for one goal cell or more, with the costs of the cells of the grid.
+  `direction/2` gives the direction of the shortest way at a position,
+  `distance/2` the cost of that way, and `path/2` its points. The
+  directions are at each angle, not only the 8 directions from cell to
+  cell: the library solves the eikonal equation on the grid, in a time
+  in proportion to the number of the cells (about 40 ms for 200 x 200
+  cells). Near a wall, the direction goes to the center of the next
+  cell of the way. `docs/fields.md` has the algorithm, the
+  measurements and the limits.
+- `boids_grid:costs/1` gives the costs of all the cells of a grid.
+- `examples/bridge.exs` gets its ways from `boids_field`, and its cells
+  near the water cost more.
+- `Seen` has the key `fields`: the fields that the boid uses, by their
+  names. A boid keeps the field that it read, as it keeps its grid.
 - `Seen` has the key `grids`: the grids that the boid uses, by their
   names. A boid keeps the grid that it read, and reads it again only
   after a change of a grid of its world (`specs/Kept.tla`).

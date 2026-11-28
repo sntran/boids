@@ -31,7 +31,7 @@ defmodule Boids.MixProject do
       docs: [
         main: "readme",
         source_ref: "v#{@version}",
-        extras: ["README.md", "docs/specs.md", "CHANGELOG.md", "LICENSE"]
+        extras: ["README.md", "docs/specs.md", "docs/fields.md", "CHANGELOG.md", "LICENSE"]
       ]
     ]
   end

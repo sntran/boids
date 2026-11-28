@@ -41,7 +41,7 @@ decides and acts.
 | `cruise` | keeps a speed |
 | `leader` | stays behind a leader, and moves out of its way |
 | `dodge` | moves away from a neighbor that will come too near |
-| `flow` | moves in the direction of a field |
+| `flow` | moves in the direction of a field: to a goal around the walls (`boids_field`) |
 | `walls` | moves away from the walls of its grid |
 | a function of yours | gets the force that the function gives |
 
@@ -483,8 +483,78 @@ ok = boids:set_grid(World, land, boids_grid:set_cost(Land, [{4, 1}], 1)).
 
 `examples/bridge.exs` measures boids that carry things across a river on
 a narrow bridge: `mix run examples/bridge.exs walkable 1`. With
-`separation` and no limit, 29 % of the steps of the boids end in the
+`separation` and no limit, 13 % of the steps of the boids end in the
 water. With the option `walkable`, none does.
+
+## The ways of a world
+
+The rule `seek` goes straight to a target, through the walls. A field
+of directions (`boids_field`) has, for each place of a grid, the
+direction of the shortest way to a goal, around the walls. One field
+leads all the boids that go to the same goal, so its cost does not
+change with the number of the boids.
+
+```erlang
+%% A land of 40 x 30 with a wall, and a door of two cells in the wall.
+Land = boids_grid:new(#{
+    size => {40, 30},
+    blocked => [{20, J} || J <- lists:seq(0, 29), J =/= 14, J =/= 15]
+}),
+{ok, World} = boids:start_world(#{bounds => {{0, 0}, {40, 30}}, defaults => #{walkable => {named, land}}}),
+ok = boids:set_grid(World, land, Land),
+%% The ways to the cell {35, 5}, at the other side of the wall.
+ok = boids:set_field(World, exit, boids_field:new(Land, [{35, 5}])),
+{ok, _People} = boids:populate(World, 30, #{
+    area => {{2, 2}, {15, 28}},
+    rules => [{flow, 1.0, #{field => {named, exit}}}, {separation, 1.5, #{radius => 0.7}}]
+}),
+%% The door closes, and another door opens: new walls, and new ways.
+Closed = boids_grid:set_cost(Land, [{20, 14}, {20, 15}], blocked),
+Land2 = boids_grid:set_cost(Closed, [{20, 3}, {20, 4}], 1),
+ok = boids:set_grid(World, land, Land2),
+ok = boids:set_field(World, exit, boids_field:new(Land2, [{35, 5}])).
+```
+
+- **A field comes from a grid and its goals:** `boids_field:new(Grid,
+  Goals)`, with one goal cell or more. With more than one goal, each
+  place has the way to the goal that costs the least: all the exits of
+  a house, or all the cells of a region.
+- **The world keeps fields by name,** as it keeps grids:
+  `boids:set_field/3`, `boids:remove_field/2`, `boids:field/2`. The rule
+  `{flow, Weight, #{field => {named, Name}}}` reads the field. There is
+  one copy of a field for all the boids of a node. A boid keeps the
+  field that it read, and reads it again only after a change.
+- **A new field for the same name changes the ways** for all the boids,
+  from their next step: after a door opens, or when the goal moves. The
+  calculation is not in the process of the world: `boids_field:new/2`
+  runs in the process that calls it, so a large field does not stop the
+  world.
+- **The directions are at each angle.** A search from cell to cell gives
+  only 8 directions, and all the boids then go on the same 8 lines. The
+  library solves the eikonal equation on the grid. In the measurements,
+  the ways of a field are 1 to 2 % longer than the shortest ways, and
+  the ways of a search of 8 directions are 5 to 6 % longer
+  ([`docs/fields.md`](https://github.com/sntran/boids/blob/main/docs/fields.md)).
+- **Near a wall, the direction goes to the center of the next cell.**
+  A boid keeps half a cell from a wall where it can, it goes around a
+  corner and not across it, and it stays in the middle of a narrow way.
+- **A cell has a cost** (`boids_grid`): a way goes around a swamp when
+  that costs less. To keep the ways away from the walls, give a higher
+  cost to the cells near them: `examples/bridge.exs` does this for the
+  cells near its water.
+- **`boids_field:distance/2`** gives the cost of the way from a place to
+  its goal, or `infinity` for a place with no way. A way across one
+  cell with the cost 1 costs 1. It is not exactly the cost of the
+  shortest way: in the measurements it is 0 to 8 % more.
+- **`boids_field:path/2`** gives the points of the way from a place to
+  its goal: for one boid with the rule `follow`, for a picture, or for
+  the length of a way.
+- **A field does not limit a boid.** A boid that another force pushes
+  into a wall, or out of the grid, has no direction there. Use the
+  option `walkable` with the same grid, as in the example.
+- A grid of 200 x 200 cells gives a field in about 40 milliseconds, and
+  a field is 6 bytes for each cell. A read of a direction takes 0.3
+  microsecond.
 
 ## The time
 
@@ -871,7 +941,16 @@ obstacle.
   world"). There are no polygons: a shape that is not made of cells
   becomes cells when the grid is made (`boids_grid:new/1` with a
   function).
-- A grid has two dimensions: a world of three dimensions has no walls.
+- A grid has two dimensions: a world of three dimensions has no walls,
+  and no fields of directions.
+- A field of directions (see "The ways of a world") is for a grid of
+  some hundred cells on each side: a field of 1,000 x 1,000 cells takes
+  more than one second. There are no tiles for very large maps, and no
+  repair of a field after a small change of the grid: a new field is a
+  new calculation.
+- A field does not know where the boids are. The boids of two
+  directions go on the same shortest way, and they are in the way of
+  each other in a narrow place.
 - The world does not move a boid when a grid changes. A boid in a cell
   that became blocked goes to the nearest walkable place at its next
   step: with `tick => manual`, at the next `boids:step/2`.
