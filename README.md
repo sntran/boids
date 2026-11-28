@@ -533,6 +533,10 @@ world on one node has no border and sends no message.
   `count/1`, `flocks/2`, `graph/2` and `step/2` give the result for
   the boids of all the nodes, from each node. With a last argument
   `local`, they are about the boids of this node only.
+- **The obstacles and the scale of the time are on all the nodes.**
+  `set_obstacle/4`, `remove_obstacle/2` and `set_time_scale/2` change
+  the world on each node: a rock is a rock for each boid, and the scale
+  0 stops all the world. A node that comes later gets them.
 
 ```erlang
 %% From each node, for a boid on each node.
@@ -552,6 +556,15 @@ What changes for your code:
   call later. With no connection to the node, the boid is not found.
 - `step/2` does not wait for a node that has no connection: it makes
   the step on the other nodes.
+- `set_obstacle/4`, `remove_obstacle/2` and `set_time_scale/2` change
+  the world on all its nodes. When the result is `ok`, each node that
+  has a connection to this node has the change. With no answer of a
+  node in the time limit, the result is `{error, timeout}`: this node
+  has the change, and that node gets it later. These functions have no
+  form for one node only: all the nodes must have the same obstacles
+  and the same scale of the time.
+- `obstacles/1` reads the tables of this node, with no message. Each
+  node has all the obstacles, so there is no `obstacles(World, local)`.
 - The id of a boid is not its process. In a callback, the function
   `lookup` of `Seen` gives the row of a neighbor, with its process:
   `{ok, #{pid := Pid}} = (maps:get(lookup, Seen))(Id)`.
@@ -602,8 +615,57 @@ The move is safe when the network has faults:
   that no move, no split and no decision loses a boid, and that a boid
   has one process when all the nodes have a connection again.
 
+The obstacles and the scale of the time (the facts of a world) are safe
+when the network has faults too:
+
+- **The last change wins: by the clocks of the computers when they
+  agree, and in each case all the nodes get the same value.** Each
+  change has a version: a counter and the node. The counter is the time
+  of the system in microseconds, or the largest counter that the node
+  knows plus 1 when that is more. A node takes a change only when its
+  version is larger than the version that it has: the counter first,
+  then the name of the node. That compare gives one value on all the
+  nodes for each clock of each computer. The time makes that value the
+  last change.
+- **During a split, each side can change the facts.** When the nodes
+  have a connection again, each world gives all its facts to the other
+  worlds. Then all the nodes have one value for each fact. An obstacle
+  that only one side made is on all the nodes. For an obstacle that the
+  two sides changed, the change that was made later in time wins, also
+  when the other side made more changes: one change takes more than a
+  microsecond, so the changes of a node do not put its counter ahead of
+  its clock. With the same counter, the change of the node with the
+  larger name wins.
+- **A world that starts again makes changes that count.** It starts
+  with no fact, and it gets the facts of the other nodes a short time
+  later. A change that it makes before that has the time of the system
+  as its counter, so it is after the older facts of the other nodes.
+- **A fact that was removed stays removed.** A node keeps a mark for an
+  obstacle that was removed, so that an older change of another node
+  does not bring it back. A node drops a mark after 10 minutes
+  (`boids:mark_time/0`, the value `mark_time` of the application
+  `boids`). The value `infinity` keeps each mark.
+- The process of the world of a node tells the other nodes, and it does
+  not wait for them: a caller that stops in the middle changes nothing.
+  No world waits for another world.
+- The specification `specs/Facts.tla` has this flow. Its models check
+  that all the nodes come to the same facts, and that an older change
+  never brings back a fact that was removed.
+
 The limits of a world on several nodes:
 
+- The time of a mark (`boids:mark_time/0`) has two limits. A node that
+  has no connection for longer than that time can bring back an
+  obstacle that the other nodes removed in that time: use a time longer
+  than the longest split of your network. And each node keeps one mark
+  for each obstacle that was removed in that time: a longer time needs
+  more memory. With `infinity`, a removed obstacle stays removed after
+  a split of each length, and the marks have no limit.
+- "The last change" needs clocks that agree. When the clock of a
+  computer is ahead, its change can win against a later change of
+  another computer, when the two nodes did not see each other (during a
+  split, or for a world that starts again). All the nodes get the same
+  value in each case.
 - The boids of a node that stops are gone. The world keeps no copy of
   a boid on another node.
 - During a split of the network, a boid of the border can be two times
@@ -644,8 +706,9 @@ neighbors that it sees are not all of the same moment, as for a bird.
 
 The flows where the order of the processes can change the result have a
 specification in TLA+ (`specs/`): the members of a world, a write
-against a read of the world, the step in two parts, and the move of a
-boid to another node. The tests
+against a read of the world, the step in two parts, the move of a
+boid to another node, and the obstacles and the scale of the time on
+several nodes. The tests
 check a small model of each one, and fault models that must fail, with
 the native checker of [Accord](https://github.com/sntran/accord). They
 also replay the messages of the process of a real world as a

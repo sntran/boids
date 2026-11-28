@@ -67,6 +67,21 @@ The first version. It needs Erlang/OTP 29.
   the space of a world as the argument, these three functions wrote to
   the tables with no message before. A bad scale of the time now gives
   the error `badarg`.
+- In a world on several nodes, the obstacles and the scale of the time
+  are on all the nodes. A change is on each node that has a connection
+  when its call returns, a node that comes later gets all of them, and
+  after a split of the network all the nodes come to one value for each
+  of them: the last change wins. The version of a change has a counter
+  that is the time of the system, and never less than a counter that
+  the node knows: all the nodes get the same value for each clock of
+  each computer, and the last change in time when the clocks agree. An
+  obstacle that was removed keeps a mark for some time
+  (`boids:mark_time/0`, which can be `infinity`), so that an older
+  change does not bring it back. The three functions that change them
+  can give
+  `{error, timeout}` when a node gives no answer.
+  `boids_world:facts/1` gives the facts of a node with their versions.
+  The specification is `specs/Facts.tla`.
 - Specifications of the flows in TLA+ (`specs/`, `docs/specs.md`): the
   members of a world, a write against a read of its space (of the boids
   and of the obstacles), the step in two parts, and the move of a boid

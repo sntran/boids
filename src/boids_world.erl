@@ -19,6 +19,37 @@ them with no message. A write of an obstacle changes more than one row
 of a table, and two processes that write at the same time can lose a
 part of it (`specs/Space.tla`).
 
+## The facts of a world on several nodes
+
+All the nodes of a world have the same facts (`specs/Facts.tla`).
+
+- Each change of a fact has a version: `{Counter, Node}`. The counter is
+  larger than each counter that the node knows. It is the time of the
+  system in microseconds, or the largest counter that the node knows
+  plus 1 when that is more. A node takes a change only when its version
+  is larger than the version that the node has for that key: the
+  counter first, then the name of the node.
+- Thus all the nodes get the same value, also when the clocks of the
+  computers do not agree. When the clocks agree, the change that was
+  the last in time wins: after a split, the side that made more changes
+  does not win for that reason, and a world that starts again with no
+  fact makes changes that are after the older facts of the other nodes.
+- The process that changes a fact writes it on its node, and sends the
+  change to the worlds of the other nodes. It does not wait for them.
+  Each of them answers to the process that asked for the change
+  (`set/3`), which waits for these answers.
+- A fact that is removed stays as a mark, with its version, so that an
+  older change cannot bring it back. A node drops a mark after some time
+  (`boids:mark_time/0`), or never when that time is `infinity`.
+- A node that comes to the world, and a node that has a connection
+  again after a split of the network, gets all the facts and the marks
+  of each other node, and gives its own. After that, all the nodes have
+  the same value for each key.
+- The code has no part for one kind of fact, except `write/3`. A node
+  that cannot write a fact of another node (its value is bad for this
+  node) writes an error to its log, and keeps the fact for the other
+  nodes.
+
 ## A world on several nodes
 
 A world with a name that is an atom is one world on all the connected
@@ -61,7 +92,7 @@ Use the functions of `boids`. A world starts with
 -behavior(gen_server).
 
 -export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/3]).
--export([relate/5, unrelate/4, relations/1, set/3]).
+-export([relate/5, unrelate/4, relations/1, set/3, facts/1]).
 -export([settle/2, settle/3, find/2, find_local/2, moved/3, adopt/5]).
 
 %% A row of a boid of another node that gets no update in this time goes.
@@ -177,27 +208,83 @@ unrelate(#{owner := Server}, From, Label, To) ->
     gen_server:call(Server, {unrelate, From, Label, To}).
 
 -doc """
-Change a fact of the world on this node. A fact is what all the boids
-of the world perceive, and that is not a boid:
+Change a fact of the world, on all its nodes. A fact is what all the
+boids of the world perceive, and that is not a boid:
 
 | Key | Value |
 |---|---|
 | `time_scale` | The scale of the time: a number from 0 to 1.0e100. |
 | `{obstacle, Id}` | An obstacle: `{Pos, Radius}`, or `none` to remove it. |
 
-Only this process writes the facts, one change after the other, to
-tables that only it can write. The boids read them with no message
-(`boids_space:env/3`). The result is `{error, badarg}` for a key that
-is not a fact, or for a bad value: the world does not change.
+Only the process of the world writes the facts of its node, one change
+after the other, to tables that only it can write. The boids read them
+with no message (`boids_space:env/3`). The result is `{error, badarg}`
+for a key that is not a fact, or for a bad value: the world does not
+change.
+
+The process of the world of this node sends the change to the worlds
+of the other nodes, and this function waits for their answers. Thus,
+when the result is `ok`, each node that has a connection to this node
+has the change. A node with no connection gets the change when it has a
+connection again. With no answer of a node in the time limit
+(`boids:timeout/0`), the result is `{error, timeout}`: this node has
+the change, and the node that is slow gets it later.
 
 `boids:set_time_scale/2`, `boids:set_obstacle/4` and
 `boids:remove_obstacle/2` use this function.
 """.
--spec set(server() | boids_space:space(), time_scale | {obstacle, term()}, term()) -> ok | {error, badarg}.
+-spec set(server() | boids_space:space(), time_scale | {obstacle, term()}, term()) ->
+    ok | {error, badarg | timeout}.
 set(#{owner := Server}, Key, Value) ->
     set(Server, Key, Value);
 set(Server, Key, Value) ->
-    gen_server:call(Server, {set, Key, Value}).
+    %% The worlds of the other nodes answer to this alias, which stays
+    %% until unalias/1.
+    Ack = alias([]),
+    try gen_server:call(Server, {set, Key, Value, Ack}) of
+        {ok, Peers} ->
+            Deadline = erlang:monotonic_time(millisecond) + boids:timeout(),
+            await(Ack, #{Pid => monitor(process, Pid) || Pid <- Peers}, Deadline);
+        Error ->
+            Error
+    after
+        unalias(Ack)
+    end.
+
+%% Wait for the answer of the world of each other node. A world that
+%% stopped, or that has no connection now, gives no answer: it gets the
+%% facts of this node when it comes again.
+await(_Ack, Waiting, _Deadline) when map_size(Waiting) =:= 0 ->
+    ok;
+await(Ack, Waiting, Deadline) ->
+    receive
+        {Ack, Pid} when is_map_key(Pid, Waiting) ->
+            demonitor(map_get(Pid, Waiting), [flush]),
+            await(Ack, maps:remove(Pid, Waiting), Deadline);
+        {'DOWN', Ref, process, Pid, _Reason} when map_get(Pid, Waiting) =:= Ref ->
+            await(Ack, maps:remove(Pid, Waiting), Deadline)
+    after max(0, Deadline - erlang:monotonic_time(millisecond)) ->
+        %% An answer that comes after this moment goes nowhere.
+        unalias(Ack),
+        maps:foreach(fun(Pid, Ref) -> demonitor(Ref, [flush]), late(Ack, Pid) end, Waiting),
+        {error, timeout}
+    end.
+
+%% Remove an answer that came at the moment of the time limit, so that it
+%% does not stay in the messages of the caller.
+late(Ack, Pid) -> receive {Ack, Pid} -> ok after 0 -> ok end.
+
+-doc """
+The facts of the world on this node, with their versions, in the order
+of their keys: a list of `{Key, Value, Version}`. The value `none` is
+the mark of a fact that was removed. A fact that never changed (the
+scale of the time of a new world) is not in the list.
+""".
+-spec facts(server() | boids_space:space()) -> [{term(), term(), {pos_integer(), node()}}].
+facts(#{owner := Server}) ->
+    facts(Server);
+facts(Server) ->
+    gen_server:call(Server, facts).
 
 -doc """
 Show a boid that wrote its row to the other nodes that it is near. The
@@ -304,14 +391,23 @@ init({Sup, Opts, Name}) ->
     {Relations, Rest} = kind(Opts),
     Links = graph:new([Relations]),
     Space0 = boids_space:new(Rest),
-    State = #{sup => Sup, ids => #{}, refs => #{}, ages => #{}, links => Links, ghosts => #{}, warned => []},
+    State0 = #{sup => Sup, ids => #{}, refs => #{}, ages => #{}, links => Links, ghosts => #{}, warned => []},
+    %% The facts of the world with their versions: Key => {Version,
+    %% Value}, where the value none is the mark of a removed fact. The
+    %% clock is the largest counter of a version that this node knows.
+    %% The marks are in the order of their time: {Time, Key, Version}.
+    %% The peers are the processes of this world on the other nodes.
+    State = State0#{facts => #{}, clock => 0, marks => queue:new(), peers => []},
     case is_atom(Name) andalso Name =/= undefined of
         true ->
             %% A world with a name is one world on all the nodes that
             %% have a world with that name and the same options.
             Space = Space0#{name => Name},
             Group = {Name, erlang:phash2(maps:with([cell_size, bounds, wrap, tile], Space))},
-            {_Ref, _Members} = pg:monitor(boids, Group),
+            %% The worlds that are in the group now get the event of
+            %% the join of this world: they give their facts.
+            {_Ref, Members} = pg:monitor(boids, Group),
+            Peers = [Pid || Pid <- Members, node(Pid) =/= node()],
             ok = pg:join(boids, Group, self()),
             %% The group of all the worlds with the name, with each
             %% options: a world of that group that is not in the first
@@ -321,7 +417,7 @@ init({Sup, Opts, Name}) ->
             ok = pg:join(boids, Names, self()),
             erlang:send_after(?OPTIONS_MS, self(), options),
             erlang:send_after(?GHOST_MS div 2, self(), sweep),
-            {ok, members(State#{space => Space, group => Group, names => Names})};
+            {ok, members(State#{space => Space, group => Group, names => Names, peers := Peers})};
         false ->
             {ok, State#{space => Space0, group => undefined, names => undefined}}
     end.
@@ -406,14 +502,30 @@ handle_call({unrelate, From, Label, To}, _From, State = #{space := Space, links 
     {reply, ok, State#{links := Links}};
 handle_call(relations, _From, State = #{links := Links}) ->
     {reply, Links, State};
-handle_call({set, Key, Value}, _From, State = #{space := Space}) ->
+handle_call({set, Key, Value, Ack}, _From, State0 = #{space := Space, clock := Clock}) ->
     %% A bad value of a caller must not stop the world: each write
     %% checks its value before it changes a table.
     try write(Space, Key, Value) of
-        ok -> {reply, ok, State}
+        ok ->
+            %% The change is after each change that this node knows
+            %% (specs/Facts.tla, Change). Its counter is the time of
+            %% the system when that is larger: with clocks that agree,
+            %% the last change in time has the largest counter, also
+            %% for a node that did not see the other changes.
+            Counter = max(Clock + 1, erlang:system_time(microsecond)),
+            Fact = {Key, Value, {Counter, node()}},
+            State = #{peers := Peers} = keep(Fact, State0),
+            %% This process tells the other nodes, so a caller that
+            %% stops in the middle changes nothing. It does not wait for
+            %% them: they answer to the caller. A node with no connection
+            %% gets the fact when it comes again.
+            Sent = [Pid || Pid <- Peers, erlang:send(Pid, {fact, Fact, Ack}, [noconnect]) =:= ok],
+            {reply, {ok, Sent}, State}
     catch
-        error:badarg -> {reply, {error, badarg}, State}
+        error:badarg -> {reply, {error, badarg}, State0}
     end;
+handle_call(facts, _From, State = #{facts := Facts}) ->
+    {reply, [{Key, Value, Version} || Key := {Version, Value} <- maps:iterator(Facts, ordered)], State};
 handle_call({leave, Id, Pid}, _From, State = #{space := Space}) ->
     %% A leave can come late: after the end of its process, and after
     %% another process has the id (specs/Members.tla, CheckOwner).
@@ -444,6 +556,16 @@ handle_info({show, Entry = #{id := Id}}, State = #{space := Space, ghosts := Gho
         {false, _} ->
             {noreply, State}
     end;
+handle_info({fact, Fact, Ack}, State) ->
+    %% A change of a fact on another node. The process that asked for
+    %% the change waits for this answer.
+    Learned = learn(Fact, State),
+    _ = erlang:send(Ack, {Ack, self()}, [noconnect]),
+    {noreply, Learned};
+handle_info({facts, Facts}, State) ->
+    %% All the facts of a node that has a connection to this node now: a
+    %% new node, or a node after a split of the network.
+    {noreply, lists:foldl(fun learn/2, State, Facts)};
 handle_info({census, Node, Claims}, State0) ->
     %% The boids of a node that joined the world, after a split of the
     %% network or at its start.
@@ -492,20 +614,28 @@ handle_info(sweep, State = #{space := Space, ghosts := Ghosts}) ->
     Old = erlang:monotonic_time(millisecond) - ?GHOST_MS,
     Gone = [Id || Id := Time <- Ghosts, Time < Old],
     lists:foreach(fun(Id) -> boids_space:remove(Space, Id) end, Gone),
-    {noreply, State#{ghosts := maps:without(Gone, Ghosts)}};
-handle_info({_Ref, join, Group, Pids}, State = #{group := Group}) ->
+    {noreply, drop_marks(boids:mark_time(), State#{ghosts := maps:without(Gone, Ghosts)})};
+handle_info({_Ref, join, Group, Pids}, State = #{group := Group, peers := Peers, facts := Facts}) ->
     %% A node has a world with the name and the options of this world
     %% now: a new node, or a node that had no connection for some time.
     %% That world gets the boids of this node, to find the boids that
     %% have a process on the two nodes.
+    Others = [Pid || Pid <- Pids, node(Pid) =/= node()],
     Claims = claims(State),
-    [Pid ! {census, node(), Claims} || Pid <- Pids, node(Pid) =/= node(), Claims =/= []],
-    {noreply, members(State)};
+    [Pid ! {census, node(), Claims} || Pid <- Others, Claims =/= []],
+    %% It also gets all the facts of this node, with their versions and
+    %% the marks. From this moment, it gets each change of this node
+    %% (specs/Facts.tla, Join).
+    Known = [{Key, Value, Version} || Key := {Version, Value} <- Facts],
+    [Pid ! {facts, Known} || Pid <- Others, Known =/= []],
+    {noreply, members(State#{peers := lists:usort(Others ++ Peers)})};
 handle_info({_Ref, join, Names, _Pids}, State = #{names := Names}) ->
     erlang:send_after(?OPTIONS_MS, self(), options),
     {noreply, State};
-handle_info({_Ref, leave, _Group, _Pids}, State) ->
-    %% A node has the world no more.
+handle_info({_Ref, leave, Group, Pids}, State = #{group := Group, peers := Peers}) ->
+    %% A node has the world no more, or it has no connection.
+    {noreply, members(State#{peers := Peers -- Pids})};
+handle_info({_Ref, leave, _Names, _Pids}, State) ->
     {noreply, members(State)};
 handle_info(_Message, State) ->
     {noreply, State}.
@@ -626,11 +756,74 @@ unrelate(Id, State = #{space := Space, links := Links0}) ->
 
 %% Write a fact of the world to the tables of this node. Each change of
 %% a fact comes here, and to no other place: a new kind of fact is a new
-%% clause. A bad value gives the error badarg, with no change.
+%% clause. The value none removes the fact. A bad value gives the error
+%% badarg, with no change.
 write(Space, time_scale, Scale) -> boids_space:set_time_scale(Space, Scale);
 write(Space, {obstacle, Id}, none) -> boids_space:remove_obstacle(Space, Id);
 write(Space, {obstacle, Id}, {Pos, Radius}) -> boids_space:set_obstacle(Space, Id, Pos, Radius);
 write(_Space, _Key, _Value) -> error(badarg).
+
+%% A fact of another node, with its version. This node takes the fact
+%% only when the version is larger than the version that it has for the
+%% key: the counter first, then the name of the node. So the nodes come
+%% to the same facts in each order of the messages (specs/Facts.tla,
+%% Learn).
+learn(Fact = {Key, Value, Version = {Counter, Node}}, State0 = #{space := Space, facts := Facts, clock := Clock}) ->
+    %% The next change of this node is after this change.
+    State = State0#{clock := max(Clock, Counter)},
+    case Facts of
+        #{Key := {Have, _Value}} when Version =< Have ->
+            State;
+        _ ->
+            try
+                write(Space, Key, Value)
+            catch
+                error:badarg ->
+                    %% The fact is good for its node, and not for this
+                    %% node: for example, a kind of fact that this
+                    %% version of the library does not know.
+                    logger:error(
+                        "The world ~0tp of this node cannot write the fact ~0tP of the node ~0tp: "
+                        "it keeps the fact for the other nodes",
+                        [maps:get(name, Space, undefined), Key, 8, Node],
+                        #{domain => [boids]}
+                    )
+            end,
+            keep(Fact, State)
+    end.
+
+%% Keep a fact with its version. A fact that is removed stays as a mark:
+%% an older change that comes later does not bring it back. A world on
+%% one node only (a world with no name) has no use for a mark.
+keep({Key, none, {Counter, _Node}}, State = #{group := undefined, facts := Facts, clock := Clock}) ->
+    State#{facts := maps:remove(Key, Facts), clock := max(Clock, Counter)};
+keep({Key, Value, Version = {Counter, _Node}}, State = #{facts := Facts, clock := Clock, marks := Marks}) ->
+    Kept = State#{facts := Facts#{Key => {Version, Value}}, clock := max(Clock, Counter)},
+    case Value of
+        none -> Kept#{marks := queue:in({erlang:monotonic_time(millisecond), Key, Version}, Marks)};
+        _ -> Kept
+    end.
+
+%% Drop the marks that this node got more than `Time` milliseconds ago.
+%% With the time infinity, the node keeps each mark.
+drop_marks(infinity, State) ->
+    State;
+drop_marks(Time, State) ->
+    drop_before(erlang:monotonic_time(millisecond) - Time, State).
+
+%% Drop the marks that this node got before the time `Old`. A key that
+%% has another fact now keeps that fact.
+drop_before(Old, State = #{marks := Marks, facts := Facts}) ->
+    case queue:peek(Marks) of
+        {value, {Time, Key, Version}} when Time < Old ->
+            Rest = State#{marks := queue:drop(Marks)},
+            case Facts of
+                #{Key := {Version, none}} -> drop_before(Old, Rest#{facts := maps:remove(Key, Facts)});
+                _ -> drop_before(Old, Rest)
+            end;
+        _ ->
+            State
+    end.
 
 %% Write the relations with a label of boids to the table of the
 %% world, in the two directions: the boids read them there at each

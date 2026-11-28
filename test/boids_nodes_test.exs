@@ -1218,6 +1218,227 @@ defmodule BoidsSplitTest do
     assert call(large, :boids, :count, [world]) == 7
     assert call(large, :boids, :count, [world, :local]) + call(small, :boids, :count, [world, :local]) == 7
   end
+
+  describe "the facts of a world on two nodes (specs/Facts.tla)" do
+    defp facts(peer, world), do: call(peer, :boids_world, :facts, [world])
+
+    defp scale(peer, world),
+      do: call(peer, :boids_space, :env, [call(peer, :boids, :space, [world])]).time_scale
+
+    # The obstacles of a node: id => position. With the space of the
+    # world, the read sends no message to the world.
+    defp rocks(peer, world), do: Map.new(call(peer, :boids, :obstacles, [world]), &{&1.id, &1.pos})
+
+    # In the end, the nodes have the same facts, with the same versions.
+    defp same(world, peers) do
+      assert eventually(fn -> peers |> Enum.map(&facts(&1, world)) |> Enum.uniq() |> length() == 1 end)
+      facts(hd(peers), world)
+    end
+
+    test "the other node sees the obstacle and the scale of the time", %{nodes: nodes} do
+      %{world: world, small: a, large: b, ns: na, border: border} = world(nodes)
+      # A boid in a tile of the node b, which moves on its clock.
+      bird = %{id: :bird, pos: {border + 80, 80}, vel: {1, 0}, min_speed: 1, max_speed: 1, tick: 5}
+      {:ok, :bird} = call(b, :boids, :add, [world, bird])
+
+      # When the call returns, the other node has the change: no wait.
+      assert call(a, :boids, :set_obstacle, [world, :rock, {10.0, 10.0}, 3.0]) == :ok
+      assert [%{id: :rock, pos: {10.0, 10.0}, radius: 3.0}] = call(b, :boids, :obstacles, [world])
+      assert call(a, :boids, :set_time_scale, [world, 0.0]) == :ok
+      assert scale(b, world) == 0.0
+
+      # Each fact has the version of its change: a counter, and the node of the change.
+      assert [{:time_scale, stopped, {second, ^na}}, {{:obstacle, :rock}, rock, {first, ^na}}] =
+               facts(b, world)
+
+      assert {stopped, rock} == {0.0, {{10.0, 10.0}, 3.0}}
+
+      assert first < second
+      assert facts(a, world) == facts(b, world)
+
+      # The scale 0 stops all the world: the boid of the node b does not move.
+      {:ok, %{pos: pos}} = call(b, :boids, :lookup, [world, :bird])
+      Process.sleep(50)
+      assert {:ok, %{pos: ^pos}} = call(b, :boids, :lookup, [world, :bird])
+
+      # A change of the node b is on the node a too.
+      assert call(b, :boids, :remove_obstacle, [world, :rock]) == :ok
+      assert call(a, :boids, :obstacles, [world]) == []
+      assert call(b, :boids, :set_time_scale, [call(b, :boids, :space, [world]), 2]) == :ok
+      assert scale(a, world) == 2
+      # The boid moves again.
+      assert eventually(fn -> elem(call(b, :boids, :lookup, [world, :bird]), 1).pos != pos end)
+      # A bad value is an error on its node, and no change on each node.
+      assert catch_error(call(a, :boids, :set_time_scale, [world, -1])) == :badarg
+      assert scale(b, world) == 2
+      assert facts(a, world) == facts(b, world)
+    end
+
+    test "after a split, the last change in time wins on all the nodes, also when the other side made more changes",
+         %{nodes: nodes} do
+      %{world: world, small: small, large: large, nl: nl} = world(nodes)
+      peers = [small, large]
+      for id <- [:old, :back, :moved], do: :ok = call(small, :boids, :set_obstacle, [world, id, {1, 1}, 1])
+      assert length(same(world, peers)) == 3
+
+      split(world, nodes)
+      # Each side makes an obstacle. The other side does not get it.
+      :ok = call(small, :boids, :set_obstacle, [world, {:new, 1}, {1, 1}, 1])
+      :ok = call(large, :boids, :set_obstacle, [world, {:new, 2}, {2, 2}, 1])
+      # First changes: the node small makes many changes, and the node
+      # large makes few.
+      for n <- 3..12, do: :ok = call(small, :boids, :set_obstacle, [world, :moved, {n, n}, 1])
+      for _ <- 1..10, do: :ok = call(small, :boids, :set_time_scale, [world, 1])
+      :ok = call(small, :boids, :remove_obstacle, [world, :back])
+      :ok = call(large, :boids, :set_obstacle, [world, :old, {9, 9}, 1])
+      # Later changes, after a time that the clocks of the two nodes see.
+      Process.sleep(100)
+      :ok = call(large, :boids, :set_obstacle, [world, :moved, {2, 2}, 1])
+      :ok = call(large, :boids, :set_time_scale, [world, 2])
+      :ok = call(large, :boids, :set_obstacle, [world, :back, {4, 4}, 1])
+      :ok = call(small, :boids, :remove_obstacle, [world, :old])
+      assert rocks(small, world) == %{{:new, 1} => {1, 1}, moved: {12, 12}}
+      assert rocks(large, world) == %{{:new, 2} => {2, 2}, back: {4, 4}, moved: {2, 2}, old: {9, 9}}
+
+      heal(world, nodes)
+      after_heal = same(world, peers)
+
+      for peer <- peers do
+        # Each side has the obstacle of the other side. For each fact
+        # that the two sides changed, the last change in time wins: the
+        # one change of the node large, against the ten changes of the
+        # node small. An obstacle that was removed last stays removed,
+        # and an obstacle that was made again after its removal is there.
+        assert rocks(peer, world) == %{{:new, 1} => {1, 1}, {:new, 2} => {2, 2}, back: {4, 4}, moved: {2, 2}}
+        assert scale(peer, world) == 2
+      end
+
+      assert {{:obstacle, :moved}, {{2, 2}, 1}, {_, ^nl}} = List.keyfind(after_heal, {:obstacle, :moved}, 0)
+      assert {{:obstacle, :old}, :none, _} = List.keyfind(after_heal, {:obstacle, :old}, 0)
+    end
+
+    test "a world that starts again changes a fact at once, and its change wins against the older fact", %{
+      nodes: nodes
+    } do
+      %{world: world, small: a, large: b, ns: na} = world(nodes)
+      # The node b makes the facts, with many changes.
+      for n <- 1..10, do: :ok = call(b, :boids, :set_obstacle, [world, :rock, {n, n}, 1])
+      :ok = call(b, :boids, :set_time_scale, [world, 2])
+      assert length(same(world, [a, b])) == 2
+
+      # The world of the node a stops, and starts again with no fact. It
+      # changes the rock at once: it does not wait for the facts of the
+      # node b.
+      :ok = call(a, :boids, :stop_world, [world])
+      Process.sleep(20)
+      {:ok, _} = call(a, :boids, :start_world, [%{name: world, defaults: %{rules: [], tick: 20}}])
+      assert call(a, :boids, :set_obstacle, [world, :rock, {0, 0}, 1]) == :ok
+      joined(world, nodes)
+
+      # Its change is the last in time: it wins on the two nodes. The
+      # world has the other facts of the node b again.
+      after_start = same(world, [a, b])
+      assert {{:obstacle, :rock}, {{0, 0}, 1}, {_, ^na}} = List.keyfind(after_start, {:obstacle, :rock}, 0)
+      for peer <- [a, b], do: assert(rocks(peer, world) == %{rock: {0, 0}})
+      for peer <- [a, b], do: assert(scale(peer, world) == 2)
+    end
+
+    test "a fact of each kind, with a large value, goes to a node that comes later and across a split", %{
+      nodes: nodes
+    } do
+      [{small, ns}, {large, _nl}] = Enum.sort_by(nodes, &elem(&1, 1))
+      world = :"world#{System.unique_integer([:positive])}"
+      options = %{name: world, defaults: %{rules: [], tick: 20}}
+      {:ok, _} = call(small, :boids, :start_world, [options])
+      # A kind of fact that this version of the library does not know,
+      # with a value of 1 MB: a node keeps it, and gives it to the other
+      # nodes. It comes to the node as a fact of another node.
+      blob = :binary.copy(<<7>>, 1_000_000)
+      pid = call(small, :erlang, :whereis, [world])
+      call(small, :erlang, :send, [pid, {:facts, [{{:test, :blob}, blob, {1, ns}}]}])
+      assert facts(small, world) == [{{:test, :blob}, blob, {1, ns}}]
+
+      # The world starts on the other node.
+      {:ok, _} = call(large, :boids, :start_world, [options])
+      joined(world, nodes)
+      assert same(world, [small, large]) == [{{:test, :blob}, blob, {1, ns}}]
+
+      # During a split, the fact is removed on one side. After the heal,
+      # the other side has its mark.
+      split(world, nodes)
+      call(small, :erlang, :send, [pid, {:facts, [{{:test, :blob}, :none, {2, ns}}]}])
+      assert [{{:test, :blob}, ^blob, {1, ^ns}}] = facts(large, world)
+      heal(world, nodes)
+      assert same(world, [small, large]) == [{{:test, :blob}, :none, {2, ns}}]
+      # A node writes one error for each fact that it cannot write.
+      for peer <- [small, large],
+          do: assert(Enum.count(Cluster.errors(peer), &(&1 =~ "cannot write the fact {test,blob}")) == 2)
+    end
+
+    test "the process that changes a fact gets the result timeout when a node gives no answer", %{
+      nodes: nodes
+    } do
+      %{world: world, small: a, large: b} = world(nodes)
+      on_exit(fn -> call(a, :application, :unset_env, [:boids, :timeout]) end)
+      :ok = call(a, :application, :set_env, [:boids, :timeout, 200])
+      space_b = call(b, :boids, :space, [world])
+      :ok = call(b, :sys, :suspend, [world])
+      assert call(a, :boids, :set_obstacle, [world, :rock, {1, 1}, 1]) == {:error, :timeout}
+      # The node of the caller has the change. The other node gets it later.
+      assert rocks(a, world) == %{rock: {1, 1}}
+      assert rocks(b, space_b) == %{}
+      :ok = call(b, :sys, :resume, [world])
+      assert eventually(fn -> rocks(b, space_b) == %{rock: {1, 1}} end)
+      assert call(a, :boids, :set_time_scale, [world, 2]) == :ok
+      assert facts(a, world) == facts(b, world)
+    end
+
+    test "the process that changes a fact does not wait for a world that stops", %{nodes: nodes} do
+      %{world: world, small: a, large: b} = world(nodes)
+      :ok = call(b, :sys, :suspend, [world])
+      task = Task.async(fn -> call(a, :boids, :set_obstacle, [world, :rock, {1, 1}, 1]) end)
+      assert eventually(fn -> rocks(a, world) == %{rock: {1, 1}} end)
+      assert Task.yield(task, 100) == nil
+      # The world of the other node stops, with no answer.
+      true = call(b, :erlang, :exit, [call(b, :erlang, :whereis, [world]), :kill])
+      assert Task.await(task) == :ok
+    end
+
+    test "the process that changes a fact can stop in the middle: the other node gets the change", %{
+      nodes: nodes
+    } do
+      %{world: world, small: a, large: b} = world(nodes)
+      space_b = call(b, :boids, :space, [world])
+      :ok = call(b, :sys, :suspend, [world])
+      caller = call(a, :erlang, :spawn, [:boids, :set_obstacle, [world, :rock, {1, 1}, 1]])
+      assert eventually(fn -> rocks(a, world) == %{rock: {1, 1}} end)
+      true = call(a, :erlang, :exit, [caller, :kill])
+      :ok = call(b, :sys, :resume, [world])
+      assert eventually(fn -> rocks(b, space_b) == %{rock: {1, 1}} end)
+      assert facts(a, world) == facts(b, world)
+    end
+
+    test "the process that changes a fact does not wait for a node whose connection ended", %{nodes: nodes} do
+      %{world: world, small: a, large: b, nl: nb} = world(nodes)
+      # The world of the node a does not know that the connection ended:
+      # the call comes to it before the news.
+      :ok = call(a, :sys, :suspend, [world])
+      task = Task.async(fn -> call(a, :boids, :set_obstacle, [world, :rock, {1, 1}, 1]) end)
+      assert Task.yield(task, 100) == nil
+      Cluster.split(hd(nodes), List.last(nodes))
+      assert eventually(fn -> nb not in call(a, :erlang, :nodes, []) end)
+      :ok = call(a, :sys, :resume, [world])
+      assert Task.await(task) == :ok
+      assert eventually(fn -> call(a, :boids, :nodes, [world]) |> length() == 1 end)
+      assert eventually(fn -> call(b, :boids, :nodes, [world]) |> length() == 1 end)
+      assert rocks(a, world) == %{rock: {1, 1}}
+      assert rocks(b, world) == %{}
+      # The other node gets the change after the heal.
+      heal(world, nodes)
+      assert length(same(world, [a, b])) == 1
+      assert rocks(b, world) == %{rock: {1, 1}}
+    end
+  end
 end
 
 defmodule BoidsThreeNodesTest do
@@ -1372,5 +1593,109 @@ defmodule BoidsThreeNodesTest do
     # The connections come again one at a time, the last node first.
     connect(world, [third, second, first])
     one_each(nodes, world, one_cut ++ all_cut)
+  end
+
+  describe "the facts of a world on three nodes (specs/Facts.tla)" do
+    setup %{nodes: nodes} do
+      # A test before these can end in the middle of a split: these tests
+      # start with all the connections.
+      for {a, i} <- Enum.with_index(nodes), b <- Enum.drop(nodes, i + 1), do: Cluster.heal(a, b)
+      :ok
+    end
+
+    defp facts({peer, _node}, world), do: call(peer, :boids_world, :facts, [world])
+
+    defp scale({peer, _node}, world),
+      do: call(peer, :boids_space, :env, [call(peer, :boids, :space, [world])]).time_scale
+
+    # The obstacles of a node: id => position.
+    defp rocks({peer, _node}, world), do: Map.new(call(peer, :boids, :obstacles, [world]), &{&1.id, &1.pos})
+
+    # In the end, the nodes have the same facts, with the same versions.
+    defp same(world, nodes) do
+      assert eventually(fn -> nodes |> Enum.map(&facts(&1, world)) |> Enum.uniq() |> length() == 1 end)
+      facts(hd(nodes), world)
+    end
+
+    test "a node that comes later gets all the facts, and its changes are on all the nodes", %{
+      nodes: [first, second, third] = nodes
+    } do
+      world = world([first, second])
+      {one, _} = first
+      {two, _} = second
+      {three, node_three} = third
+      :ok = call(one, :boids, :set_time_scale, [world, 3])
+      :ok = call(one, :boids, :set_obstacle, [world, :rock, {1, 1}, 1])
+      :ok = call(two, :boids, :set_obstacle, [world, :pole, {2, 2}, 1])
+      :ok = call(two, :boids, :remove_obstacle, [world, :rock])
+      before = facts(first, world)
+      assert length(before) == 3
+      assert facts(second, world) == before
+
+      # The world starts on the third node, after the changes.
+      {:ok, _} = call(three, :boids, :start_world, [%{name: world, defaults: %{rules: [], tick: 20}}])
+      joined(world, nodes)
+      assert same(world, nodes) == before
+      assert rocks(third, world) == %{pole: {2, 2}}
+      assert scale(third, world) == 3
+
+      # The first change of the new node is after the changes that it
+      # got. Each other node has it when the call returns.
+      assert call(three, :boids, :set_obstacle, [world, :rock, {3, 3}, 1]) == :ok
+
+      assert {{:obstacle, :rock}, {{3, 3}, 1}, {counter, ^node_three}} =
+               List.keyfind(facts(third, world), {:obstacle, :rock}, 0)
+
+      assert counter > Enum.max(for {_key, _value, {known, _node}} <- before, do: known)
+      for node <- nodes, do: assert(rocks(node, world) == %{pole: {2, 2}, rock: {3, 3}})
+      for node <- nodes, do: assert(facts(node, world) == facts(third, world))
+    end
+
+    test "after a split of the three nodes with changes on each node, the nodes have the same facts", %{
+      nodes: [first, second, third] = nodes
+    } do
+      world = world(nodes)
+      {one, _} = first
+      {two, _} = second
+      {three, node_three} = third
+      :ok = call(one, :boids, :set_obstacle, [world, :rock, {1, 1}, 1])
+      :ok = call(one, :boids, :set_obstacle, [world, :stone, {1, 1}, 1])
+      for node <- nodes, do: assert(rocks(node, world) == %{rock: {1, 1}, stone: {1, 1}})
+
+      # No node has a connection. The test ends each connection: it does
+      # not wait for Erlang to end the connections of a third node.
+      for {a, i} <- Enum.with_index(nodes), b <- Enum.drop(nodes, i + 1), do: Cluster.split(a, b)
+      for node <- nodes, do: joined(world, [node])
+
+      # The second node moves the rock and the stone.
+      :ok = call(two, :boids, :set_obstacle, [world, :rock, {2, 2}, 1])
+      :ok = call(two, :boids, :set_obstacle, [world, :stone, {2, 2}, 1])
+      # Later, the third node makes a pole, and moves the stone.
+      Process.sleep(50)
+      :ok = call(three, :boids, :set_obstacle, [world, :pole, {7, 7}, 1])
+      :ok = call(three, :boids, :set_obstacle, [world, :stone, {3, 3}, 1])
+      # Later, the first node removes the rock, after two other changes.
+      Process.sleep(50)
+      :ok = call(one, :boids, :set_time_scale, [world, 0.5])
+      :ok = call(one, :boids, :set_time_scale, [world, 0.25])
+      :ok = call(one, :boids, :remove_obstacle, [world, :rock])
+      assert rocks(first, world) == %{stone: {1, 1}}
+      assert rocks(second, world) == %{rock: {2, 2}, stone: {2, 2}}
+      assert rocks(third, world) == %{rock: {1, 1}, stone: {3, 3}, pole: {7, 7}}
+
+      # The connections come again one at a time, the last node first.
+      connect(world, [third, second, first])
+      after_heal = same(world, nodes)
+
+      for node <- nodes do
+        # The rock was removed last, so it stays removed. The third node
+        # moved the stone last, so the stone is where that node put it.
+        assert rocks(node, world) == %{stone: {3, 3}, pole: {7, 7}}
+        assert scale(node, world) == 0.25
+      end
+
+      assert {{:obstacle, :stone}, {{3, 3}, 1}, {_, ^node_three}} =
+               List.keyfind(after_heal, {:obstacle, :stone}, 0)
+    end
   end
 end

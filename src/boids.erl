@@ -72,7 +72,7 @@ and a force is in units for each second for each second.
 """.
 
 -export([start_world/0, start_world/1, stop_world/1, child_spec/1, space/1]).
--export([add/2, populate/3, remove/2, update/3, boid/2, whereis/2, nodes/1, timeout/0]).
+-export([add/2, populate/3, remove/2, update/3, boid/2, whereis/2, nodes/1, timeout/0, mark_time/0]).
 -export([add_rule/3, delete_rule/3, which_rules/2]).
 -export([snapshot/1, snapshot/2, lookup/2, near/3, count/1, count/2]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
@@ -403,6 +403,36 @@ timeout() ->
     application:get_env(boids, timeout, 5000).
 
 -doc """
+The time that a node of a world keeps the mark of a fact that was
+removed (an obstacle, for example), in milliseconds: the value
+`mark_time` of the application `boids`, or 600000 (10 minutes). The
+value can be `infinity`.
+
+The mark stops an older change of that fact, which a node with no
+connection can have: with the mark, the fact stays removed when that
+node has a connection again. The time has two limits:
+
+- A node that has no connection for more than this time can bring back
+  a fact that the other nodes removed in that time. Use a time longer
+  than the longest split of your network.
+- A node keeps one mark for each fact that was removed in this time. A
+  longer time keeps more marks. A node gives all its marks to a node
+  that comes to the world.
+
+With `infinity`, a node never drops a mark: a removed fact stays
+removed after a split of each length, and the marks have no limit. Use
+it when the world removes few facts, or when it does not run for a long
+time.
+
+```erlang
+ok = application:set_env(boids, mark_time, 3600000).
+```
+""".
+-spec mark_time() -> pos_integer() | infinity.
+mark_time() ->
+    application:get_env(boids, mark_time, 600000).
+
+-doc """
 The process of a boid, or `undefined` for an id that is not in the
 world. In a world on several nodes, the process can be on another
 node. The process of a boid changes when the boid moves to another
@@ -512,27 +542,53 @@ it. Call this function again to move the obstacle.
 The process of the world writes the obstacle: this function sends it
 one message, and waits for its answer. A center or a radius that is not
 good gives the error `badarg`.
+
+The obstacles and the scale of the time are the facts of a world. In a
+world on several nodes, a change of a fact is for all the nodes
+(`set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`):
+
+- When the result is `ok`, each node that has a connection to this node
+  has the change.
+- A node that gives no answer in the time limit (`timeout/0`) makes the
+  result `{error, timeout}`. This node has the change, and that node
+  gets it later.
+- A node with no connection, and a node that comes later, gets all the
+  facts when it has a connection.
+- When two nodes changed one fact (during a split of the network, for
+  example), the last change wins on all the nodes: the last in time,
+  when the clocks of the computers agree. When the clocks do not agree,
+  all the nodes get one value too, which can be the change of the
+  computer with the clock that is ahead. Each change has a counter (the
+  time of the system in microseconds, or more: a counter of a node is
+  always larger than each counter that the node knows). With the same
+  counter, the change of the node with the larger name wins.
+- A fact that was removed stays removed: an older change of another
+  node does not bring it back (see `mark_time/0` for the limit).
 """.
--spec set_obstacle(world(), term(), vec(), number()) -> ok.
+-spec set_obstacle(world(), term(), vec(), number()) -> ok | {error, timeout}.
 set_obstacle(World, Id, Pos, Radius) ->
     set(World, {obstacle, Id}, {Pos, Radius}).
 
--doc "Remove an obstacle from a world.".
--spec remove_obstacle(world(), term()) -> ok.
+-doc "Remove an obstacle from a world, on all its nodes: see `set_obstacle/4`.".
+-spec remove_obstacle(world(), term()) -> ok | {error, timeout}.
 remove_obstacle(World, Id) ->
     set(World, {obstacle, Id}, none).
 
 %% Change a fact of a world. A bad value is an error of the caller.
 set(World, Key, Value) ->
     case boids_world:set(World, Key, Value) of
-        ok -> ok;
-        {error, Reason} -> error(Reason)
+        {error, badarg} -> error(badarg);
+        Result -> Result
     end.
 
 -doc """
 All the obstacles of a world, in the order of their ids: a list of maps
 with `id`, `pos` and `radius`. A boid gets only the obstacles near it
 (`boids_boid:reach/1`).
+
+This function reads the tables of this node with no message. Each node
+of a world has all the obstacles, so there is no function for the
+obstacles of one node.
 """.
 -spec obstacles(world()) -> [boids_space:obstacle()].
 obstacles(World) ->
@@ -541,10 +597,11 @@ obstacles(World) ->
 -doc """
 Set the scale of the time of a world: the seconds of the boids
 for each second of the clock. With 0, the boids stop. The default is
-1.0. The process of the world writes it, as for `set_obstacle/4`. A
-scale that is not a number from 0 to 1.0e100 gives the error `badarg`.
+1.0. The process of the world writes it, on all the nodes of the world,
+as for `set_obstacle/4`. A scale that is not a number from 0 to 1.0e100
+gives the error `badarg`.
 """.
--spec set_time_scale(world(), number()) -> ok.
+-spec set_time_scale(world(), number()) -> ok | {error, timeout}.
 set_time_scale(World, Scale) ->
     set(World, time_scale, Scale).
 

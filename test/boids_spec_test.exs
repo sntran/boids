@@ -11,6 +11,7 @@ defmodule BoidsSpecTest do
   @step Path.expand("../specs/MCStep.tla", __DIR__)
   @move Path.expand("../specs/MCMove.tla", __DIR__)
   @three Path.expand("../specs/MCMoveThree.tla", __DIR__)
+  @facts Path.expand("../specs/MCFacts.tla", __DIR__)
 
   defp config(model, name), do: [config: Path.rootname(model) <> name <> ".cfg"]
 
@@ -166,6 +167,48 @@ defmodule BoidsSpecTest do
     test "a node that stops a process of each age when it is told can stop the only process, on three nodes" do
       assert {:error, %{kind: :invariant, property: "NotLost"}, _} =
                Checker.check(@three, config(@three, "Any") ++ @workers)
+    end
+  end
+
+  describe "specs/Facts.tla: the facts of a world on several nodes" do
+    # The bounds: two nodes, one key, three changes and two splits. The
+    # counter of a change is larger than the largest counter that its
+    # node knows by 1, or by 2 (a clock that is ahead).
+    test "all the nodes come to the same facts, and an older change does not bring back a removed fact" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@facts, @workers)
+      assert states > 10_000
+    end
+
+    # The bounds: three nodes, one key, two changes and one split.
+    test "the same on three nodes" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@facts, config(@facts, "Three") ++ @workers)
+      assert states > 10_000
+    end
+
+    # The bounds: two nodes, two keys, three changes and no split.
+    test "the same with two keys, which share the counter of a node" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@facts, config(@facts, "Keys") ++ @workers)
+      assert states > 1000
+    end
+
+    test "nodes that compare only the counters of two versions keep two different facts" do
+      assert {:error, %{kind: :invariant, property: "Same"}, _} =
+               Checker.check(@facts, config(@facts, "Counter"))
+    end
+
+    test "a counter that is only the time of a clock that stands still gives one version to two changes" do
+      assert {:error, %{kind: :invariant, property: "Same"}, _} =
+               Checker.check(@facts, config(@facts, "Clock"))
+    end
+
+    test "with no mark for a removed fact, an older change brings the fact back" do
+      assert {:error, %{kind: :invariant, property: "NoReturn"}, _} =
+               Checker.check(@facts, config(@facts, "NoMark"))
+    end
+
+    test "a limit: after a split that is longer than the time of a mark, an older change brings the fact back" do
+      assert {:error, %{kind: :invariant, property: "NoReturn"}, _} =
+               Checker.check(@facts, config(@facts, "Early"))
     end
   end
 end

@@ -30,6 +30,7 @@ world to the design.
 | `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 | `specs/Move.tla` | The move of a boid to another node of its world. | `gen_boid` (`settle`, `adopt/2`), `boids_world` (the join of a boid that comes, `moved/3`) |
 | `specs/MoveMany.tla` | The same move in a world on three nodes: a boid with a process on each node, and a decision for two processes at a time. | `boids_world` (`adopt/5`, the messages `census`, `claim` and `yield`) |
+| `specs/Facts.tla` | The facts of a world (the obstacles, the scale of the time) on several nodes: a change with a version, a node that comes later, and a split of the network. | `boids_world` (`set/3`, the messages `fact` and `facts`, `drop_marks/2`) |
 
 ### `specs/Members.tla`
 
@@ -337,6 +338,87 @@ the model found a fault there too: the call of a process that is gone
 can start a process that no node compares. With the call in the claim,
 only the node whose process waits for that call does nothing.
 
+### `specs/Facts.tla`
+
+The facts of a world are what all its boids perceive, and that is not a
+boid: the obstacles and the scale of the time. Each node of a world has
+a copy of each fact, and all the nodes must have the same facts.
+
+The constants: the nodes (`Nodes`, numbers in the order of their
+names), the keys of the facts (`Keys`), the changes of the users and
+the splits of the network (`Changes` and `Splits`, bounds of the
+model), the steps of a counter (`Steps`), and three guards for the
+fault models. The fact of a key on a node is a version (a counter and a
+node), a value ("set", or "none" for a fact that was removed), and the
+number of its change. A message is a fact on its way from a node to a
+node. The messages have no order: a node can get them in each order.
+
+The counter of a change is a clock of two parts. In the code, it is the
+time of the system in microseconds (`erlang:system_time/1`), or the
+largest counter that the node knows plus 1 when that is more. So a
+counter of a node is always larger than each counter that the node
+knows, and that is all that the model needs: it has no time. In the
+model, the counter of a change is larger than the largest counter that
+its node knows by one of the `Steps`: 1, or 2 for a clock that is
+ahead. The invariants hold for each step, so they hold for each clock
+of each computer. The time decides only which change is the last one.
+
+The unit of the time is the microsecond, because one change takes more
+than a microsecond (3 to 7 microseconds in a measurement). Thus the
+changes of a node do not put its counter ahead of its clock: after
+100,000 changes with no pause, the counter was 1 to 3 microseconds
+behind the time of the system. With milliseconds, each change in the
+same millisecond adds 1 to the counter: 10,000 changes with no pause
+put the counter 10 seconds ahead, and a later change of another node
+then loses against them after a split.
+
+| Action | When it can occur | In the code |
+|---|---|---|
+| `Change(n, k, v, d)` | A user changes the fact of the key `k` on the node `n`. The counter of the version is the largest counter that `n` knows, plus the step `d`. The world of `n` sends the fact to its peers. | the call `{set, Key, Value, Ack}` in `boids_world` |
+| `Learn(x)` | A fact comes to its node. The node takes it only when its version is larger than the version that the node has: the counter first, then the node. | `learn/2`, for the messages `{fact, Fact, Ack}` and `{facts, Facts}` |
+| `Split(n, m)` | The connection between two nodes ends. The messages between them are lost, and each of the two has one peer less. | the event `leave` of `pg` |
+| `Heal(n, m)` | The two nodes have a connection again. | |
+| `Join(n, m)` | The node `n` sees the node `m`: it sends all its facts and its marks to `m`, and `m` is one of its peers. | the event `join` of `pg` |
+| `Drop(n, k)` | The node `n` drops the mark of the key `k`. Each node took that mark or has a newer fact, and no older fact of the key is on its way. | `drop_marks/2`, after `boids:mark_time/0` |
+
+| Invariant or property | What it says | The fault that it stops |
+|---|---|---|
+| `Same` | When all the nodes have a connection, each node knows each other node, and no fact is on its way, the boids of all the nodes perceive the same facts. | A rock that is a rock on one node only. A world that stops on one node and runs on another node. |
+| `NoReturn` | A fact of a node is after each removal of its key that the node took: an older change never brings back a fact that was removed. | An obstacle that a game removed, and that is there again after a split. |
+| `Counts` | The counter of a node is not less than the counter of each fact that it has. | A new change that loses against an older fact of its own node. |
+| `Settles` | The world comes to rest: all the nodes have a connection, and no fact is on its way. | |
+
+The small models (`specs/MCFacts.tla`): `MCFacts.cfg` has two nodes, one
+key, three changes and two splits, and the steps 1 and 2.
+`MCFactsThree.cfg` has three nodes, two changes and one split.
+`MCFactsKeys.cfg` has two keys, which share the counter of a node.
+`MCFactsCounter.cfg` compares only the counters of two versions: `Same`
+violated (two nodes change one fact at the same time, the two changes
+have the same counter, and each node keeps its own). `MCFactsClock.cfg`
+has the step 0: the counter of a change is only the time, and the clock
+stands still (or goes back). `Same` violated: two changes of one node
+have one version, and the other node keeps the first one. That is why
+the counter is not the time alone. `MCFactsNoMark.cfg` keeps no mark
+for a fact that was removed: `NoReturn` violated (a node removes a
+fact, and an older change of the other node, which was on its way or
+comes after a split, makes the fact again).
+
+The condition of `Drop` is the place of the time of a mark in the
+model. In the code, a node drops a mark when it is older than
+`boids:mark_time/0` (10 minutes by default, or never with `infinity`).
+The model has what that time must give: each
+node took the mark, and no older fact is on its way. That is true when
+the time of a mark is longer than each split of the network and than
+the time of each message. `MCFactsEarly.cfg` drops a mark at each
+moment: `NoReturn` violated. This is a limit of the library, not a
+fault of the code: a node that has no connection for longer than the
+time of a mark can bring back a fact that the other nodes removed in
+that time.
+
+The process that asks for a change waits for the answers of the other
+nodes (`boids_world:set/3`). The model does not have this wait: it
+changes nothing in the facts. No world waits for another world.
+
 ## The replay: the code against the specification
 
 `Boids.MembersSpec` (`test/support/members_spec.ex`) does two things.
@@ -385,11 +467,11 @@ join, the process of the row stopped, or not. The result is `:ok`,
 
 - A model is small: three processes, two boids, two cells, three nodes.
   A fault that needs more is not found.
-- `Space.tla`, `Step.tla` and `Move.tla` have no replay. Their tie to
-  the code is the comments in `boids_space`, `gen_boid` and
-  `boids_world`, and the tests of the behavior
+- `Space.tla`, `Step.tla`, `Move.tla` and `Facts.tla` have no replay.
+  Their tie to the code is the comments in `boids_space`, `gen_boid`
+  and `boids_world`, and the tests of the behavior
   (`test/boids_space_test.exs`, `test/boids_test.exs`,
-  `test/boids_nodes_test.exs`).
+  `test/boids_nodes_test.exs`, `test/boids_facts_test.exs`).
 - `Move.tla` has two nodes and one call of a node on its way at one
   time. `MoveMany.tla` has three nodes, one boid, three crossings and
   two splits at most, and no node that stops. A fault that needs four
@@ -428,6 +510,29 @@ join, the process of the row stopped, or not. The result is `:ok`,
   step of the model: the code uses a read of an ETS table of the kind
   `set`, which gets each row one time, also a row that a write changes
   during the read.
+- `Facts.tla` has three nodes, two keys, three changes and two splits at
+  most, and no node that stops. A node sends its changes only to the
+  nodes that it has a connection to, and no node sends the fact of
+  another node again, except when two nodes see each other (`Join`).
+  Thus a node that stops before all the nodes have its last change, in
+  a network where a node has only a part of its connections, can leave
+  two nodes with different facts. Erlang does not keep such a network:
+  a node that loses one connection loses the others too.
+- `Facts.tla` has no time. It proves that all the nodes get the same
+  facts for each clock of each computer. It does not say which change
+  is the last one: that is the time of the system in the code. With
+  clocks that agree, the last change in time wins. With a clock that is
+  ahead, the change of that computer can win against a later change of
+  another computer, when the two did not see each other (a split).
+- A world that starts again has no fact, until it gets the facts of the
+  other nodes. The counter of its changes is the time of its computer,
+  so its changes are after the older facts of the other nodes when the
+  clocks agree. When its clock is behind the counter of an older fact
+  of another node, a change that it makes before it has that fact loses
+  against it. The model has no node that starts again.
+- In `Facts.tla`, a mark goes only when each node took it. In the code,
+  a mark goes after a time (`boids:mark_time/0`): see the limit of
+  `MCFactsEarly.cfg`.
 
 ## How to run the checks
 
@@ -438,6 +543,7 @@ mix test test/boids_spec_test.exs test/boids_members_spec_test.exs
 
 A change of `boids_world`, of `boids_space:put/2` and `near/3`, of the
 writes and the reads of the obstacles, of the two parts of
-`boids:step/2`, or of the move of a boid to another node
+`boids:step/2`, of the facts of a world on several nodes, or of the
+move of a boid to another node
 changes its specification in the same commit, and the tests of the
 models and the replay must pass.
