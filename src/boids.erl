@@ -3,7 +3,7 @@
 Flocks of boids, with one Erlang process for each boid.
 
 A world is where boids are, and where they see their neighbors: a
-box, obstacles, a scale of the time, and the boids. A boid is a process
+box, obstacles, walls, a scale of the time, and the boids. A boid is a process
 that senses, decides and acts: it finds its neighbors, calculates the
 force of its rules, and moves. The rules are the three rules of a flock
 (separation, alignment and cohesion), and the steering rules (seek,

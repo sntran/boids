@@ -42,6 +42,7 @@ decides and acts.
 | `leader` | stays behind a leader, and moves out of its way |
 | `dodge` | moves away from a neighbor that will come too near |
 | `flow` | moves in the direction of a field |
+| `walls` | moves away from the walls of its grid |
 | a function of yours | gets the force that the function gives |
 
 Each rule has a weight. A boid has two or three dimensions, a maximum
@@ -233,7 +234,8 @@ end
   `data` is what the neighbors see.
 - `Seen` is a map with what the boid perceives in this step:
   `neighbors` (the nearest first), `obstacles` (those that the boid can
-  reach, see "The world"), `bounds`, `wrap` and `dt`. The rules get it
+  reach, see "The world"), `grids` (the grids that the boid uses, see
+  "The walls of a world"), `bounds`, `wrap` and `dt`. The rules get it
   too, so a rule of yours reads the keys that `handle_sense/2` added.
 - Change the rules and the other options of the boid with the functions
   of `boids_boid` (`update/2`, `add_rule/2`, `delete_rule/2`), which
@@ -330,7 +332,7 @@ gravity = fn _boid, _neighbors, _seen -> {0, -9.81} end
 - The boid and each neighbor are maps: `maps:get(pos, Boid)`,
   `maps:get(dist, Neighbor)`. `Seen` is what the boid perceives in this
   step: `dt` (the seconds of the step), `obstacles` (those that the
-  boid can reach), `bounds` and `wrap`.
+  boid can reach), `grids`, `bounds` and `wrap`.
 - The functions of `boids_steer` and `boids_vec` are the parts of a new
   rule: for example `boids_steer:seek/2` to a point that the rule
   calculates.
@@ -420,6 +422,64 @@ view, and not for each step of a boid.
 - All the boids of a world have two dimensions, or all have three.
 - The library has no unit of length. A speed is in units for each
   second.
+
+## The walls of a world
+
+The rules give forces, and the forces add: no rule can stop a boid at a
+wall. A grid tells where a boid can walk, and the option `walkable` of a
+boid is a hard limit that no force can pass.
+
+```erlang
+%% A land of 100 x 30 with a wall in the middle: # is a blocked cell.
+Land = boids_grid:from_rows([
+    "..........",
+    "....##....",
+    ".........."
+], #{cell_size => 10.0}),
+{ok, World} = boids:start_world(#{bounds => {{0, 0}, {100, 30}}, defaults => #{walkable => {named, land}}}),
+ok = boids:set_grid(World, land, Land),
+{ok, _People} = boids:populate(World, 20, #{rules => [{wander, 1.0}, {walls, 2.0}]}),
+{ok, _Bird} = boids:add(World, #{pos => {50, 15}, walkable => all}),
+%% A door opens in the wall.
+ok = boids:set_grid(World, land, boids_grid:set_cost(Land, [{4, 1}], 1)).
+```
+
+- **The world owns the walls.** A grid (`boids_grid`) is a fact of the
+  world with a name, as an obstacle: `boids:set_grid/3`,
+  `boids:remove_grid/2`, `boids:grid/2`. A grid comes from a list of
+  blocked cells, from rows of text, or from a function that tells for
+  the center of each cell if it is blocked. A cell also has a cost, for
+  a search of ways.
+- **A boid tells which walls limit it:** `walkable => {named, Name}`, or
+  `all` (the default). The option `defaults` of the world gives it to
+  all the boids, and a boid of another kind can have another value:
+  walls for people, and not for birds. A name with no grid is no limit.
+- **A boid slides along a wall.** When the movement of a step goes into
+  a blocked cell, the library removes the part of the movement into the
+  edge, and the same part of the velocity. A boid that goes into a wall
+  at 45 degrees slides along it at 0.71 of its speed. A boid stops only
+  in a corner. The contact is exact: a fast boid does not go through a
+  thin wall.
+- **A door is a new grid for the same name.** `boids:set_grid/3` again
+  changes the walls for all the boids, from their next step. A boid
+  that is then in a blocked cell goes to the nearest walkable place at
+  its next step.
+- **The rule `walls`** moves a boid away from a wall before it touches
+  it. With it, the movement is smooth, and the limit acts only a
+  little. The force does not change with the thickness of a wall.
+- The steps of `boids:step/2`, and of a process of yours with
+  `boids:join/2` and `boids:advance/3`, obey the limit.
+  `boids:populate/3` puts boids only in walkable places.
+- **A grid has two dimensions.** A boid with three dimensions cannot
+  have the option `walkable`.
+- A grid of 200 x 200 cells is 320 KB, in one binary that all the boids
+  share. A boid keeps the grid that it read, and reads it again only
+  after a change. With 1,000 boids, the limit makes a step 2 % longer.
+
+`examples/bridge.exs` measures boids that carry things across a river on
+a narrow bridge: `mix run examples/bridge.exs walkable 1`. With
+`separation` and no limit, 29 % of the steps of the boids end in the
+water. With the option `walkable`, none does.
 
 ## The time
 
@@ -692,11 +752,13 @@ of the relations, and writes the relations of each boid to a table that
 the boids read.
 
 The process of the world is also the only process that writes the
-facts of the world: the obstacles and the scale of the time.
-`boids:set_obstacle/4`, `boids:remove_obstacle/2` and
-`boids:set_time_scale/2` send it one message, and it makes one change
-after the other. The boids read these facts from its tables, with no
-message.
+facts of the world: the obstacles, the scale of the time and the grids.
+`boids:set_obstacle/4`, `boids:remove_obstacle/2`,
+`boids:set_time_scale/2`, `boids:set_grid/3` and `boids:remove_grid/2`
+send it one message, and it makes one change after the other. The boids
+read these facts from its tables, with no message. A grid is large, so
+a boid keeps the grid that it read: the world counts the changes of its
+grids, and a boid reads a grid again only when that number changed.
 
 A boid reads the rows while the other boids write them. Thus the
 neighbors that it sees are not all of the same moment, as for a bird.
@@ -791,8 +853,16 @@ obstacle.
 
 - The tables of a world are local to a node. A world on several nodes
   has a part on each node (see "A world on several nodes").
-- An obstacle is a circle or a sphere. There are no walls and no
-  polygons. A rule of your own can add them.
+- An obstacle is a circle or a sphere, and a force keeps the boids
+  away from it (the rule `avoid`): it is not a hard limit. A wall is a
+  blocked cell of a grid, which is a hard limit (see "The walls of a
+  world"). There are no polygons: a shape that is not made of cells
+  becomes cells when the grid is made (`boids_grid:new/1` with a
+  function).
+- A grid has two dimensions: a world of three dimensions has no walls.
+- The world does not move a boid when a grid changes. A boid in a cell
+  that became blocked goes to the nearest walkable place at its next
+  step: with `tick => manual`, at the next `boids:step/2`.
 - The rule `follow` does not use `wrap`.
 - The steps of the boids are not at the same moment, except with
   `boids:step/2`.

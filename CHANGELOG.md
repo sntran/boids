@@ -19,8 +19,21 @@ The first version. It needs Erlang/OTP 29.
   (`wrap`), obstacles, and a scale of the time.
 - The rules of a boid: `separation`, `alignment`, `cohesion`, `seek`,
   `flee`, `arrive`, `pursue`, `evade`, `wander`, `avoid`, `contain`,
-  `follow`, `cruise`, `leader`, `dodge`, `flow`, and a function of yours
-  (`boids_boid`, `boids_steer`).
+  `follow`, `cruise`, `leader`, `dodge`, `flow`, `walls`, and a function
+  of yours (`boids_boid`, `boids_steer`).
+- The walls of a world: a grid with a name is a fact of the world
+  (`boids:set_grid/3`, `boids:remove_grid/2`, `boids:grid/2`), and a
+  boid with the option `walkable => {named, Name}` can be only in the
+  open cells of that grid. The limit is in the movement of each step: a
+  boid that goes into a blocked cell slides along the edge, and stops
+  only in a corner. A door is a new grid for the same name, and a boid
+  in a cell that became blocked goes to the nearest walkable place at
+  its next step. `boids:plan/3` and `boids:advance/3` obey the limit,
+  and `boids:populate/3` puts boids only in walkable places. The rule
+  `walls` moves a boid away from a wall before it touches it.
+- `Seen` has the key `grids`: the grids that the boid uses, by their
+  names. A boid keeps the grid that it read, and reads it again only
+  after a change of a grid of its world (`specs/Kept.tla`).
 - A grid of cells (`boids_grid`), in two dimensions: blocked cells and
   a cost for each cell, from a list, from rows of text, or from a
   function of the center of each cell. It gives the first contact of a

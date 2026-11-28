@@ -210,6 +210,39 @@ defmodule BoidsReadmeTest do
     assert eventually(fn -> :boids.count(world) == 0 end)
   end
 
+  test "the walls of a world" do
+    land = :boids_grid.from_rows([~c"..........", ~c"....##....", ~c".........."], %{cell_size: 10.0})
+    {:ok, world} = :boids.start_world(%{bounds: {{0, 0}, {100, 30}}, defaults: %{walkable: {:named, :land}}})
+    on_exit(fn -> :boids.stop_world(world) end)
+    :ok = :boids.set_grid(world, :land, land)
+    {:ok, people} = :boids.populate(world, 20, %{rules: [{:wander, 1.0}, {:walls, 2.0}]})
+    {:ok, bird} = :boids.add(world, %{pos: {50, 15}, walkable: :all})
+    assert {:ok, %{pos: {50, 15}}} = :boids.lookup(world, bird)
+
+    in_open_cells = fn grid ->
+      for id <- people do
+        {:ok, %{pos: pos}} = :boids.lookup(world, id)
+        assert :boids_grid.walkable(grid, pos), "#{inspect(pos)} is in the wall"
+      end
+    end
+
+    for _ <- 1..10 do
+      Process.sleep(20)
+      in_open_cells.(land)
+    end
+
+    # A door opens in the wall.
+    door = :boids_grid.set_cost(land, [{4, 1}], 1)
+    :ok = :boids.set_grid(world, :land, door)
+    assert :boids_grid.walkable(door, {45.0, 15.0})
+    refute :boids_grid.walkable(door, {55.0, 15.0})
+
+    for _ <- 1..10 do
+      Process.sleep(20)
+      in_open_cells.(door)
+    end
+  end
+
   test "a world below a supervisor of yours" do
     children = [{:boids, name: :boids_readme_space, bounds: {{0, 0}, {100, 100}}}]
     {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one)
