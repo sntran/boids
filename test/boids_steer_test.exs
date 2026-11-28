@@ -364,6 +364,52 @@ defmodule BoidsSteerTest do
       assert_in_delta :boids_vec.norm(force), 5.0, 1.0e-9
     end
 
+    test "in two dimensions, a boid that meets another head-on goes to its right, and so does the other" do
+      # The right of a boid that goes to +x is -y, with the y axis up.
+      east = :boids_steer.dodge(body(@me, {1, 0}), [neighbor(@me, {10, 0}, {-1, 0})], 2, 10)
+      assert_vec(east, {0.0, -5.0})
+      west = :boids_steer.dodge(body({10, 0}, {-1, 0}), [neighbor({10, 0}, {0, 0}, {1, 0})], 2, 10)
+      assert_vec(west, {0.0, 5.0})
+      # In each direction of travel: the right of the heading.
+      for {vx, vy} <- [{0, 1}, {0, -1}, {-1, 0}, {3, 4}, {-2, 1}] do
+        there = {10 * vx, 10 * vy}
+        force = :boids_steer.dodge(body(@me, {vx, vy}), [neighbor(@me, there, {-vx, -vy})], 2, 100)
+        assert_vec(:boids_vec.normalize(force), :boids_vec.normalize({vy, -vx}))
+      end
+
+      # A faster boid behind another boid on the same line: the two go to
+      # opposite sides too.
+      back = :boids_steer.dodge(body(@me, {3, 0}), [neighbor(@me, {4, 0}, {1, 0})], 2, 10)
+      front = :boids_steer.dodge(body({4, 0}, {1, 0}), [neighbor({4, 0}, {0, 0}, {3, 0})], 2, 10)
+      assert_vec(:boids_vec.normalize(back), {0.0, -1.0})
+      assert_vec(:boids_vec.normalize(front), {0.0, 1.0})
+    end
+
+    test "in three dimensions, the two boids get opposite directions at a right angle to their line" do
+      me = {0, 0, 0}
+
+      for {vel, side} <- [{{1, 0, 0}, {0, 0, 1}}, {{0, 2, 0}, {0, 0, -1}}, {{0, 0, 1}, {0, 1, 0}}] do
+        there = :boids_vec.scale(vel, 10)
+        back = :boids_vec.neg(vel)
+        one = :boids_steer.dodge(body(me, vel), [neighbor(me, there, back)], 2, 100)
+        other = :boids_steer.dodge(body(there, back), [neighbor(there, me, vel)], 2, 100)
+        assert_vec(:boids_vec.normalize(one), :boids_vec.scale(side, 1.0))
+        assert_vec(:boids_vec.normalize(other), :boids_vec.scale(side, -1.0))
+        assert_in_delta :boids_vec.dot(one, vel), 0.0, 1.0e-9
+      end
+
+      # On a line that is not along an axis: opposite directions, at a
+      # right angle to the line.
+      vel = {1, 2, -3}
+      there = :boids_vec.scale(vel, 5)
+      back = :boids_vec.neg(vel)
+      one = :boids_steer.dodge(body(me, vel), [neighbor(me, there, back)], 2, 100)
+      other = :boids_steer.dodge(body(there, back), [neighbor(there, me, vel)], 2, 100)
+      assert_vec(one, :boids_vec.neg(other))
+      assert_in_delta :boids_vec.dot(one, vel), 0.0, 1.0e-9
+      assert :boids_vec.norm(one) > 0
+    end
+
     test "a neighbor that goes away, that stays far, or that comes late gives no force" do
       boid = body(@me, {1, 0})
       assert :boids_steer.dodge(boid, [neighbor(@me, {10, 0.5}, {3, 0})], 2, 10) == {0.0, 0.0}

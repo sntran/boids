@@ -336,6 +336,24 @@ if the two keep their velocities. A neighbor counts when that moment is
 in the next `Horizon` seconds, and the distance is then less than
 `Radius`. The force is away from where that neighbor will be, and it
 increases when the moment comes near.
+
+When the two will be at the same point, the force is to a side: the
+direction `boids_vec:orthogonal/1` of the velocity of the neighbor
+relative to the boid. The two boids of such a pair get opposite
+directions, so they pass each other.
+
+- In two dimensions, that direction is the right of a boid that meets
+  another boid head-on. All the boids go to their right, as people on a
+  road.
+- In three dimensions, there is no right. The direction is at a right
+  angle to the line of the two boids, and all the boids that go one way
+  on that line get the same direction: for a line along x, the boids
+  that go to +x move to +z, and the boids that go to -x move to -z.
+
+This case makes the lanes of two streams in a narrow way. Boids that
+slide along a wall are at the same distance from it, so two of them
+that meet will be at the same point, and each of them goes to its side
+of the way.
 """.
 -spec dodge(body(), [neighbor()], number(), number()) -> vec().
 dodge(#{vel := Vel, max_speed := Max}, Neighbors, Radius, Horizon) ->
