@@ -1625,6 +1625,184 @@ defmodule BoidsSplitTest do
       assert facts(a, world) == facts(b, world)
     end
   end
+
+  describe "the fields of a world on two nodes" do
+    # A field of the land of the grids (32 x 16 cells of 10 around the
+    # border), with the ways to one goal cell.
+    defp ways(border, blocked, goal), do: :boids_field.new(land(border, blocked), [goal])
+    defp field(peer, world), do: call(peer, :boids, :field, [world, :exit])
+    defp pos_of(peer, world, id), do: elem(call(peer, :boids, :lookup, [world, id]), 1).pos
+
+    # True when a boid is at 15 or less from the center of a cell of the land.
+    defp at_cell(peer, world, id, border, {i, j}) do
+      :boids_vec.dist(pos_of(peer, world, id), {border - 160.0 + i * 10 + 5, j * 10 + 5.0}) <= 15.0
+    end
+
+    # A boid that follows the field with the name exit.
+    defp goer(more) do
+      rules = [{:flow, 1.0, field: {:named, :exit}}]
+      Map.merge(%{id: :goer, rules: rules, max_speed: 40.0, max_force: 400.0, tick: 5}, more)
+    end
+
+    test "the other node has the field when the call returns, and its boids follow the new field", %{
+      nodes: nodes
+    } do
+      %{world: world, small: a, large: b, ns: na, nl: nb, border: border} = world(nodes)
+      # The goal is in the tile of the node b.
+      east = ways(border, [], {28, 4})
+      assert call(a, :boids, :set_field, [world, :exit, east]) == :ok
+      # No wait: the other node has the field.
+      assert field(b, world) == {:ok, east}
+      assert [{{:field, :exit}, ^east, {_, ^na}}] = facts(b, world)
+      assert facts(a, world) == facts(b, world)
+
+      # A boid of the node b goes to the goal. It keeps the field that it read.
+      {:ok, :goer} = call(b, :boids, :add, [world, goer(%{pos: {border + 25.0, 125.0}})])
+      assert eventually(fn -> at_cell(b, world, :goer, border, {28, 4}) end, 500)
+
+      # The node a moves the goal. The world of the node b writes the
+      # field, and its boid reads it again: it goes to the new goal.
+      south = ways(border, [], {20, 13})
+      assert call(a, :boids, :set_field, [world, :exit, south]) == :ok
+      assert field(b, world) == {:ok, south}
+      assert eventually(fn -> at_cell(b, world, :goer, border, {20, 13}) end, 500)
+
+      # A change of the node b is on the node a too.
+      assert call(b, :boids, :set_field, [world, :exit, east]) == :ok
+      assert field(a, world) == {:ok, east}
+      assert [{{:field, :exit}, ^east, {_, ^nb}}] = facts(a, world)
+      # A bad field is an error on its node, and no change on each node.
+      assert catch_error(call(a, :boids, :set_field, [world, :exit, :ways])) == :badarg
+      assert field(b, world) == {:ok, east}
+    end
+
+    test "a boid with a field that moves to the other node goes on to its goal there", %{nodes: nodes} do
+      %{world: world, small: small, large: large, ns: ns, nl: nl, border: border} = world(nodes)
+      # A wall in the tile of the node large, 40 after the border, with
+      # a door at its top. The goal is behind the wall.
+      wall = for j <- 3..15, do: {20, j}
+      assert call(small, :boids, :set_grid, [world, :land, land(border, wall)]) == :ok
+      assert call(small, :boids, :set_field, [world, :exit, ways(border, wall, {28, 12})]) == :ok
+      # The boid starts in the tile of the node small.
+      start = %{pos: {border - 60.0, 125.0}, walkable: {:named, :land}}
+      {:ok, :goer} = call(small, :boids, :add, [world, goer(start)])
+      assert node_of(small, world, :goer) == ns
+      # It moves to the node large, goes through the door, and comes to
+      # the goal: the field is on that node, and the rule goes with the boid.
+      assert eventually(fn -> node_of(large, world, :goer) == nl end, 500)
+      assert eventually(fn -> at_cell(large, world, :goer, border, {28, 12}) end, 1000)
+      assert {:ok, boid} = call(large, :boids, :boid, [world, :goer])
+      assert :boids_boid.named(boid) == [grid: :land, field: :exit]
+    end
+
+    test "a node that comes later gets the fields, and its boids follow them", %{nodes: nodes} do
+      [{small, _ns}, {large, nl}] = Enum.sort_by(nodes, &elem(&1, 1))
+      world = :"world#{System.unique_integer([:positive])}"
+      options = %{name: world, defaults: %{rules: [], tick: 5}}
+      {:ok, _} = call(small, :boids, :start_world, [options])
+      # A long land of 40 tiles, with a goal in the middle of each tile.
+      long = :boids_grid.new(size: {640, 16}, cell_size: 10.0)
+      exits = :boids_field.new(long, for(tile <- 0..39, do: {tile * 16 + 8, 8}))
+      assert call(small, :boids, :set_field, [world, :exit, exits]) == :ok
+      food = :boids_field.new(:boids_grid.new(size: {2, 2}), [{0, 0}])
+      assert call(small, :boids, :set_field, [world, :food, food]) == :ok
+      assert call(small, :boids, :remove_field, [world, :food]) == :ok
+
+      # The world starts on the other node, with no field. It gets the
+      # field, and the mark of the field that was removed.
+      {:ok, _} = call(large, :boids, :start_world, [options])
+      joined(world, nodes)
+      assert [{{:field, :exit}, ^exits, _}, {{:field, :food}, :none, _}] = same(world, [small, large])
+      assert field(large, world) == {:ok, exits}
+      assert call(large, :boids, :field, [world, :food]) == :error
+
+      # A boid in a tile of the node that came later goes to the goal of
+      # that tile.
+      space = call(large, :boids, :space, [world])
+
+      tile =
+        Enum.find(0..39, fn i -> call(large, :boids_space, :home, [space, {i * 160.0 + 80, 80.0}]) == nl end)
+
+      {:ok, :goer} = call(large, :boids, :add, [world, goer(%{pos: {tile * 160.0 + 25.0, 135.0}})])
+
+      assert eventually(
+               fn -> :boids_vec.dist(pos_of(large, world, :goer), {tile * 160.0 + 85.0, 85.0}) <= 15.0 end,
+               500
+             )
+
+      assert node_of(large, world, :goer) == nl
+    end
+
+    test "a new field on one side of a split is on all the nodes after the split", %{nodes: nodes} do
+      %{world: world, small: small, large: large, ns: ns, border: border} = world(nodes)
+      east = ways(border, [], {28, 4})
+      assert call(small, :boids, :set_field, [world, :exit, east]) == :ok
+      # A boid of the node large, which goes to the goal and stays near it.
+      {:ok, :goer} = call(large, :boids, :add, [world, goer(%{pos: {border + 25.0, 45.0}})])
+      assert eventually(fn -> at_cell(large, world, :goer, border, {28, 4}) end, 500)
+
+      split(world, nodes)
+      # The node small moves the goal. The node large does not get the
+      # new field: its boid stays near the old goal.
+      south = ways(border, [], {20, 13})
+      assert call(small, :boids, :set_field, [world, :exit, south]) == :ok
+      assert field(small, world) == {:ok, south}
+      assert field(large, world) == {:ok, east}
+
+      for _ <- 1..10 do
+        Process.sleep(20)
+        assert :boids_vec.dist(pos_of(large, world, :goer), {border + 125.0, 45.0}) < 50.0
+      end
+
+      heal(world, nodes)
+      # The node large gets the facts of the node small: the two nodes
+      # have the new field, and the boid of the node large reads it and
+      # goes to the new goal.
+      assert [{{:field, :exit}, ^south, {_, ^ns}}] = same(world, [small, large])
+      assert field(large, world) == {:ok, south}
+      assert eventually(fn -> at_cell(large, world, :goer, border, {20, 13}) end, 500)
+    end
+
+    test "remove_field/2 removes a field on all the nodes, and its boids have no force", %{nodes: nodes} do
+      %{world: world, small: small, large: large, border: border} = world(nodes)
+      assert call(small, :boids, :set_field, [world, :exit, ways(border, [], {28, 4})]) == :ok
+      {:ok, :goer} = call(large, :boids, :add, [world, goer(%{pos: {border + 25.0, 45.0}})])
+      assert eventually(fn -> at_cell(large, world, :goer, border, {28, 4}) end, 500)
+
+      # The node small removes the field: the node large has no field
+      # when the call returns, and a mark stays for the removed field.
+      assert call(small, :boids, :remove_field, [world, :exit]) == :ok
+      assert field(large, world) == :error
+      assert field(small, world) == :error
+      assert [{{:field, :exit}, :none, _}] = facts(large, world)
+      assert facts(small, world) == facts(large, world)
+      # The boid has no force now: from the old goal, it goes away with
+      # the velocity that it gets, and does not come back.
+      away = %{pos: {border + 125.0, 45.0}, vel: {0.0, 40.0}}
+      :ok = call(large, :boids, :update, [world, :goer, away])
+      assert eventually(fn -> elem(pos_of(large, world, :goer), 1) > 45.0 + 60 end, 500)
+    end
+
+    test "set_field/3 and remove_field/2 give the result timeout when a node gives no answer", %{nodes: nodes} do
+      %{world: world, small: a, large: b, border: border} = world(nodes)
+      on_exit(fn -> call(a, :application, :unset_env, [:boids, :timeout]) end)
+      :ok = call(a, :application, :set_env, [:boids, :timeout, 200])
+      east = ways(border, [], {28, 4})
+      space_b = call(b, :boids, :space, [world])
+      :ok = call(b, :sys, :suspend, [world])
+      assert call(a, :boids, :set_field, [world, :exit, east]) == {:error, :timeout}
+      # The node of the caller has the change. The other node gets it later.
+      assert field(a, world) == {:ok, east}
+      assert field(b, space_b) == :error
+      :ok = call(b, :sys, :resume, [world])
+      assert eventually(fn -> field(b, space_b) == {:ok, east} end)
+      :ok = call(b, :sys, :suspend, [world])
+      assert call(a, :boids, :remove_field, [world, :exit]) == {:error, :timeout}
+      :ok = call(b, :sys, :resume, [world])
+      assert eventually(fn -> field(b, space_b) == :error end)
+      assert facts(a, world) == facts(b, world)
+    end
+  end
 end
 
 defmodule BoidsThreeNodesTest do

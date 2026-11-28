@@ -483,8 +483,8 @@ ok = boids:set_grid(World, land, boids_grid:set_cost(Land, [{4, 1}], 1)).
 
 `examples/bridge.exs` measures boids that carry things across a river on
 a narrow bridge: `mix run examples/bridge.exs walkable 1`. With
-`separation` and no limit, 13 % of the steps of the boids end in the
-water. With the option `walkable`, none does.
+`separation` and no limit, 21 % of the steps of the boids end in the
+water (the mean of 10 runs). With the option `walkable`, none does.
 
 ## The ways of a world
 
@@ -525,6 +525,11 @@ ok = boids:set_field(World, exit, boids_field:new(Land2, [{35, 5}], #{margin => 
   `{flow, Weight, #{field => {named, Name}}}` reads the field. There is
   one copy of a field for all the boids of a node. A boid keeps the
   field that it read, and reads it again only after a change.
+- **On several nodes, each node has all the fields.** A field is a fact
+  of the world, as a grid: a change is for all the nodes, a node that
+  comes later gets the fields, and after a split of the network the
+  last change of a field wins on all the nodes (see "A world on several
+  nodes"). A boid that moves to another node goes on to its goal there.
 - **A new field for the same name changes the ways** for all the boids,
   from their next step: after a door opens, or when the goal moves. The
   calculation is not in the process of the world: `boids_field:new/2`
@@ -680,11 +685,13 @@ world on one node has no border and sends no message.
   `count/1`, `flocks/2`, `graph/2` and `step/2` give the result for
   the boids of all the nodes, from each node. With a last argument
   `local`, they are about the boids of this node only.
-- **The obstacles, the scale of the time and the grids are on all the
-  nodes.** `set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`,
-  `set_grid/3` and `remove_grid/2` change the world on each node: a
-  rock is a rock for each boid, a wall is a wall on each node, and the
-  scale 0 stops all the world. A node that comes later gets them.
+- **The obstacles, the scale of the time, the grids and the fields are
+  on all the nodes.** `set_obstacle/4`, `remove_obstacle/2`,
+  `set_time_scale/2`, `set_grid/3`, `remove_grid/2`, `set_field/3` and
+  `remove_field/2` change the world on each node: a rock is a rock for
+  each boid, a wall is a wall on each node, a way is the same way on
+  each node, and the scale 0 stops all the world. A node that comes
+  later gets them.
 
 ```erlang
 %% From each node, for a boid on each node.
@@ -705,20 +712,27 @@ What changes for your code:
 - `step/2` does not wait for a node that has no connection: it makes
   the step on the other nodes.
 - `set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`,
-  `set_grid/3` and `remove_grid/2` change the world on all its nodes.
+  `set_grid/3`, `remove_grid/2`, `set_field/3` and `remove_field/2`
+  change the world on all its nodes.
   When the result is `ok`, each node that has a connection to this node
   has the change. With no answer of a node in the time limit, the
   result is `{error, timeout}`: this node has the change, and that node
   gets it later. These functions have no form for one node only: all
-  the nodes must have the same obstacles, the same scale of the time
-  and the same grids.
-- `obstacles/1` and `grid/2` read the tables of this node, with no
-  message. Each node has all the obstacles and all the grids, so there
-  is no `obstacles(World, local)`.
+  the nodes must have the same obstacles, the same scale of the time,
+  the same grids and the same fields.
+- `obstacles/1`, `grid/2` and `field/2` read the tables of this node,
+  with no message. Each node has all the obstacles, all the grids and
+  all the fields, so there is no `obstacles(World, local)`.
 - A boid with the option `walkable` that moves to another node finds
   the same walls there: the option goes with the boid, and the grid is
   on each node. `set_grid/3` sends the grid to each node (320 KB for
   200 x 200 cells), and a node that comes later gets all the grids.
+- A boid with the rule `flow` and a field of the world that moves to
+  another node goes on to its goal there: the rule goes with the boid,
+  and the field is on each node. `set_field/3` sends the field to each
+  node (234 KB for 200 x 200 cells), and a node that comes later gets
+  all the fields. Make a field one time for all the nodes, on one node:
+  `boids_field:new/2` is not a part of the world.
 - The id of a boid is not its process. In a callback, the function
   `lookup` of `Seen` gives the row of a neighbor, with its process:
   `{ok, #{pid := Pid}} = (maps:get(lookup, Seen))(Id)`.
@@ -769,8 +783,8 @@ The move is safe when the network has faults:
   that no move, no split and no decision loses a boid, and that a boid
   has one process when all the nodes have a connection again.
 
-The obstacles, the scale of the time and the grids (the facts of a
-world) are safe when the network has faults too:
+The obstacles, the scale of the time, the grids and the fields (the
+facts of a world) are safe when the network has faults too:
 
 - **The last change wins: by the clocks of the computers when they
   agree, and in each case all the nodes get the same value.** Each
@@ -846,13 +860,15 @@ of the relations, and writes the relations of each boid to a table that
 the boids read.
 
 The process of the world is also the only process that writes the
-facts of the world: the obstacles, the scale of the time and the grids.
-`boids:set_obstacle/4`, `boids:remove_obstacle/2`,
-`boids:set_time_scale/2`, `boids:set_grid/3` and `boids:remove_grid/2`
-send it one message, and it makes one change after the other. The boids
-read these facts from its tables, with no message. A grid is large, so
-a boid keeps the grid that it read: the world counts the changes of its
-grids, and a boid reads a grid again only when that number changed.
+facts of the world: the obstacles, the scale of the time, the grids and
+the fields. `boids:set_obstacle/4`, `boids:remove_obstacle/2`,
+`boids:set_time_scale/2`, `boids:set_grid/3`, `boids:remove_grid/2`,
+`boids:set_field/3` and `boids:remove_field/2` send it one message, and
+it makes one change after the other. The boids read these facts from
+its tables, with no message. A grid and a field are large, so a boid
+keeps the grids and the fields that it read: the world counts the
+changes of its grids and fields, and a boid reads them again only when
+that number changed.
 
 A boid reads the rows while the other boids write them. Thus the
 neighbors that it sees are not all of the same moment, as for a bird.
@@ -862,13 +878,14 @@ neighbors that it sees are not all of the same moment, as for a bird.
 
 The flows where the order of the processes can change the result have a
 specification in TLA+ (`specs/`): the members of a world, a write
-against a read of the world, the step in two parts, the move of a
-boid to another node, the obstacles, the scale of the time and the
-grids on several nodes, and the grid that a boid keeps. The tests
-check a small model of each one, and fault models that must fail, with
-the native checker of [Accord](https://github.com/sntran/accord). They
-also replay the messages of the process of a real world as a
-behavior of `specs/Members.tla`. See [`docs/specs.md`](docs/specs.md).
+against a read of the world, the step in two parts, the move of a boid
+to another node, the obstacles, the scale of the time, the grids and the
+fields on several nodes, and the grid or the field that a boid keeps.
+The tests check a small model of each one, and fault models that must
+fail, with the native checker of
+[Accord](https://github.com/sntran/accord). They also replay the
+messages of the process of a real world as a behavior of
+`specs/Members.tla`. See [`docs/specs.md`](docs/specs.md).
 
 ## The speed
 

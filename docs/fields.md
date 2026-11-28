@@ -251,6 +251,10 @@ computer.
   step has the same number of garbage collections with the field and
   with a vector as the option `field`, and the time of a step is the
   same in the limits of the measurement.
+- In a world on several nodes, a field is a fact of the world, as a
+  grid: `boids:set_field/3` sends it to each node (234 KB for 200 x 200
+  cells), and a node that comes later gets it (`specs/Facts.tla`). A
+  boid that moves to another node finds the field there.
 
 ### The example of the bridge
 
