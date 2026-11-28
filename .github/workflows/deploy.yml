@@ -1,16 +1,16 @@
 name: Deploy the site
 
-# Deploy the site (examples/) to Cloudflare Workers at each push to main that
-# changes the site or the library, and when a person starts the workflow.
+# Deploy the site (examples/) to Cloudflare Workers when the workflow "CI"
+# is good on main, and when a person starts the workflow. CI has the tests
+# of the examples and the check of each page on a phone: a commit that
+# fails them is not deployed.
 # It needs the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID of
 # the repository. Without them, the workflow does nothing.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "examples/**"
-      - "src/**"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,6 +24,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to Cloudflare Workers
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -43,8 +44,11 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
         working-directory: .
+      # The commit that CI checked.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.secrets.outputs.ready == 'true'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Get beam.com and wrangler
         if: steps.secrets.outputs.ready == 'true'
         run: npm install --no-audit --no-fund

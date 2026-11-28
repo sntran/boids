@@ -85,7 +85,8 @@ jobs:
   # shows them, the build of the file that runs on Cloudflare Workers,
   # and the check of each page on a phone. The tests start each game with
   # the library of this commit, so a change of the library that breaks an
-  # example fails here.
+  # example fails here. The workflow "Deploy the site" starts when this
+  # workflow is good on main.
   examples:
     name: Examples (tests of each game, build of app.com, pages on a phone)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
