@@ -664,6 +664,121 @@ With the two rules, no boid stands.
   the same result. Use it for a test, or for a simulation that is faster
   than the clock.
 
+## Save a world, and load it
+
+`boids:export/1` gives all that a world has as one term, and
+`boids:import/2` gives that term to a world. Write the term to a file
+with `term_to_binary/1`:
+
+```erlang
+%% Save.
+ok = file:write_file("world.save", term_to_binary(boids:export(World))),
+ok = boids:stop_world(World).
+
+%% Load, in a new world with the same options.
+{ok, New} = boids:start_world(#{bounds => {{0, 0}, {100, 100}}, wrap => true}),
+{ok, Binary} = file:read_file("world.save"),
+{ok, #{started := Ids, not_started := []}} = boids:import(New, binary_to_term(Binary)).
+```
+
+The same in Elixir:
+
+```elixir
+File.write!("world.save", :erlang.term_to_binary(:boids.export(world)))
+:ok = :boids.stop_world(world)
+
+{:ok, new} = :boids.start_world(bounds: {{0, 0}, {100, 100}}, wrap: true)
+save = :erlang.binary_to_term(File.read!("world.save"))
+{:ok, %{started: ids, not_started: []}} = :boids.import(new, save)
+```
+
+- The export has the boids of all the nodes of the world. For each boid,
+  it has the module, the id, all the state, the rules, the relations,
+  the options of the process and the random numbers: what a boid takes
+  to another node. It also has the facts of the world with their
+  versions: the obstacles, the walls, the ways and the scale of the
+  time. It does not have the options of the world: start the new world
+  with them.
+- Each boid starts again as a new process with its id. `init/1` of its
+  module does not run. `boids:snapshot/1` gives the boids in the same
+  order.
+- With `tick => manual` and a `seed` for each boid, a save and a load in
+  the middle of a run change nothing: 100 steps, a save, a load into a
+  new world and 100 steps give the same positions as 200 steps.
+- A world with a clock does not stop for an export. Each boid is in the
+  export as it is between two of its steps, and the boids are not all
+  of one moment. For a save of one moment, use `tick => manual`, or set
+  the scale of the time to 0 before the export: then no boid moves.
+- A world that loads a save can have boids and facts. The boids of the
+  save come after its boids. A boid of the save with an id that is in
+  the world does not start, and a fact that the world changed after the
+  save stays as the world has it.
+- A save of a world on several nodes loads into a world on one node,
+  and a save of a world on one node loads into a world on several
+  nodes. The boids start on the node of the import, all the nodes get
+  the facts, and each boid moves to the node of its place at its first
+  step.
+- Read only a file that you made. `binary_to_term/1` of the binary of
+  another person can make atoms without limit, and a function in it is
+  code that a boid calls.
+
+### What a save cannot keep
+
+A save has only terms. The export tells which boids it does not have,
+and which boids can fail after a load, each with the reason:
+
+```erlang
+#{not_saved := NotSaved, can_fail := CanFail} = boids:export(World).
+```
+
+| In the list | Reason | The boid |
+|---|---|---|
+| `not_saved` | `process` | A process of yours with `boids:join/2`. Start it again: it joins the new world. |
+| `not_saved` | `supervised` | A boid below a supervisor of yours (`gen_boid:start_link/3`). Your supervisor starts it, with `init/1`. |
+| `can_fail` | `{function, Fun}` | The boid has an anonymous function, for example as a rule. |
+| `can_fail` | `{live, Term}` | The boid has a pid, a port or a reference that is not the id of a boid, and its module has no `handle_load/2`. |
+
+An anonymous function (`fun(Boid, Neighbors, Seen) -> ... end`) is a
+part of the code of its module. After a load, Erlang can call it only
+when the node has the code that made it: the same version of that
+module. With another version of the module, the term is a function, and
+a call fails with `badfun`. Thus `boids:import/2` starts such a boid
+only on a node with the same code of the module. On another node, the
+boid is in `not_started`, with the reason `{function, Fun}`. A function
+with a name always loads, when the node has the module:
+
+```erlang
+%% This rule loads only with the same version of the module.
+{ok, A} = boids:add(World, #{pos => {0, 0}, rules => [{fun(_, _, _) -> {1.0, 0.0} end, 1.0}]}),
+%% This rule loads with each version of the module that has the function.
+{ok, B} = boids:add(World, #{pos => {0, 0}, rules => [{fun my_rules:east/3, 1.0}]}).
+```
+
+### A module that changes, and a state that a save cannot keep
+
+A table of ETS, a process, a timer, a port and a monitor stop with the
+process or the node that has them: after a load, the state of a boid
+has only their old names. The state of a save can also have the form of
+an older version of your module. `handle_load/2` is an optional callback
+of `gen_boid` for these two things. It runs in the new process of a boid
+of a save, before the boid is in the world. It gets the version of the
+module that saved the boid (the attribute `vsn`, as `code_change/3` of
+OTP gets it), and the boid:
+
+```erlang
+-vsn(2).
+
+%% A save of the version 1 had no energy.
+handle_load(1, Boid = #{state := State}) ->
+    handle_load(2, Boid#{state := State#{energy => 10.0}});
+%% The table of the boid stopped with its first process.
+handle_load(2, Boid = #{state := State}) ->
+    {ok, Boid#{state := State#{seen := ets:new(seen, [])}}}.
+```
+
+With `{stop, Reason}`, the boid does not start, and `boids:import/2`
+gives the reason in `not_started`.
+
 ## A process with another behavior as a boid
 
 Use `gen_boid` for a new boid. A process that has another behavior, for
@@ -1070,6 +1185,13 @@ obstacle.
   `boids:step/2`.
 - The size of the vectors of the first boid (two numbers, or three)
   stays for the life of the world.
+- A save has the boids that the world supervises, and the facts of the
+  world. It does not have the options of the world, a process of yours
+  with `boids:join/2`, a boid below a supervisor of yours, and the name
+  of the process of a boid. An anonymous function in a boid loads only
+  with the same code of its module (see "Save a world, and load it").
+- A world does not stop for an export. In a world with a clock, the
+  boids of an export are not all of one moment.
 
 ## Development
 

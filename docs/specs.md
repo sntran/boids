@@ -483,6 +483,35 @@ for them as for each other fact. `NoReturn` has the limit of
 bring back a fact that the world removed, because the world dropped the
 mark of that removal.
 
+### The save and the load of a world have no specification
+
+`boids:export/1` and `boids:import/2` make no new flow. Each part of
+them is a part of a flow that has a specification, or it has one writer
+only.
+
+- An export is a read. Each boid answers the request of the export
+  between two of its steps, as it answers `boids:boid/2`: its process
+  handles one message at a time. The export writes nothing. As
+  `boids:snapshot/1`, it is not of one moment in a world with a clock.
+- A boid of a save starts as a new boid. Its process joins the world
+  with the action `Join` of `Members.tla`, which refuses an id that is
+  in the world. The boid made no move from node to node, as a boid of
+  `boids:add/2`: `Move.tla` and `MoveMany.tla` have nothing new. The
+  relations come after the boids, with `boids:relate/4`.
+- The facts of a save are facts with versions: see `Facts.tla` above.
+- The order of `boids:snapshot/1` is a number in the row of a boid. Only
+  the process of the world gives the number, in the join of the boid.
+  The process of the boid copies it at each write of its row. The
+  number is not in the copy of the row in the grid, so `Space.tla` does
+  not change. A boid that moves to another node takes the number with
+  it, as it takes its state: `Move.tla` does not have the state of a
+  boid.
+
+The result of a run with a save and a load is a behavior of the code,
+not an order of processes: the tests check it
+(`test/boids_save_test.exs`). 100 steps, a save, a load into a new
+world and 100 steps give the same rows as 200 steps.
+
 ## The replay: the code against the specification
 
 `Boids.MembersSpec` (`test/support/members_spec.ex`) does two things.

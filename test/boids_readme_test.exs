@@ -356,4 +356,94 @@ defmodule BoidsReadmeTest do
     assert :boids.count(:boids_readme_space) == 0
     Supervisor.stop(sup)
   end
+
+  defmodule Saver do
+    # The boid of "A module that changes, and a state that a save cannot keep".
+    @behaviour :gen_boid
+    @vsn 2
+
+    @impl true
+    def init(pos) do
+      state = %{energy: 10.0, seen: :ets.new(:seen, [])}
+      {:ok, %{pos: pos, rules: [], tick: :manual, state: state}}
+    end
+
+    @impl true
+    def handle_call(:state, _from, boid), do: {:reply, boid.state, boid}
+
+    # A save of the version 1 had no energy.
+    @impl true
+    def handle_load(1, %{state: state} = boid),
+      do: handle_load(2, %{boid | state: Map.put(state, :energy, 10.0)})
+
+    # The table of the boid stopped with its first process.
+    def handle_load(2, %{state: state} = boid),
+      do: {:ok, %{boid | state: %{state | seen: :ets.new(:seen, [])}}}
+  end
+
+  @doc "A rule that is a function with a name."
+  def east(_boid, _neighbors, _seen), do: {1.0, 0.0}
+
+  test "save a world, and load it", %{world: world} do
+    rules = [separation: 1.5, alignment: 1.0, cohesion: 1.0, wander: 0.5]
+    {:ok, ids} = :boids.populate(world, 30, rules: rules, tick: :manual, seed: 1)
+    for _ <- 1..100, do: :boids.step(world, 0.05)
+
+    # Save.
+    file = Path.join(System.tmp_dir!(), "boids-readme-#{System.unique_integer([:positive])}.save")
+    on_exit(fn -> File.rm(file) end)
+    File.write!(file, :erlang.term_to_binary(:boids.export(world)))
+    # The first world makes 100 steps more: 200 steps with no load.
+    for _ <- 1..100, do: :boids.step(world, 0.05)
+    straight = for %{id: id, pos: pos, vel: vel} <- :boids.snapshot(world), do: {id, pos, vel}
+    :ok = :boids.stop_world(world)
+
+    # Load, in a new world with the same options.
+    {:ok, new} = :boids.start_world(bounds: {{0, 0}, {100, 100}}, wrap: true)
+    on_exit(fn -> :boids.stop_world(new) end)
+    save = :erlang.binary_to_term(File.read!(file))
+    assert {:ok, %{started: ^ids, not_started: []}} = :boids.import(new, save)
+    assert Enum.map(:boids.snapshot(new), & &1.id) == ids
+    for _ <- 1..100, do: :boids.step(new, 0.05)
+    assert for(%{id: id, pos: pos, vel: vel} <- :boids.snapshot(new), do: {id, pos, vel}) == straight
+  end
+
+  test "what a save cannot keep", %{world: world} do
+    still = [pos: {0, 0}, tick: :manual]
+    {:ok, a} = :boids.add(world, still ++ [rules: [{fn _, _, _ -> {1.0, 0.0} end, 1.0}]])
+    {:ok, b} = :boids.add(world, still ++ [rules: [{&__MODULE__.east/3, 1.0}]])
+    {:ok, person} = GenServer.start_link(Person, world)
+    {:ok, child} = :gen_boid.start_link(world, Hawk, {5, 5})
+    {:ok, timer} = :boids.add(world, still ++ [data: make_ref()])
+
+    %{not_saved: not_saved, can_fail: can_fail} = save = :boids.export(world)
+    assert [{^person, :process}, {_id, :supervised}] = not_saved
+    assert [{^a, {:function, rule}}, {^timer, {:live, _ref}}] = can_fail
+    assert is_function(rule, 3)
+    assert Enum.map(save.boids, & &1.boid.id) == [a, b, timer]
+    GenServer.stop(person)
+    :gen_boid.stop(child)
+
+    # This node has the code that made the function: the two boids start.
+    {:ok, new} = :boids.start_world()
+    on_exit(fn -> :boids.stop_world(new) end)
+    assert {:ok, %{started: [^a, ^b, ^timer], not_started: []}} = :boids.import(new, save)
+  end
+
+  test "a module that changes, and a state that a save cannot keep", %{world: world} do
+    {:ok, saver} = :gen_boid.start(world, Saver, {5, 5})
+    %{seen: table} = :gen_boid.call(saver, :state)
+    %{boids: [%{vsn: 2, boid: %{id: id}} = saved], can_fail: []} = save = :boids.export(world)
+    :ok = :boids.stop_world(world)
+    # The table stopped with its process.
+    assert :ets.info(table) == :undefined
+
+    # A save of the version 1 of the module had no energy.
+    older = %{saved | vsn: 1, boid: %{saved.boid | state: Map.delete(saved.boid.state, :energy)}}
+    {:ok, new} = :boids.start_world()
+    on_exit(fn -> :boids.stop_world(new) end)
+    assert {:ok, %{started: [^id]}} = :boids.import(new, %{save | boids: [older]})
+    assert %{energy: 10.0, seen: seen} = :gen_boid.call(:boids.whereis(new, id), :state)
+    assert seen != table and :ets.info(seen, :size) == 0
+  end
 end

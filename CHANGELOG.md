@@ -114,6 +114,31 @@ The first version. It needs Erlang/OTP 29.
   not specified before. The world gives a number to each boid that
   comes, with no work at a step, and `snapshot/1` sorts the rows by that
   number (less than 1 microsecond for each boid).
+- A world can be saved and loaded. `boids:export/1` gives all that a
+  world has as one term, which `term_to_binary/1` writes to a file: the
+  boids of all the nodes with all their state, their relations, and the
+  facts of the world with their versions. `boids:import/2` starts each
+  boid again with its module, its id and its state (`init/1` does not
+  run), and gives the facts to all the nodes of the world. With `tick
+  => manual` and seeds, 100 steps, a save, a load into a new world and
+  100 steps give the same positions as 200 steps. A world on one node
+  loads a save of a world on several nodes, and the opposite.
+- An export tells what it does not have (`not_saved`: a process of
+  yours, a boid below a supervisor of yours) and what can fail after a
+  load (`can_fail`). A boid with an anonymous function loads only on a
+  node with the same code of the module of that function: use `fun
+  Module:Function/Arity` for a rule of a boid that you save. A boid
+  with a pid, a port or a reference in its state needs `handle_load/2`.
+  `boids:import/2` tells which boids started, and which did not, with
+  the reason. An export of another format gives `{error, {format,
+  Number}}`.
+- The optional callback `handle_load/2` of `gen_boid`. It runs when a
+  boid starts again from a save: it changes the state of a save of an
+  older version of the module (the attribute `vsn`), and it makes again
+  what a save cannot keep, for example a table of ETS.
+- `boids_world:merge/2` gives facts with their versions to a world, on
+  all its nodes: a world takes the facts of a save as the facts of a
+  node that comes to it.
 - A process with another behavior as a boid (`boids:join/2`,
   `boids:advance/3`).
 - Steps of all the boids from one state of the world (`boids:step/2`),
