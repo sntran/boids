@@ -21,6 +21,13 @@ The first version. It needs Erlang/OTP 29.
   `flee`, `arrive`, `pursue`, `evade`, `wander`, `avoid`, `contain`,
   `follow`, `cruise`, `leader`, `dodge`, `flow`, and a function of yours
   (`boids_boid`, `boids_steer`).
+- A grid of cells (`boids_grid`), in two dimensions: blocked cells and
+  a cost for each cell, from a list, from rows of text, or from a
+  function of the center of each cell. It gives the first contact of a
+  line with a blocked cell, the walkable place nearest to a position,
+  the walls near a position, and the steps from a cell for a search of
+  ways. The cells are in a binary, so all the processes with one grid
+  share one copy of them.
 - A boid can have a rule two times, with a name for each one. Rules are
   added and removed one at a time (`boids:add_rule/3`,
   `boids:delete_rule/3`, `boids:which_rules/2`).
