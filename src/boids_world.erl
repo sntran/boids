@@ -52,6 +52,10 @@ All the nodes of a world have the same facts (`specs/Facts.tla`).
   that cannot write a fact of another node (its value is bad for this
   node) writes an error to its log, and keeps the fact for the other
   nodes.
+- The facts of a save keep their versions (`facts/1`). A world gets
+  them as the facts of a node that comes to the world (`merge/2`): it
+  takes each fact that is newer than its own, and all its nodes get
+  them.
 
 ## A world on several nodes
 
@@ -95,7 +99,7 @@ Use the functions of `boids`. A world starts with
 -behavior(gen_server).
 
 -export([start_link/2, options/1, space/1, sup/1, boid_sup/1, join/3, leave/3]).
--export([relate/5, unrelate/4, relations/1, set/3, facts/1]).
+-export([relate/5, unrelate/4, relations/1, set/3, merge/2, facts/1]).
 -export([settle/2, settle/3, find/2, find_local/2, moved/3, adopt/5]).
 
 %% A row of a boid of another node that gets no update in this time goes.
@@ -246,10 +250,38 @@ the change, and the node that is slow gets it later.
 set(#{owner := Server}, Key, Value) ->
     set(Server, Key, Value);
 set(Server, Key, Value) ->
+    tell(Server, {set, Key, Value}).
+
+-doc """
+Give facts with their versions to the world, on all its nodes: a list
+of `{Key, Value, Version}`, as `facts/1` gives it. `boids:import/2` uses
+this function for the facts of a save.
+
+The world takes each fact as a fact of another node: only when its
+version is larger than the version that the world has for the key. Thus
+a fact that the world changed after the save stays as the world has it.
+A fact that the world removed after the save stays removed while the
+world keeps the mark of the removal (`boids:mark_time/0`).
+
+The results are those of `set/3`: `ok` when each node that has a
+connection to this node has the facts, `{error, timeout}` with no answer
+of a node in the time limit, and `{error, badarg}` for a list that is
+not a list of facts.
+""".
+-spec merge(server() | boids_space:space(), [{term(), term(), {pos_integer(), node()}}]) ->
+    ok | {error, badarg | timeout}.
+merge(#{owner := Server}, Facts) ->
+    merge(Server, Facts);
+merge(Server, Facts) ->
+    tell(Server, {merge, Facts}).
+
+%% Send a change of the facts to the world of this node, and wait for the
+%% answers of the worlds of the other nodes.
+tell(Server, Change) ->
     %% The worlds of the other nodes answer to this alias, which stays
     %% until unalias/1.
     Ack = alias([]),
-    try gen_server:call(Server, {set, Key, Value, Ack}) of
+    try gen_server:call(Server, erlang:append_element(Change, Ack)) of
         {ok, Peers} ->
             Deadline = erlang:monotonic_time(millisecond) + boids:timeout(),
             await(Ack, #{Pid => monitor(process, Pid) || Pid <- Peers}, Deadline);
@@ -532,6 +564,18 @@ handle_call({set, Key, Value, Ack}, _From, State0 = #{space := Space, clock := C
     catch
         error:badarg -> {reply, {error, badarg}, State0}
     end;
+handle_call({merge, Facts, Ack}, _From, State0 = #{peers := Peers}) ->
+    %% The facts of a save, with their versions. This node takes them as
+    %% the facts of a node that comes to the world, and it gives them to
+    %% the other nodes (specs/Facts.tla, Join and Learn).
+    case is_list(Facts) andalso lists:all(fun is_fact/1, Facts) of
+        true ->
+            State = lists:foldl(fun learn/2, State0, Facts),
+            Sent = [Pid || Pid <- Peers, erlang:send(Pid, {facts, Facts, Ack}, [noconnect]) =:= ok],
+            {reply, {ok, Sent}, State};
+        false ->
+            {reply, {error, badarg}, State0}
+    end;
 handle_call(facts, _From, State = #{facts := Facts}) ->
     {reply, [{Key, Value, Version} || Key := {Version, Value} <- maps:iterator(Facts, ordered)], State};
 handle_call({leave, Id, Pid}, _From, State = #{space := Space}) ->
@@ -574,6 +618,12 @@ handle_info({facts, Facts}, State) ->
     %% All the facts of a node that has a connection to this node now: a
     %% new node, or a node after a split of the network.
     {noreply, lists:foldl(fun learn/2, State, Facts)};
+handle_info({facts, Facts, Ack}, State) ->
+    %% The facts of a save that another node got. The process that gave
+    %% them waits for this answer.
+    Learned = lists:foldl(fun learn/2, State, Facts),
+    _ = erlang:send(Ack, {Ack, self()}, [noconnect]),
+    {noreply, Learned};
 handle_info({census, Node, Claims}, State0) ->
     %% The boids of a node that joined the world, after a split of the
     %% network or at its start.
@@ -774,6 +824,11 @@ write(Space, {grid, Name}, Grid) -> boids_space:set_grid(Space, Name, Grid);
 write(Space, {field, Name}, none) -> boids_space:remove_field(Space, Name);
 write(Space, {field, Name}, Field) -> boids_space:set_field(Space, Name, Field);
 write(_Space, _Key, _Value) -> error(badarg).
+
+%% A fact with its version has this form. A caller can give a term that
+%% is not a fact: the world must not stop then.
+is_fact({_Key, _Value, {Counter, Node}}) -> is_integer(Counter) andalso Counter > 0 andalso is_atom(Node);
+is_fact(_Term) -> false.
 
 %% A fact of another node, with its version. This node takes the fact
 %% only when the version is larger than the version that it has for the

@@ -96,6 +96,54 @@ defmodule BoidsFactsTest do
     assert {:time_scale, 3, {far + 2, me}} in facts(world)
   end
 
+  test "merge/2 gives facts with their versions to a world, as the facts of another node", %{world: world} do
+    :ok = :boids.set_obstacle(world, :rock, {5, 5}, 1)
+    :ok = :boids.set_obstacle(world, :tree, {7, 7}, 1)
+    :ok = :boids.remove_obstacle(world, :tree)
+    assert [mine = {_, _, {c, me}}, mark = {_, :none, {t, me}}] = facts(world)
+    # The facts of a save: an older rock, an older tree, a pole, and a scale of the time.
+    tree = {{:obstacle, :tree}, {{2, 2}, 1}, {t - 1, :z@host}}
+    pole = {{:obstacle, :pole}, {{1, 1}, 1}, {c - 9, :a@host}}
+    scale = {:time_scale, 0.5, {c - 8, :a@host}}
+    assert :boids_world.merge(world, [rock({1, 1}, {c - 5, :z@host}), tree, pole, scale]) == :ok
+    # The world keeps its rock and the removal of its tree, and it takes the other facts.
+    assert facts(world) == [scale, pole, mine, mark]
+    assert rocks(world) == [{5, 5}]
+    assert [%{id: :pole}, %{id: :rock}] = :boids.obstacles(world)
+    assert %{time_scale: 0.5} = :boids_space.env(:boids.space(world))
+    # A newer fact wins. The space of the world is the world too.
+    far = now() + 1_000_000_000
+    assert :boids_world.merge(:boids.space(world), [rock({3, 3}, {far, :a@host})]) == :ok
+    assert rocks(world) == [{3, 3}]
+    # The next change of the world is after the facts that it got.
+    :ok = :boids.set_obstacle(world, :rock, {6, 6}, 1)
+    assert rock({6, 6}, {far + 1, me}) in facts(world)
+  end
+
+  test "merge/2 of a term that is not a list of facts gives badarg, and the world continues", %{world: world} do
+    for bad <- [
+          :facts,
+          [:fact],
+          [{:time_scale, 1.0, 5}],
+          [{:time_scale, 1.0, {0, node()}}],
+          [{:a, 1, {1, "n"}}]
+        ] do
+      assert :boids_world.merge(world, bad) == {:error, :badarg}
+
+      assert :boids_world.merge(:boids.space(world), [rock({1, 1}, {5, node()}) | List.wrap(bad)]) ==
+               {:error, :badarg}
+    end
+
+    assert facts(world) == []
+    assert Process.alive?(world)
+    # A fact with a value that this world cannot write: the world keeps
+    # it for the other nodes, with an error in its log.
+    log = capture_log(fn -> assert :boids_world.merge(world, [{:time_scale, :fast, {5, node()}}]) == :ok end)
+    assert log =~ "cannot write the fact"
+    assert facts(world) == [{:time_scale, :fast, {5, node()}}]
+    assert %{time_scale: 1.0} = :boids_space.env(:boids.space(world))
+  end
+
   test "an older change does not bring back a fact that was removed", %{world: world} do
     :ok = :boids.set_obstacle(world, :rock, {5, 5}, 1)
     :ok = :boids.remove_obstacle(world, :rock)

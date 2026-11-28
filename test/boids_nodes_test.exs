@@ -1307,6 +1307,20 @@ defmodule BoidsSplitTest do
       assert facts(a, world) == facts(b, world)
     end
 
+    test "merge/2 gives facts with their versions to all the nodes", %{nodes: nodes} do
+      %{world: world, small: a, large: b, ns: na} = world(nodes)
+      :ok = call(a, :boids, :set_obstacle, [world, :rock, {5.0, 5.0}, 1.0])
+      assert [{_, _, {c, ^na}}] = facts(a, world)
+      # The facts of a save: an older rock, and a pole.
+      rock = {{:obstacle, :rock}, {{1.0, 1.0}, 1.0}, {c - 5, :z@host}}
+      pole = {{:obstacle, :pole}, {{2.0, 2.0}, 1.0}, {c - 9, :a@host}}
+      # When the call returns, the other node has the facts: no wait.
+      assert call(a, :boids_world, :merge, [world, [rock, pole]]) == :ok
+      assert rocks(b, world) == %{rock: {5.0, 5.0}, pole: {2.0, 2.0}}
+      assert facts(b, world) == facts(a, world)
+      assert pole in facts(b, world)
+    end
+
     test "after a split, the last change in time wins on all the nodes, also when the other side made more changes",
          %{nodes: nodes} do
       %{world: world, small: small, large: large, nl: nl} = world(nodes)

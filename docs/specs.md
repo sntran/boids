@@ -428,7 +428,7 @@ then loses against them after a split.
 | Action | When it can occur | In the code |
 |---|---|---|
 | `Change(n, k, v, d)` | A user changes the fact of the key `k` on the node `n`. The counter of the version is the largest counter that `n` knows, plus the step `d`. The world of `n` sends the fact to its peers. | the call `{set, Key, Value, Ack}` in `boids_world` |
-| `Learn(x)` | A fact comes to its node. The node takes it only when its version is larger than the version that the node has: the counter first, then the node. | `learn/2`, for the messages `{fact, Fact, Ack}` and `{facts, Facts}` |
+| `Learn(x)` | A fact comes to its node. The node takes it only when its version is larger than the version that the node has: the counter first, then the node. | `learn/2`, for the messages `{fact, Fact, Ack}`, `{facts, Facts}` and `{facts, Facts, Ack}`, and for the call `{merge, Facts, Ack}` |
 | `Split(n, m)` | The connection between two nodes ends. The messages between them are lost, and each of the two has one peer less. | the event `leave` of `pg` |
 | `Heal(n, m)` | The two nodes have a connection again. | |
 | `Join(n, m)` | The node `n` sees the node `m`: it sends all its facts and its marks to `m`, and `m` is one of its peers. | the event `join` of `pg` |
@@ -471,6 +471,17 @@ that time.
 The process that asks for a change waits for the answers of the other
 nodes (`boids_world:set/3`). The model does not have this wait: it
 changes nothing in the facts. No world waits for another world.
+
+A world can get facts with their versions from a save
+(`boids_world:merge/2`, which `boids:import/2` uses). The model has no
+action for this, because it is not a new flow. For the nodes, the facts
+of a save are facts that were on their way for a long time. The node
+that gets them takes each of them with `Learn`, and sends them to its
+peers, as a node that comes to the world does (`Join`). So `Same` holds
+for them as for each other fact. `NoReturn` has the limit of
+`MCFactsEarly.cfg`: a save that is older than the time of a mark can
+bring back a fact that the world removed, because the world dropped the
+mark of that removal.
 
 ## The replay: the code against the specification
 
@@ -586,6 +597,12 @@ join, the process of the row stopped, or not. The result is `:ok`,
 - In `Facts.tla`, a mark goes only when each node took it. In the code,
   a mark goes after a time (`boids:mark_time/0`): see the limit of
   `MCFactsEarly.cfg`.
+- `Facts.tla` has no save. The facts of a save have the versions of
+  another run of the world (`boids_world:merge/2`). They are facts as
+  the others while each version is the version of one change only. A
+  counter is the time of the system in microseconds, so two changes with
+  one version need a node with the same name and a clock that went back
+  to the same microsecond.
 - In `Kept.tla`, the boids keep one row. In the code, a boid can keep
   more than one grid and more than one field: it reads the number of
   the changes one time, and then one row for each name. `Kept.tla` has
