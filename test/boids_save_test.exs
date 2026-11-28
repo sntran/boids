@@ -291,6 +291,10 @@ defmodule BoidsSaveTest do
         assert ids(new) == expected
         assert :boids.related(new, :follower, :follows) == [hd(refs)]
         assert :boids.related_to(new, :follower, :likes) == [Enum.at(refs, 1)]
+        # The rules are data: each rule has its options after the load, with no code.
+        {:ok, boid} = :boids.boid(new, hd(refs))
+        assert boid == saved(save, hd(refs)).boid
+        assert {:separation, 1.5, %{oncoming: false}} = List.keyfind(boid.rules, :separation, 0)
         steps(new, 100)
         # The references of the first run are other references: the order is the same.
         assert Enum.map(rows(new), &Map.delete(&1, :id)) == straight
