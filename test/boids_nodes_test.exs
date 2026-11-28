@@ -1246,14 +1246,23 @@ defmodule BoidsThreeNodesTest do
     world
   end
 
-  # End the connection of the first node to the other nodes. When a
-  # node loses a connection, Erlang ends its connections to the other
-  # nodes also, so that no node has a part of the connections. Thus the
-  # other nodes make their connection again.
-  defp cut(world, [first | others] = nodes) do
-    for other <- others, do: Cluster.split(first, other)
-    for node <- nodes, do: joined(world, [node])
+  # End the connection of the first node to the other nodes. The other
+  # nodes then make their connection again: first, no node has a
+  # connection.
+  defp cut(world, [_first | others] = nodes) do
+    alone(world, nodes)
     connect(world, others)
+  end
+
+  # End each connection: no node has a connection. When a node loses a
+  # connection, Erlang ends its connections to the other nodes also, so
+  # that no node has a part of the connections. But that depends on the
+  # order of the messages between the nodes, and it does not occur each
+  # time. Thus the test ends each connection, and does not wait for
+  # Erlang to end one.
+  defp alone(world, nodes) do
+    for {a, i} <- Enum.with_index(nodes), b <- Enum.drop(nodes, i + 1), do: Cluster.split(a, b)
+    for node <- nodes, do: joined(world, [node])
   end
 
   # Make the connections of the nodes, one at a time.
@@ -1269,13 +1278,24 @@ defmodule BoidsThreeNodesTest do
   end
 
   # A process of the boid on a node, with a number of moves. The boid
-  # has a manual step: it stays on its node.
+  # has a manual step: it stays on its node. The result is the process.
+  #
+  # The result is nil for a process that stopped before the end of its
+  # start. A node that has a process of the boid with more moves tells
+  # this node to stop the new process (the reason `{shutdown, replaced}`),
+  # and that message can come before the start ends. Then the start
+  # gives `{:error, :replaced}`, as each start that stops with a reason
+  # `{shutdown, Reason}`. The process of a boid that moves gets the same
+  # answer for its call, and stays on its node.
   defp copy({peer, _node}, world, id, moves) do
     process = %{tick: :manual, max_dt: 0.25, search: 1, priority: :low, hibernate: true}
     boid = :boids_boid.new(%{id: id, pos: {80, 80}, rules: [], data: moves})
     moving = %{boid: boid, mod: :undefined, server: process, relations: [], moves: moves, rand: :undefined}
-    {:ok, pid} = call(peer, :gen_boid, :adopt, [world, moving])
-    pid
+
+    case call(peer, :gen_boid, :adopt, [world, moving]) do
+      {:ok, pid} -> pid
+      {:error, :replaced} -> nil
+    end
   end
 
   # The nodes that have a process of the boid.
@@ -1351,8 +1371,7 @@ defmodule BoidsThreeNodesTest do
     one_each(nodes, world, one_cut)
 
     # No node has a connection.
-    Cluster.split(first, second)
-    for node <- nodes, do: joined(world, [node])
+    alone(world, nodes)
 
     all_cut = [
       {:all_tie, [{0, 1}, {1, 1}, {2, 1}], 2},
