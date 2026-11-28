@@ -8,10 +8,10 @@ defmodule BoidsStreamsTest do
   # the range of each value for 12 sets of seeds (8 for the box of two
   # dimensions, and 6 for the box of three dimensions).
   #
-  # A run of a corridor takes about 0.9 second, and a run of a box 0.5
-  # second (two dimensions) or 1.3 second (three dimensions). The runs of
-  # a test are done at the same time: the file takes about 5 seconds on a
-  # computer with 4 processors.
+  # A run of a corridor takes about 0.9 second, a run of a box 0.5 second
+  # (two dimensions) or 1.3 second (three dimensions), and a run of the
+  # bridge 1.7 second. The runs of a test are done at the same time: the
+  # file takes about 7 seconds on a computer with 4 processors.
   #
   # The runs use all the processors. The module is not async, so that
   # they do not slow the tests of the other modules that have a time
@@ -38,6 +38,27 @@ defmodule BoidsStreamsTest do
 
     defp turn(boid, way, crossings, rules) do
       {:ok, %{:boids_boid.update(boid, %{group: way, rules: rules[way]}) | data: crossings + 1}}
+    end
+  end
+
+  defmodule Carrier do
+    # A boid that goes from the nest to the food, and back: that is one
+    # trip. Its group is its goal, its data is the number of its trips,
+    # and its state has the two ends and its rules for each goal.
+    @behaviour :gen_boid
+
+    @impl true
+    def init(options), do: {:ok, options}
+
+    @impl true
+    def handle_act(%{pos: pos, group: goal, data: trips, state: %{ends: ends, rules: rules}} = boid) do
+      if :boids_vec.dist(pos, ends[goal]) < 1.0 do
+        next = if goal == :food, do: :nest, else: :food
+        trips = if goal == :nest, do: trips + 1, else: trips
+        {:ok, %{:boids_boid.update(boid, %{group: next, rules: rules[next]}) | data: trips}}
+      else
+        {:ok, boid}
+      end
     end
   end
 
@@ -132,6 +153,50 @@ defmodule BoidsStreamsTest do
     result = run(world, 60, speed, dist)
     :ok = :boids.stop_world(world)
     Map.put(result, :speed, result.value)
+  end
+
+  # The scene of examples/bridge.exs with a bridge of 1 cell, for 120
+  # seconds: a land of 40 x 36 cells with a river (the rows 14 to 20) and
+  # a bridge (the column 19). 30 boids go from the nest to the food, and
+  # back. A field of the world for each end leads them, with a margin for
+  # the water. `walkable` is the option of the boids, and `seed` gives
+  # their start: with 1, the start of the example.
+  #
+  # The result: the trips, the boids in the water (the mean of the
+  # steps), the seconds that boids stood, and the near pairs.
+  defp bridge(walkable, rules, seed) do
+    water? = fn {x, y} -> floor(y) in 14..20 and floor(x) != 19 end
+    land = :boids_grid.new(size: {40, 36}, blocked: water?)
+    {:ok, world} = :boids.start_world(%{bounds: {{0.0, 0.0}, {40.0, 36.0}}, cell_size: 2.0})
+    :ok = :boids.set_grid(world, :land, land)
+    :ok = :boids.set_field(world, :food, :boids_field.new(land, [{12, 29}], margin: [3, 2]))
+    :ok = :boids.set_field(world, :nest, :boids_field.new(land, [{20, 4}], margin: [3, 2]))
+    :rand.seed(:exsss, {seed, 2, 3})
+
+    state = %{
+      ends: %{food: {12.5, 29.5}, nest: {20.5, 4.5}},
+      rules: Map.new([:food, :nest], fn goal -> {goal, [{:flow, 1.0, %{field: {:named, goal}}} | rules]} end)
+    }
+
+    for n <- 1..30 do
+      carrier = %{
+        pos: {16 + :rand.uniform() * 8, 2 + :rand.uniform() * 5},
+        seed: (seed - 1) * 1000 + n,
+        walkable: walkable,
+        group: :food,
+        rules: state.rules.food,
+        data: 0,
+        state: state
+      }
+
+      {:ok, _} = :gen_boid.start(world, Carrier, Map.merge(@body, carrier))
+    end
+
+    wet = fn rows -> Enum.count(rows, fn %{pos: pos} -> water?.(pos) end) end
+    result = run(world, 120, wet, &:boids_vec.dist/2)
+    trips = Enum.sum(for %{data: trips} <- :boids.snapshot(world), do: trips)
+    :ok = :boids.stop_world(world)
+    result |> Map.put(:trips, trips) |> Map.put(:wet, result.value)
   end
 
   # The box with separation as now, with the option alone, and with the
@@ -268,6 +333,47 @@ defmodule BoidsStreamsTest do
       # The boids that go the same way keep their space: 236 to 370
       # near pairs, against 841 to 5,985 with flow only.
       assert alone.same < flow.same
+    end
+  end
+
+  describe "two streams on a bridge of 1 cell" do
+    # The scene is chaotic: a very small change of the start gives other
+    # trips. So the test has 2 sets of seeds, and it compares the means
+    # of the trips.
+    test "with oncoming => false and dodge: more trips than with separation as now, and no boid stands" do
+      limit = {:named, :land}
+
+      runs =
+        together(
+          [{:flow, fn -> bridge(:all, [], 1) end}] ++
+            for seed <- 1..2, {name, rules} <- [default: [@separation], pair: @pair] do
+              {{name, seed}, fn -> bridge(limit, rules, seed) end}
+            end
+        )
+
+      defaults = for seed <- 1..2, do: runs[{:default, seed}]
+      pairs = for seed <- 1..2, do: runs[{:pair, seed}]
+      # With flow only, the boids go through each other: 210 trips, for
+      # each set of seeds.
+      assert runs.flow.trips >= 200
+
+      for pair <- pairs do
+        # For 12 sets of seeds: 141 to 153 trips, which is 67 to 73 % of
+        # flow only.
+        assert pair.trips >= 0.55 * runs.flow.trips
+        assert pair.stood == 0
+        assert pair.wet == 0
+        # 14 to 34 near pairs of opposite boids.
+        assert pair.opposite <= 100
+      end
+
+      # With separation as now: 443 to 877 near pairs of opposite boids,
+      # and 87 to 115 trips. The mean of 12 sets is 103.5 trips, and
+      # 146.5 with the two rules: 1.42 times. For the means of each 2 of
+      # the 12 sets, it is 1.28 to 1.63 times.
+      for default <- defaults, do: assert(default.opposite >= 300)
+      trips = fn results -> Enum.sum(for %{trips: trips} <- results, do: trips) end
+      assert trips.(pairs) >= 1.2 * trips.(defaults)
     end
   end
 
