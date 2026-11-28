@@ -13,12 +13,13 @@ copy of the relations of each boid to a table, where the boids read
 them with no message.
 
 The facts of the world are what all its boids perceive, and that is not
-a boid: the obstacles, the scale of the time, and the grids (the walls).
-Only this process writes them (`set/3`), one change after the other,
-and the boids read them with no message. A write of an obstacle changes
-more than one row of a table, and two processes that write at the same
-time can lose a part of it (`specs/Space.tla`). A boid keeps the grid
-that it read, so a write of a grid changes a row and then a number of
+a boid: the obstacles, the scale of the time, the grids (the walls) and
+the fields (the directions to goals). Only this process writes them
+(`set/3`), one change after the other, and the boids read them with no
+message. A write of an obstacle changes more than one row of a table,
+and two processes that write at the same time can lose a part of it
+(`specs/Space.tla`). A boid keeps the grids and the fields that it
+read, so a write of one of them changes a row and then a number of
 changes: one writer makes that order sure (`specs/Kept.tla`).
 
 ## The facts of a world on several nodes
@@ -218,6 +219,7 @@ boids of the world perceive, and that is not a boid:
 | `time_scale` | The scale of the time: a number from 0 to 1.0e100. |
 | `{obstacle, Id}` | An obstacle: `{Pos, Radius}`, or `none` to remove it. |
 | `{grid, Name}` | A grid of `boids_grid`, or `none` to remove it. |
+| `{field, Name}` | A field of `boids_field`, or `none` to remove it. |
 
 Only the process of the world writes the facts of its node, one change
 after the other, to tables that only it can write. The boids read them
@@ -234,10 +236,12 @@ connection again. With no answer of a node in the time limit
 the change, and the node that is slow gets it later.
 
 `boids:set_time_scale/2`, `boids:set_obstacle/4`,
-`boids:remove_obstacle/2`, `boids:set_grid/3` and `boids:remove_grid/2`
-use this function.
+`boids:remove_obstacle/2`, `boids:set_grid/3`, `boids:remove_grid/2`,
+`boids:set_field/3` and `boids:remove_field/2` use this function.
 """.
--spec set(server() | boids_space:space(), time_scale | {obstacle, term()} | {grid, term()}, term()) ->
+-spec set(
+    server() | boids_space:space(), time_scale | {obstacle, term()} | {grid, term()} | {field, term()}, term()
+) ->
     ok | {error, badarg | timeout}.
 set(#{owner := Server}, Key, Value) ->
     set(Server, Key, Value);
@@ -767,6 +771,8 @@ write(Space, {obstacle, Id}, none) -> boids_space:remove_obstacle(Space, Id);
 write(Space, {obstacle, Id}, {Pos, Radius}) -> boids_space:set_obstacle(Space, Id, Pos, Radius);
 write(Space, {grid, Name}, none) -> boids_space:remove_grid(Space, Name);
 write(Space, {grid, Name}, Grid) -> boids_space:set_grid(Space, Name, Grid);
+write(Space, {field, Name}, none) -> boids_space:remove_field(Space, Name);
+write(Space, {field, Name}, Field) -> boids_space:set_field(Space, Name, Field);
 write(_Space, _Key, _Value) -> error(badarg).
 
 %% A fact of another node, with its version. This node takes the fact

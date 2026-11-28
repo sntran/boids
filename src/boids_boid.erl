@@ -54,7 +54,7 @@ is the three rules of a flock:
 | `cruise` | `speed` (`max_speed`) | Keep a speed in the direction of the movement. |
 | `leader` | `target`, `distance` (half of `perception`), `slow_radius` (`perception`) | Stay behind a leader, and move out of its way. |
 | `dodge` | `radius` (a quarter of `perception`), `horizon` (`2.0` seconds), `groups` (`all`) | Move away from a neighbor that comes too near in the time of the horizon. |
-| `flow` | `field`, `predict` (`0.5` second) | Move in the direction of a field: a vector, or a function of a position. |
+| `flow` | `field`, `predict` (`0.5` second) | Move in the direction of a field: a vector, a function of a position, or `{named, Name}` for a field of the world (`boids:set_field/3`, `boids_field`). |
 | `walls` | `margin` (half of `perception`) | Move away from the walls of the grid of the boid (`walkable`) that are nearer than the margin. |
 
 `groups` is `all`, `same` (the group of the boid) or a list of groups.
@@ -67,12 +67,12 @@ A target that does not exist gives no force.
 A rule of your own is a function: `{Fun, Weight}`, where `Fun(Boid,
 Neighbors, Seen)` gives the force. `Neighbors` are the boids that the
 boid sees, the nearest first. `Seen` is what the boid perceives in this
-step: `dt` (the seconds of the step), `obstacles`, `bounds`, `wrap` and
-`grids`.
+step: `dt` (the seconds of the step), `obstacles`, `bounds`, `wrap`,
+`grids` and `fields`.
 `obstacles` has only the obstacles to the distance `reach/1` from the
 boid, in the order of their ids: a rule that needs obstacles farther
-than that does not get them. `grids` is a map with the grids that the
-boid uses, by their names (`named/1`).
+than that does not get them. `grids` and `fields` are maps with the
+grids and the fields that the boid uses, by their names (`named/1`).
 Use `fun Module:Function/3` for a rule that stays when the code of the
 module changes.
 
@@ -197,6 +197,7 @@ limit.
     wrap => boolean(),
     obstacles => [boids_steer:obstacle()],
     grids => #{term() => boids_grid:grid()},
+    fields => #{term() => boids_field:field()},
     lookup => fun((term()) -> {ok, #{pos := vec(), vel := vec(), _ => _}} | error),
     related => fun((term(), term()) -> [term()]),
     _ => _
@@ -312,10 +313,14 @@ validate(Boid0) ->
 sized(Opts, Dim) ->
     Vectors =
         [Point || #{target := Point} <- [Opts], is_tuple(Point), not is_atom(element(1, Point))] ++
-            [Vector || #{field := Vector} <- [Opts], is_tuple(Vector)] ++
+            [Vector || #{field := Vector} <- [Opts], is_tuple(Vector), not is_atom(element(1, Vector))] ++
             [Corner || #{bounds := {Min, Max}} <- [Opts], Corner <- [Min, Max]] ++
             maps:get(path, Opts, []),
-    lists:all(fun(Vector) -> tuple_size(Vector) =:= Dim end, Vectors).
+    lists:all(fun(Vector) -> tuple_size(Vector) =:= Dim end, Vectors) andalso flat(Opts, Dim).
+
+%% A field of the world has two dimensions.
+flat(#{field := {named, _Name}}, Dim) -> Dim =:= 2;
+flat(_Opts, _Dim) -> true.
 
 check(Key, Value) ->
     case ok(Key, Value) of
@@ -407,6 +412,7 @@ opt(_, target, Point) -> boids_vec:is_vec(Point);
 opt(_, bounds, {Min, Max}) -> boids_vec:is_box(Min, Max);
 opt(_, path, Path) -> is_list(Path) andalso Path =/= [] andalso lists:all(fun boids_vec:is_vec/1, Path);
 opt(_, loop, Loop) -> is_boolean(Loop);
+opt(_, field, {named, _Name}) -> true;
 opt(_, field, Field) -> is_function(Field, 1) orelse boids_vec:is_vec(Field);
 opt(_, Key, N) when Key =/= bounds -> boids_vec:is_size(N);
 opt(_, _, _) -> false.
@@ -515,12 +521,16 @@ combine(priority, _Forces, _Left, Acc) ->
 -doc """
 The facts with a name that a boid uses: the keys of the facts of its
 world that the boid needs in `Seen`. A boid with `walkable => {named,
-Name}` uses the grid `{grid, Name}`. `boids_space:named/3` reads them,
-and `gen_boid` and `boids:plan/3` put them in the key `grids` of `Seen`.
+Name}` uses the grid `{grid, Name}`, and a boid with a rule `flow` with
+`field => {named, Name}` uses the field `{field, Name}`.
+`boids_space:named/3` reads them, and `gen_boid` and `boids:plan/3` put
+them in the keys `grids` and `fields` of `Seen`.
 """.
--spec named(boid()) -> [{grid, term()}].
-named(#{walkable := {named, Name}}) -> [{grid, Name}];
-named(_Boid) -> [].
+-spec named(boid()) -> [{grid | field, term()}].
+named(#{walkable := {named, Name}, rules := Rules}) -> [{grid, Name} | fields(Rules)];
+named(#{rules := Rules}) -> fields(Rules).
+
+fields(Rules) -> [{field, Name} || {_Rule, _Weight, #{field := {named, Name}}} <- Rules].
 
 -doc """
 Move a boid for `Dt` seconds with a force. The speed stays in the limits
@@ -667,11 +677,13 @@ apply_rule(leader, Opts, B = #{perception := Perception}, Ns, Seen, _Memory, _Na
 apply_rule(dodge, Opts, B = #{perception := Perception}, Ns, _Seen, _Memory, _Name) ->
     Near = select(Ns, B, maps:remove(radius, Opts), infinity, all),
     boids_steer:dodge(B, Near, maps:get(radius, Opts, Perception / 4), maps:get(horizon, Opts, 2.0));
-apply_rule(flow, Opts = #{field := Field}, B = #{pos := Pos, vel := Vel}, _Ns, _Seen, _Memory, _Name) ->
+apply_rule(flow, Opts = #{field := Field}, B = #{pos := Pos, vel := Vel}, _Ns, Seen, _Memory, _Name) ->
+    Ahead = boids_vec:add(Pos, boids_vec:scale(Vel, maps:get(predict, Opts, 0.5))),
     Direction =
-        case is_function(Field) of
-            true -> Field(boids_vec:add(Pos, boids_vec:scale(Vel, maps:get(predict, Opts, 0.5))));
-            false -> Field
+        case Field of
+            {named, Name} -> down(Name, Seen, Pos, Ahead);
+            _ when is_function(Field) -> Field(Ahead);
+            _ -> Field
         end,
     boids_steer:flow(B, Direction);
 apply_rule(walls, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Seen, _Memory, _Name) ->
@@ -682,6 +694,20 @@ apply_rule(walls, Opts, B = #{pos := Pos, perception := Perception}, _Ns, Seen, 
     end;
 apply_rule(Fun, _Opts, B, Ns, Seen, _Memory, _Name) ->
     Fun(B, Ns, Seen).
+
+%% The direction of a field of the world (the key fields of Seen) at
+%% the place ahead of a boid. When that place has no direction (a
+%% blocked cell, a place with no way, a goal), the direction at the
+%% position of the boid: so a boid near a wall or near its goal
+%% continues to it. A name with no field gives no force.
+down(Name, #{fields := Fields}, Pos, Ahead) when is_map_key(Name, Fields) ->
+    Field = map_get(Name, Fields),
+    case boids_field:direction(Field, Ahead) of
+        {X, Y} when X == 0, Y == 0 -> boids_field:direction(Field, Pos);
+        Direction -> Direction
+    end;
+down(_Name, _Seen, _Pos, _Ahead) ->
+    {0.0, 0.0}.
 
 %% Move the point of wander a step on its circle. A step that moves the
 %% point to the center changes nothing.

@@ -27,11 +27,11 @@ world to the design.
 |---|---|---|
 | `specs/Members.tla` | The members of a world: a process asks for the row of an id, the world watches it, and the row goes when the process stops, leaves, or is removed. | `boids_world`, `boids:add/2`, `boids:remove/2`, `boids:join/2`, `boids:leave/2` |
 | `specs/Space.tla` | A write of a row against a read of the grid, and a write of an obstacle against a read of the obstacles near a boid. | `boids_space:put/2`, `boids_space:near/3`, `boids_world:set/3`, `boids_space:set_obstacle/4`, `boids_space:obstacles/3` |
-| `specs/Kept.tla` | A write of a grid against the boids that keep the grid that they read. | `boids_world:set/3`, `boids_space:set_grid/3`, `boids_space:named/3` |
+| `specs/Kept.tla` | A write of a grid or of a field against the boids that keep what they read. | `boids_world:set/3`, `boids_space:set_grid/3`, `boids_space:set_field/3`, `boids_space:named/3` |
 | `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 | `specs/Move.tla` | The move of a boid to another node of its world. | `gen_boid` (`settle`, `adopt/2`), `boids_world` (the join of a boid that comes, `moved/3`) |
 | `specs/MoveMany.tla` | The same move in a world on three nodes: a boid with a process on each node, and a decision for two processes at a time. | `boids_world` (`adopt/5`, the messages `census`, `claim` and `yield`) |
-| `specs/Facts.tla` | The facts of a world (the obstacles, the scale of the time, the grids) on several nodes: a change with a version, a node that comes later, and a split of the network. | `boids_world` (`set/3`, the messages `fact` and `facts`, `drop_marks/2`) |
+| `specs/Facts.tla` | The facts of a world (the obstacles, the scale of the time, the grids, the fields) on several nodes: a change with a version, a node that comes later, and a split of the network. | `boids_world` (`set/3`, the messages `fact` and `facts`, `drop_marks/2`) |
 
 ### `specs/Members.tla`
 
@@ -167,6 +167,8 @@ goes).
 ### `specs/Kept.tla`
 
 A grid of a world is one row of the table of the facts: a large binary.
+So is a field of directions (`boids_field`). The two have the same
+write and the same read, so one specification has the two.
 A process that reads such a row from the table at each step gets a new
 reference to the binary at each step, and its garbage collection then
 runs at each step. So a boid keeps what it read. The space has the
@@ -179,16 +181,16 @@ world, the process of the world of the node. It writes a change of a
 caller of its node, and a change that comes from another node
 (`Facts.tla`), with the same function (`write/3` of `boids_world`), one
 after the other. So the number of the changes also gets 1 more for a
-grid that comes from another node, and the boids of this node read
-that grid at their next step. The model is about one node: each node
-has its own row and its own number.
+grid or a field that comes from another node, and the boids of this
+node read it at their next step. The model is about one node: each
+node has its own row and its own number.
 
 The constants: the boids (`Boids`), the writes of the owner (`Writes`, a
 bound of the model), and two guards for the fault models.
 
 | Action | When it can occur | In the code |
 |---|---|---|
-| `Change` | No write runs: the row changes. | `ets:insert/2` or `ets:delete/2` in `set_grid/3` and `remove_grid/2`, for a change of this node (`set/3`) and for a fact of another node (`learn/2`) |
+| `Change` | No write runs: the row changes. | `ets:insert/2` or `ets:delete/2` in `set_grid/3`, `remove_grid/2`, `set_field/3` and `remove_field/2`, for a change of this node (`set/3`) and for a fact of another node (`learn/2`) |
 | `Close` | The row changed: the number of the changes gets 1 more. | `atomics:add/3` |
 | `Look(b)` | The number that `b` keeps is not the number of the space: `b` reads the number. | `atomics:get/2` in `named/3` |
 | `Keep(b)` | `b` read the number: it reads the row, and keeps the two. | `ets:lookup/2` |
@@ -390,10 +392,10 @@ only the node whose process waits for that call does nothing.
 ### `specs/Facts.tla`
 
 The facts of a world are what all its boids perceive, and that is not a
-boid: the obstacles, the scale of the time and the grids. Each node of
-a world has a copy of each fact, and all the nodes must have the same
-facts. The model has no part for one kind of fact, as the code: a grid
-is a fact as an obstacle is.
+boid: the obstacles, the scale of the time, the grids and the fields of
+directions. Each node of a world has a copy of each fact, and all the
+nodes must have the same facts. The model has no part for one kind of
+fact, as the code: a grid or a field is a fact as an obstacle is.
 
 The constants: the nodes (`Nodes`, numbers in the order of their
 names), the keys of the facts (`Keys`), the changes of the users and
@@ -585,12 +587,13 @@ join, the process of the row stopped, or not. The result is `:ok`,
   a mark goes after a time (`boids:mark_time/0`): see the limit of
   `MCFactsEarly.cfg`.
 - In `Kept.tla`, the boids keep one row. In the code, a boid can keep
-  more than one grid: it reads the number of the changes one time, and
-  then one row for each name. `Kept.tla` has one node. In a world on
-  several nodes, each node has a space with its own number of changes,
-  and one writer: the process of the world of that node, which makes
-  the writes of its node and the writes of the facts that it gets from
-  the other nodes (`Facts.tla`), one after the other.
+  more than one grid and more than one field: it reads the number of
+  the changes one time, and then one row for each name. `Kept.tla` has
+  one node. In a world on several nodes, each node has a space with its
+  own number of changes, and one writer: the process of the world of
+  that node, which makes the writes of its node and the writes of the
+  facts that it gets from the other nodes (`Facts.tla`), one after the
+  other.
 
 ## How to run the checks
 

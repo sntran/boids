@@ -76,7 +76,7 @@ and a force is in units for each second for each second.
 -export([add_rule/3, delete_rule/3, which_rules/2]).
 -export([snapshot/1, snapshot/2, lookup/2, near/3, count/1, count/2]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
--export([set_grid/3, remove_grid/2, grid/2]).
+-export([set_grid/3, remove_grid/2, grid/2, set_field/3, remove_field/2, field/2]).
 -export([step/2, step/3, part/2]).
 -export([graph/2, graph/3, flocks/2, flocks/3, relate/4, unrelate/4, relations/1, related/3, related_to/3]).
 -export([join/2, sense/2, plan/3, plan/4, commit/2, advance/3, leave/2]).
@@ -279,16 +279,13 @@ area(Area) ->
     error({bad_option, {area, Area}}).
 
 %% The grid that limits a boid in a world, or none.
-limit(Space, Boid) ->
-    case boids_boid:named(Boid) of
-        [{grid, Name}] ->
-            case boids_space:grid(Space, Name) of
-                {ok, Grid} -> Grid;
-                error -> none
-            end;
-        [] ->
-            none
-    end.
+limit(Space, #{walkable := {named, Name}}) ->
+    case boids_space:grid(Space, Name) of
+        {ok, Grid} -> Grid;
+        error -> none
+    end;
+limit(_Space, _Boid) ->
+    none.
 
 random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}, Grid) ->
     maybe
@@ -578,10 +575,11 @@ The process of the world writes the obstacle: this function sends it
 one message, and waits for its answer. A center or a radius that is not
 good gives the error `badarg`.
 
-The obstacles, the scale of the time and the grids are the facts of a
-world. In a world on several nodes, a change of a fact is for all the
-nodes (`set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`,
-`set_grid/3`, `remove_grid/2`):
+The obstacles, the scale of the time, the grids and the fields are the
+facts of a world. In a world on several nodes, a change of a fact is
+for all the nodes (`set_obstacle/4`, `remove_obstacle/2`,
+`set_time_scale/2`, `set_grid/3`, `remove_grid/2`, `set_field/3`,
+`remove_field/2`):
 
 - When the result is `ok`, each node that has a connection to this node
   has the change.
@@ -659,6 +657,63 @@ world has all the grids.
 -spec grid(world(), term()) -> {ok, boids_grid:grid()} | error.
 grid(World, Name) ->
     boids_space:grid(space(World), Name).
+
+-doc """
+Give the name `Name` to a field of directions (`boids_field`): for each
+place, the direction of the shortest way to a goal. A boid with the
+rule `{flow, Weight, #{field => {named, Name}}}` goes that way. A world
+can have many fields, each with its name: one for each goal of its
+boids.
+
+```erlang
+Grid = boids_grid:from_rows(["....#....", "....#....", "........."], #{}),
+ok = boids:set_grid(World, land, Grid),
+ok = boids:set_field(World, exit, boids_field:new(Grid, [{8, 0}])),
+{ok, _} = boids:populate(World, 20, #{
+    area => {{0, 0}, {4, 3}},
+    walkable => {named, land},
+    rules => [{flow, 1.0, #{field => {named, exit}}}, {separation, 1.5}]
+}).
+```
+
+There is one copy of a field for all the boids of a node: a boid keeps
+the field that it read, and reads it again only after a change. Call
+the function again to change the field: after a change of the walls or
+of the goals, make a new field (`boids_field:new/2`) and give it the
+same name. All the boids with that name use the new field at their
+next step. The calculation of a field is not in the process of the
+world: `boids_field:new/2` runs in the process that calls it.
+
+The process of the world writes the field, as for `set_obstacle/4`. A
+value that is not a field gives the error `badarg`. A name with no
+field gives no force.
+
+A field is a fact of the world: in a world on several nodes, the change
+is for all the nodes, and the result can be `{error, timeout}` (see
+`set_obstacle/4`). A boid that moves to another node finds the same
+field there, and goes on to its goal. The function sends the field to
+each node: a field of 200 x 200 cells is 234 KB.
+""".
+-spec set_field(world(), term(), boids_field:field()) -> ok | {error, timeout}.
+set_field(World, Name, Field) ->
+    set(World, {field, Name}, Field).
+
+-doc """
+Remove the field with the name `Name` from a world, on all its nodes:
+see `set_field/3`. The rule `flow` with that name gives no force.
+""".
+-spec remove_field(world(), term()) -> ok | {error, timeout}.
+remove_field(World, Name) ->
+    set(World, {field, Name}, none).
+
+-doc """
+The field with the name `Name` of a world: `{ok, Field}`, or `error`. The
+function reads the tables of this node with no message: each node of a
+world has all the fields.
+""".
+-spec field(world(), term()) -> {ok, boids_field:field()} | error.
+field(World, Name) ->
+    boids_space:field(space(World), Name).
 
 -doc """
 All the obstacles of a world, in the order of their ids: a list of maps
@@ -993,11 +1048,11 @@ plan(Space, Boid = #{pos := Pos}, Neighbors, Dt) ->
     Env = #{time_scale := Scale} = boids_space:env(Space, Pos, boids_boid:reach(Boid)),
     Lookup = fun(Id) -> boids_space:lookup(Space, Id) end,
     Related = fun(From, Label) -> boids_space:related(Space, From, Label) end,
-    %% The grids that the boid uses. The process keeps them between two
-    %% steps, in its process dictionary: this function has no argument
-    %% for the state of the caller.
-    #{grids := Grids} = boids_space:named(Space, boids_boid:named(Boid)),
-    boids_boid:step(Boid, Neighbors, Env#{lookup => Lookup, related => Related, grids => Grids}, Dt * Scale).
+    %% The grids and the fields that the boid uses. The process keeps
+    %% them between two steps, in its process dictionary: this function
+    %% has no argument for the state of the caller.
+    Named = boids_space:named(Space, boids_boid:named(Boid)),
+    boids_boid:step(Boid, Neighbors, maps:merge(Env#{lookup => Lookup, related => Related}, Named), Dt * Scale).
 
 -doc """
 Write a boid to its world, so that the other boids see its new

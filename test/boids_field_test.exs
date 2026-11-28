@@ -614,6 +614,311 @@ defmodule BoidsFieldTest do
     end
   end
 
+  describe "the rule flow with a field of a world" do
+    defp walker(opts) do
+      rules = [{:flow, 1.0, field: {:named, :exit}}]
+      :boids_boid.new(Map.merge(%{pos: {0.5, 3.5}, max_speed: 4.0, rules: rules}, Map.new(opts)))
+    end
+
+    defp flow(boid, seen) do
+      {[{:flow, force}], _boid} = :boids_boid.forces(boid, [], Map.merge(%{dt: 0.1}, seen))
+      force
+    end
+
+    test "has the name of a field as its option: a fact of the world that the boid uses" do
+      assert :boids_boid.named(walker(%{})) == [field: :exit]
+      assert :boids_boid.named(walker(walkable: {:named, :land})) == [grid: :land, field: :exit]
+
+      rules = [
+        {{:flow, :out}, 1.0, field: {:named, :exit}},
+        {:separation, 1.5},
+        {{:flow, :eat}, 2.0, field: {:named, {:food, 2}}, predict: 1},
+        {{:flow, :wind}, 0.5, field: {1.0, 0.0}}
+      ]
+
+      assert :boids_boid.named(walker(rules: rules)) == [field: :exit, field: {:food, 2}]
+      # A change of the rules changes the facts.
+      assert :boids_boid.named(:boids_boid.update(walker(%{}), %{rules: [{:cruise, 1.0}]})) == []
+
+      for bad <- [:exit, {:named}, {:name, :exit}, {:named, :exit, 2}, wall()] do
+        rule = {:flow, 1.0, %{field: bad}}
+        assert catch_error(walker(rules: [rule])) == {:bad_option, {:rules, rule}}
+      end
+    end
+
+    test "a boid with three dimensions cannot have a field of a world" do
+      rule = {:flow, 1.0, %{field: {:named, :exit}}}
+      assert catch_error(:boids_boid.new(pos: {0, 0, 0}, rules: [rule])) == {:bad_option, {:rules, rule}}
+      # A vector and a function are fields for three dimensions too.
+      assert %{} = :boids_boid.new(pos: {0, 0, 0}, rules: [{:flow, 1.0, field: {0, 0, 1}}])
+      assert %{} = :boids_boid.new(pos: {0, 0, 0}, rules: [{:flow, 1.0, field: fn _pos -> {0, 0, 1} end}])
+    end
+
+    test "gives the force to the direction of the field at the place ahead of the boid" do
+      field = :boids_field.new(wall(), [{8, 3}])
+      seen = %{fields: %{exit: field}}
+      # A boid that does not move: the place ahead is its position.
+      still = walker(pos: {2.5, 3.5})
+      assert flow(still, seen) == :boids_steer.flow(still, :boids_field.direction(field, {2.5, 3.5}))
+      assert elem(flow(still, seen), 1) < -2.0
+      # The place ahead is where the boid is after half a second.
+      moving = walker(pos: {2.5, 2.5}, vel: {0.0, -4.0})
+      assert flow(moving, seen) == :boids_steer.flow(moving, :boids_field.direction(field, {2.5, 0.5}))
+      refute flow(moving, seen) == :boids_steer.flow(moving, :boids_field.direction(field, {2.5, 2.5}))
+      # The option predict changes that time.
+      now =
+        walker(pos: {2.5, 2.5}, vel: {0.0, -4.0}, rules: [{:flow, 1.0, field: {:named, :exit}, predict: 0}])
+
+      assert flow(now, seen) == :boids_steer.flow(now, :boids_field.direction(field, {2.5, 2.5}))
+      # The weight of the rule multiplies the force.
+      double = walker(pos: {2.5, 3.5}, rules: [{:flow, 2.0, field: {:named, :exit}}])
+      assert_vec(flow(double, seen), :boids_vec.scale(flow(still, seen), 2.0))
+    end
+
+    test "uses the place of the boid when the place ahead has no direction" do
+      field = :boids_field.new(wall(), [{8, 3}])
+      seen = %{fields: %{exit: field}}
+      up = {0.0, -1.0}
+      assert :boids_field.direction(field, {3.5, 2.5}) == up
+      # Ahead is the wall.
+      at_wall = walker(pos: {3.5, 2.5}, vel: {2.0, 0.0})
+      assert :boids_field.direction(field, {4.5, 2.5}) == {0.0, 0.0}
+      assert flow(at_wall, seen) == :boids_steer.flow(at_wall, up)
+      # Ahead is out of the grid.
+      out = walker(pos: {3.5, 2.5}, vel: {0.0, 4.0})
+      assert flow(out, seen) == :boids_steer.flow(out, up)
+      # Ahead is the goal: the boid continues to it.
+      near = walker(pos: {6.6, 3.5}, vel: {4.0, 0.0})
+      assert :boids_field.direction(field, {8.6, 3.5}) == {0.0, 0.0}
+      assert flow(near, seen) == :boids_steer.flow(near, {1.0, 0.0})
+      # At the goal, and in a place with no way: no force.
+      assert flow(walker(pos: {8.5, 3.5}), seen) == {0.0, 0.0}
+      assert flow(walker(pos: {8.5, 3.5}, vel: {0.5, 0.0}), seen) == {0.0, 0.0}
+      assert flow(walker(pos: {4.5, 2.5}), seen) == {0.0, 0.0}
+      # A boid that goes through the goal: the place ahead brings it back.
+      through = walker(pos: {8.5, 3.5}, vel: {2.0, 0.0})
+      assert flow(through, seen) == :boids_steer.flow(through, {-1.0, 0.0})
+    end
+
+    test "a name with no field, and a step with no fields, give no force" do
+      field = :boids_field.new(wall(), [{8, 3}])
+      boid = walker(pos: {2.5, 3.5}, vel: {1.0, 0.0})
+      assert flow(boid, %{fields: %{food: field}}) == {0.0, 0.0}
+      assert flow(boid, %{fields: %{}}) == {0.0, 0.0}
+      assert flow(boid, %{}) == {0.0, 0.0}
+      # A step moves the boid with its velocity only.
+      assert %{pos: {2.6, 3.5}} = :boids_boid.step(boid, [], %{}, 0.1)
+      assert %{pos: {x, y}} = :boids_boid.step(boid, [], %{fields: %{exit: field}}, 0.1)
+      assert y < 3.5 and x > 2.5
+    end
+  end
+
+  describe "a world with a field" do
+    defmodule Walker do
+      # A boid that sends what it perceives to the process of its argument.
+      @behaviour :gen_boid
+
+      @impl true
+      def init({test, options}),
+        do: {:ok, Map.merge(%{rules: [], tick: :manual, state: test}, Map.new(options))}
+
+      @impl true
+      def handle_sense(seen, %{state: test} = boid) do
+        send(test, {:seen, seen})
+        {:ok, seen, boid}
+      end
+    end
+
+    # A maze of 12 x 9 cells. The goal is in its center.
+    @maze [
+      "............",
+      ".##########.",
+      ".#..........",
+      ".#.########.",
+      ".#.#......#.",
+      ".#.#.####.#.",
+      ".#...#....#.",
+      ".#####.####.",
+      "............"
+    ]
+
+    defp world(opts) do
+      {:ok, world} = :boids.start_world(opts)
+      on_exit(fn -> :boids.stop_world(world) end)
+      world
+    end
+
+    defp goer(more) do
+      Map.merge(
+        %{rules: [{:flow, 1.0, field: {:named, :exit}}], max_speed: 4.0, max_force: 40.0, tick: :manual},
+        more
+      )
+    end
+
+    test "has fields with a name: set_field/3, field/2 and remove_field/2" do
+      world = world(%{})
+      grid = wall()
+      field = :boids_field.new(grid, [{8, 3}])
+      assert :boids.field(world, :exit) == :error
+      assert :boids.set_field(world, :exit, field) == :ok
+      assert :boids.field(world, :exit) == {:ok, field}
+      assert :boids.set_field(world, {:food, 2}, :boids_field.new(grid, [{0, 0}])) == :ok
+      # A value that is not a field is an error of the caller, and the world continues.
+      assert_raise ArgumentError, fn -> :boids.set_field(world, :exit, grid) end
+      assert_raise ArgumentError, fn -> :boids.set_field(world, :exit, {:boids_field, 1}) end
+      assert :boids.field(world, :exit) == {:ok, field}
+      assert :boids.remove_field(world, :exit) == :ok
+      assert :boids.field(world, :exit) == :error
+      assert {:ok, _} = :boids.field(world, {:food, 2})
+      # A field with the name of a grid: the two are different facts.
+      :ok = :boids.set_grid(world, {:food, 2}, grid)
+      assert {:ok, ^grid} = :boids.grid(world, {:food, 2})
+      assert {:ok, food} = :boids.field(world, {:food, 2})
+      assert :boids_field.goals(food) == [{0, 0}]
+    end
+
+    test "a boid in a maze gets to the goal" do
+      grid = :boids_grid.from_rows(@maze, cell_size: 2)
+      world = world(bounds: {{0, 0}, {24, 18}}, defaults: %{walkable: {:named, :maze}})
+      :ok = :boids.set_grid(world, :maze, grid)
+      :ok = :boids.set_field(world, :exit, :boids_field.new(grid, [{6, 6}]))
+      # From the maze, from its two ends, and from two corners of the land.
+      starts = [{9.0, 9.0}, {5.0, 5.0}, {21.0, 5.0}, {1.0, 17.0}, {23.0, 1.0}]
+      ids = for pos <- starts, do: elem(:boids.add(world, goer(%{pos: pos})), 1)
+      for _ <- 1..600, do: :ok = :boids.step(world, 0.1)
+
+      for id <- ids do
+        {:ok, %{pos: pos}} = :boids.lookup(world, id)
+        assert :boids_vec.dist(pos, {13.0, 13.0}) < 2.0
+      end
+    end
+
+    test "boids with a field, a grid and neighbors go around a wall to a door" do
+      # A wall with a door of two cells. The boids start at its left, and the goal is at its right.
+      grid = :boids_grid.new(size: {40, 30}, blocked: for(j <- 0..29, j not in [14, 15], do: {20, j}))
+      world = world(bounds: {{0, 0}, {40, 30}}, defaults: %{walkable: {:named, :land}})
+      :ok = :boids.set_grid(world, :land, grid)
+      :ok = :boids.set_field(world, :exit, :boids_field.new(grid, [{35, 5}]))
+      rules = [{:flow, 1.0, field: {:named, :exit}}, {:separation, 1.5, radius: 0.7}]
+
+      {:ok, ids} =
+        :boids.populate(world, 30, goer(%{area: {{2, 2}, {15, 28}}, rules: rules, perception: 2.0}))
+
+      for _ <- 1..400 do
+        :ok = :boids.step(world, 0.1)
+        assert Enum.all?(:boids.snapshot(world), fn %{pos: pos} -> :boids_grid.walkable(grid, pos) end)
+      end
+
+      # All the boids are through the door, near the goal.
+      for id <- ids do
+        {:ok, %{pos: pos}} = :boids.lookup(world, id)
+        assert :boids_vec.dist(pos, {35.5, 5.5}) < 6.0
+      end
+    end
+
+    test "a boid gets its fields in what it perceives, and a boid with no name gets none" do
+      world = world(bounds: {{0, 0}, {10, 4}})
+      field = :boids_field.new(wall(), [{8, 3}])
+      :ok = :boids.set_field(world, :exit, field)
+      :ok = :boids.set_field(world, :food, :boids_field.new(wall(), [{0, 0}]))
+      {:ok, _} = :gen_boid.start(world, Walker, {self(), goer(%{pos: {1, 1}})})
+      :ok = :boids.step(world, 0.1)
+      assert_receive {:seen, %{fields: fields, grids: grids}}
+      assert fields == %{exit: field}
+      assert grids == %{}
+
+      world2 = world(%{})
+      {:ok, _} = :gen_boid.start(world2, Walker, {self(), %{pos: {1, 1}}})
+      :ok = :boids.step(world2, 0.1)
+      assert_receive {:seen, %{fields: fields}}
+      assert fields == %{}
+    end
+
+    test "after a change of the field, the boids take the new way at their next step" do
+      grid = open(20)
+      world = world(bounds: {{0, 0}, {20, 20}})
+      :ok = :boids.set_field(world, :exit, :boids_field.new(grid, [{0, 10}]))
+      # With this mass, a boid has the velocity of its rule after one step.
+      {:ok, id} = :boids.add(world, goer(%{pos: {10.5, 10.5}, mass: 0.1}))
+      velocity = fn -> elem(:boids.lookup(world, id), 1).vel end
+      :ok = :boids.step(world, 0.1)
+      assert_vec(velocity.(), {-4.0, 0.0}, 0.05)
+      # The goal is now at the other side.
+      :ok = :boids.set_field(world, :exit, :boids_field.new(grid, [{19, 10}]))
+      :ok = :boids.step(world, 0.1)
+      assert_vec(velocity.(), {4.0, 0.0}, 0.05)
+      # With no field for its name, the boid has no force: it keeps its velocity.
+      :ok = :boids.remove_field(world, :exit)
+      for _ <- 1..5, do: :ok = :boids.step(world, 0.1)
+      assert_vec(velocity.(), {4.0, 0.0}, 0.05)
+    end
+
+    test "a boid keeps the field that it read: it is not in the boid, and not in its row" do
+      world = world(bounds: {{0, 0}, {10, 4}})
+      field = :boids_field.new(wall(), [{8, 3}])
+      :ok = :boids.set_field(world, :exit, field)
+      {:ok, id} = :boids.add(world, goer(%{pos: {1, 1}}))
+      :ok = :boids.step(world, 0.1)
+      {:ok, boid} = :boids.boid(world, id)
+      {:ok, row} = :boids.lookup(world, id)
+      refute :erlang.term_to_binary({boid, row}) =~ "boids_field"
+      # The process of the boid keeps it in its state, with the number of
+      # the changes of the world at that read.
+      pid = :boids.whereis(world, id)
+      assert %{kept: {1, [field: :exit], %{fields: %{exit: ^field}}} = kept} = :sys.get_state(pid)
+      # With no change, the boid does not read the table again.
+      for _ <- 1..5, do: :ok = :boids.step(world, 0.1)
+      assert :sys.get_state(pid).kept == kept
+      # A change of another fact of the world: the boid reads its field again.
+      :ok = :boids.set_field(world, :food, field)
+      :ok = :boids.step(world, 0.1)
+      assert %{kept: {2, [field: :exit], %{fields: %{exit: ^field}}}} = :sys.get_state(pid)
+    end
+
+    test "a boid with its own clock goes down the field too" do
+      # A wall with a door, in a small land. The time of the world is 4
+      # times as fast, so the test is short.
+      grid = :boids_grid.new(size: {12, 8}, blocked: for(j <- 0..7, j not in [3, 4], do: {6, j}))
+      world = world(bounds: {{0, 0}, {12, 8}}, defaults: %{walkable: {:named, :land}})
+      :ok = :boids.set_grid(world, :land, grid)
+      :ok = :boids.set_field(world, :exit, :boids_field.new(grid, [{10, 1}]))
+      :ok = :boids.set_time_scale(world, 4.0)
+      {:ok, ids} = :boids.populate(world, 5, goer(%{area: {{1, 1}, {5, 7}}, mass: 0.2, tick: 5}))
+
+      assert eventually(fn ->
+               Enum.all?(ids, fn id ->
+                 :boids_vec.dist(elem(:boids.lookup(world, id), 1).pos, {10.5, 1.5}) < 1.5
+               end)
+             end)
+    end
+  end
+
+  describe "a process with another behavior" do
+    test "plan/3 and advance/3 use the fields of the world, and the process keeps them" do
+      {:ok, world} = :boids.start_world(%{bounds: {{0, 0}, {10, 4}}})
+      on_exit(fn -> :boids.stop_world(world) end)
+      field = :boids_field.new(wall(), [{8, 3}])
+      :ok = :boids.set_field(world, :exit, field)
+      # The grid keeps the boid in the land: out of the grid, a field has
+      # no direction.
+      :ok = :boids.set_grid(world, :land, wall())
+      rules = [{:flow, 1.0, field: {:named, :exit}}]
+      options = [pos: {1.5, 3.5}, max_speed: 4.0, mass: 0.2, rules: rules, walkable: {:named, :land}]
+      {:ok, space, boid} = :boids.join(world, options)
+      planned = :boids.plan(space, boid, 0.1)
+      # The way is up, around the wall.
+      assert elem(planned.vel, 1) < -0.2
+
+      assert {2, [grid: :land, field: :exit], %{fields: %{exit: ^field}}} =
+               Process.get({:boids_space, :kept, space.facts})
+
+      arrived = Enum.reduce(1..100, boid, fn _, boid -> :boids.advance(space, boid, 0.1) end)
+      assert :boids_vec.dist(arrived.pos, {8.5, 3.5}) < 1.0
+      assert :boids.leave(space, arrived) == :ok
+      assert Process.get({:boids_space, :kept, space.facts}) == nil
+    end
+  end
+
   property "each open cell with a way to a goal has a direction, and its way ends at a goal" do
     check all(
             cols <- integer(2..12),

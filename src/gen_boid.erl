@@ -82,9 +82,9 @@ give `{stop, Reason, Reply, Boid}`.
 
 `Seen` is a map with what the boid perceives in this step: `neighbors`
 (the boids that it sees, the nearest first), `obstacles` (the obstacles
-to the distance `boids_boid:reach/1`), `grids` (the grids that the boid
-uses, by their names), `bounds`, `wrap`, and `dt` (the seconds of the
-step). `handle_sense/2` can add
+to the distance `boids_boid:reach/1`), `grids` and `fields` (the grids
+and the fields that the boid uses, by their names), `bounds`, `wrap`,
+and `dt` (the seconds of the step). `handle_sense/2` can add
 keys of yours, or change `neighbors`. The rules get `Seen` too, so a rule
 of yours (a function) reads your keys.
 
@@ -468,8 +468,8 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
                 %% and the steps from that search.
                 known => [],
                 steps => 0,
-                %% The grids that the boid read, with the number of the
-                %% changes of the space at that read. They are in this
+                %% The grids and the fields that the boid read, with the
+                %% number of the changes of the space at that read. They are in this
                 %% state, and not in the boid: thus they are not in the row
                 %% of the boid, and they do not go with it to another node.
                 kept => undefined,
@@ -560,8 +560,8 @@ plan(State0 = #{space := Space, boid := Boid0 = #{id := Id, pos := Pos}, mod := 
     Env = #{time_scale := Scale} = boids_space:env(Space, Pos, boids_boid:reach(Boid0)),
     Dt = Dt0 * Scale,
     {Neighbors, State1} = look(State0),
-    {Grids, State} = grids(State1),
-    Seen0 = maps:merge(Env, Tools#{neighbors => Neighbors, dt => Dt, grids => Grids}),
+    {#{grids := Grids, fields := Fields}, State} = named(State1),
+    Seen0 = maps:merge(Env, Tools#{neighbors => Neighbors, dt => Dt, grids => Grids, fields => Fields}),
     maybe
         {ok, Seen, Boid1 = #{id := Id}} ?= sense(Module, Seen0, Boid0),
         {ok, Boid2 = #{id := Id}} ?= decide(Module, Seen, Boid1),
@@ -570,12 +570,13 @@ plan(State0 = #{space := Space, boid := Boid0 = #{id := Id, pos := Pos}, mod := 
         {stop, Reason, Boid} -> {stop, Reason, State#{boid := Boid}}
     end.
 
-%% The grids that the boid uses, from what the process kept. The process
-%% reads them again only after a change of a grid of the world.
-grids(State = #{space := Space, boid := Boid, kept := Kept0}) ->
+%% The grids and the fields that the boid uses, from what the process
+%% kept: the keys grids and fields of Seen. The process reads them again
+%% only after a change of a grid or of a field of the world.
+named(State = #{space := Space, boid := Boid, kept := Kept0}) ->
     case boids_space:named(Space, boids_boid:named(Boid), Kept0) of
-        {#{grids := Grids}, Kept0} -> {Grids, State};
-        {#{grids := Grids}, Kept} -> {Grids, State#{kept := Kept}}
+        {Named, Kept0} -> {Named, State};
+        {Named, Kept} -> {Named, State#{kept := Kept}}
     end.
 
 sense(Module, Seen, Boid) ->

@@ -40,15 +40,17 @@ the read reads the rows of all the obstacles again (specs/Space.tla,
 Check). So a read finds an obstacle that moves one time: not two times,
 and not zero times.
 
-## The grids
+## The grids and the fields
 
 A grid of `boids_grid` (the walls of a world) is one row with a name
-(`set_grid/3`), which only the owner writes too. A grid is a large
-binary, so a process does not read it from the table at each step: it
-keeps the grid that it read (`named/3`). The space has the number of
-the changes of its grids, in an `atomics`. A write changes the row, and
-then adds 1 to the number. A read gets the number, and reads the rows
-again only when the number changed (`specs/Kept.tla`).
+(`set_grid/3`), which only the owner writes too. So is a field of
+`boids_field` (the directions to goals, `set_field/3`). A grid and a
+field are large binaries, so a process does not read them from the
+table at each step: it keeps what it read (`named/3`). The space has
+the number of the changes of its grids and its fields, in an `atomics`.
+A write changes the row, and then adds 1 to the number. A read gets the
+number, and reads the rows again only when the number changed
+(`specs/Kept.tla`).
 
 ## Tiles and nodes
 
@@ -66,7 +68,8 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
 -export([relate/4, related/3, related_to/3, relations/2]).
 -export([show/2, nodes/1, set_nodes/2, home/2, place/3]).
 -export([env/1, env/3, obstacles/1, obstacles/3, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
--export([set_grid/3, remove_grid/2, grid/2, named/2, named/3, forget/1]).
+-export([set_grid/3, remove_grid/2, grid/2, set_field/3, remove_field/2, field/2]).
+-export([named/2, named/3, forget/1]).
 
 -export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0, named/0, kept/0]).
 
@@ -88,7 +91,7 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
     name => atom()
 }.
 -type kind() :: server | process | {ghost, server | process}.
--type named() :: #{grids := #{term() => boids_grid:grid()}}.
+-type named() :: #{grids := #{term() => boids_grid:grid()}, fields := #{term() => boids_field:field()}}.
 -type kept() :: undefined | {Version :: integer(), Keys :: [term()], named()}.
 -type entry() :: #{
     id := term(),
@@ -719,18 +722,46 @@ grid(#{facts := Facts}, Name) ->
     end.
 
 -doc """
+Give the name `Name` to a field (`boids_field`), or put another field
+in its place: the ways after a change of the walls are a new field for
+the same name. A value that is not a field gives the error `badarg`.
+
+Only the owner of the space calls this function, as for `set_grid/3`.
+The write changes the row, and then adds 1 to the number of the changes
+of the space: see `named/3`.
+""".
+-spec set_field(space(), term(), boids_field:field()) -> ok.
+set_field(Space, Name, Field) ->
+    boids_field:is_field(Field) orelse error(badarg),
+    write_named(Space, fun(Facts) -> ets:insert(Facts, {{field, Name}, Field}) end).
+
+-doc "Remove the field with the name `Name`. Only the owner of the space calls this function.".
+-spec remove_field(space(), term()) -> ok.
+remove_field(Space, Name) ->
+    write_named(Space, fun(Facts) -> ets:delete(Facts, {field, Name}) end).
+
+-doc "The field with the name `Name`: `{ok, Field}`, or `error`.".
+-spec field(space(), term()) -> {ok, boids_field:field()} | error.
+field(#{facts := Facts}, Name) ->
+    case ets:lookup(Facts, {field, Name}) of
+        [{_, Field}] -> {ok, Field};
+        [] -> error
+    end.
+
+-doc """
 The facts with a name that a boid uses: `Keys` is the list of
 `boids_boid:named/1`, and the result has a map of the grids by their
-names (`grids`), for the key `grids` of `Seen`. A name with no grid is
-not in the map.
+names (`grids`) and a map of the fields by their names (`fields`), for
+the keys `grids` and `fields` of `Seen`. A name with no grid or no
+field is not in its map.
 
-A grid is a large binary. A process that reads it from the table at
-each step gets a new reference to it at each step, and its garbage
-collection runs at each step. So a process keeps what it read (`Kept`,
-`undefined` at the start), and gives it to the next call. The read
-uses it when the number of the changes of the space and the keys are
-the same: one read of an `atomics`. After a change, the process reads
-the rows again.
+A grid and a field are large binaries. A process that reads one from
+the table at each step gets a new reference to it at each step, and its
+garbage collection runs at each step. So a process keeps what it read
+(`Kept`, `undefined` at the start), and gives it to the next call. The
+read uses it when the number of the changes of the space and the keys
+are the same: one read of an `atomics`. After a change, the process
+reads the rows again.
 
 The read gets the number of the changes before the rows, and a write
 changes the number after the rows. Thus a process cannot keep an old
@@ -739,16 +770,19 @@ row for the number of a new row (`specs/Kept.tla`).
 `Kept` is not a part of a boid: it is not in the row of the boid, and
 it does not go with a boid to another node.
 """.
--spec named(space(), [{grid, term()}], kept()) -> {named(), kept()}.
+-spec named(space(), [{grid | field, term()}], kept()) -> {named(), kept()}.
 named(_Space, [], Kept) ->
-    {#{grids => #{}}, Kept};
+    {#{grids => #{}, fields => #{}}, Kept};
 named(#{facts := Facts, changes := Changes}, Keys, Kept) ->
     Version = atomics:get(Changes, 1),
     case Kept of
         {Version, Keys, Named} ->
             {Named, Kept};
         _ ->
-            Named = #{grids => #{Name => Grid || {grid, Name} <- Keys, {_, Grid} <- ets:lookup(Facts, {grid, Name})}},
+            Named = #{
+                grids => #{Name => Grid || {grid, Name} <- Keys, {_, Grid} <- ets:lookup(Facts, {grid, Name})},
+                fields => #{Name => Field || {field, Name} <- Keys, {_, Field} <- ets:lookup(Facts, {field, Name})}
+            },
             {Named, {Version, Keys, Named}}
     end.
 
@@ -757,7 +791,7 @@ As `named/3`, for a process that has no place for `Kept` in its state:
 the process dictionary of the caller keeps it. `boids:plan/3` and
 `boids:advance/3` have no argument for it.
 """.
--spec named(space(), [{grid, term()}]) -> named().
+-spec named(space(), [{grid | field, term()}]) -> named().
 named(Space = #{facts := Facts}, Keys) ->
     Kept0 = erlang:get({?MODULE, kept, Facts}),
     {Named, Kept} = named(Space, Keys, Kept0),

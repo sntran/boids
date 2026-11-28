@@ -807,7 +807,7 @@ defmodule BoidsSpaceTest do
 
       assert map_size(grids) == 1
       # A boid with no name reads nothing, and keeps nothing.
-      assert :boids_space.named(space, [], :undefined) == {%{grids: %{}}, :undefined}
+      assert :boids_space.named(space, [], :undefined) == {%{grids: %{}, fields: %{}}, :undefined}
     end
 
     test "named/3 reads the rows again only after a change", %{space: space, grid: grid} do
@@ -840,20 +840,106 @@ defmodule BoidsSpaceTest do
     } do
       :boids_space.set_grid(space, :land, grid)
       key = {:boids_space, :kept, space.facts}
-      assert :boids_space.named(space, []) == %{grids: %{}}
+      assert :boids_space.named(space, []) == %{grids: %{}, fields: %{}}
       assert Process.get(key) == nil
-      assert :boids_space.named(space, grid: :land) == %{grids: %{land: grid}}
+      assert :boids_space.named(space, grid: :land) == %{grids: %{land: grid}, fields: %{}}
       assert {1, [grid: :land], %{grids: %{land: ^grid}}} = kept = Process.get(key)
       # No change: the process keeps the same term.
-      assert :boids_space.named(space, grid: :land) == %{grids: %{land: grid}}
+      assert :boids_space.named(space, grid: :land) == %{grids: %{land: grid}, fields: %{}}
       assert Process.get(key) === kept
       :boids_space.remove_grid(space, :land)
-      assert :boids_space.named(space, grid: :land) == %{grids: %{}}
+      assert :boids_space.named(space, grid: :land) == %{grids: %{}, fields: %{}}
       assert {2, _, _} = Process.get(key)
       assert :boids_space.forget(space) == :ok
       assert Process.get(key) == nil
       # Another process has its own.
       Task.await(Task.async(fn -> assert Process.get(key) == nil end))
+    end
+  end
+
+  describe "the fields" do
+    setup do
+      grid = :boids_grid.from_rows(["..#", "..."], [])
+      %{space: :boids_space.new(%{}), grid: grid, field: :boids_field.new(grid, [{0, 0}])}
+    end
+
+    test "set_field/3 gives a name to a field, and remove_field/2 removes it", %{
+      space: space,
+      grid: grid,
+      field: field
+    } do
+      assert :boids_space.field(space, :home) == :error
+      assert :boids_space.set_field(space, :home, field) == :ok
+      assert :boids_space.field(space, :home) == {:ok, field}
+      other = :boids_field.new(grid, [{2, 1}])
+      assert :boids_space.set_field(space, :home, other) == :ok
+      assert :boids_space.field(space, :home) == {:ok, other}
+      assert :boids_space.set_field(space, {:exit, 2}, field) == :ok
+      assert :boids_space.remove_field(space, :home) == :ok
+      assert :boids_space.field(space, :home) == :error
+      assert :boids_space.field(space, {:exit, 2}) == {:ok, field}
+      # Each change adds 1 to the number of the changes, as a change of a grid.
+      assert :atomics.get(space.changes, 1) == 4
+      # A grid and a field can have the same name.
+      :boids_space.set_grid(space, {:exit, 2}, grid)
+      assert :boids_space.field(space, {:exit, 2}) == {:ok, field}
+      assert :boids_space.grid(space, {:exit, 2}) == {:ok, grid}
+    end
+
+    test "set_field/3 refuses a value that is not a field, with no change", %{space: space, grid: grid} do
+      assert_raise ArgumentError, fn -> :boids_space.set_field(space, :home, grid) end
+      assert_raise ArgumentError, fn -> :boids_space.set_field(space, :home, {:boids_field, 1}) end
+      assert :boids_space.field(space, :home) == :error
+      assert :atomics.get(space.changes, 1) == 0
+    end
+
+    test "only the owner of the space writes the fields", %{space: space, field: field} do
+      :boids_space.set_field(space, :home, field)
+
+      Task.await(
+        Task.async(fn ->
+          assert_raise ArgumentError, fn -> :boids_space.set_field(space, :home, field) end
+          assert_raise ArgumentError, fn -> :boids_space.remove_field(space, :home) end
+          # A read needs no message, from each process.
+          assert :boids_space.field(space, :home) == {:ok, field}
+        end)
+      )
+
+      assert :atomics.get(space.changes, 1) == 1
+    end
+
+    test "named/3 gives the fields and the grids of the keys, and reads them again only after a change", %{
+      space: space,
+      grid: grid,
+      field: field
+    } do
+      :boids_space.set_field(space, :home, field)
+      :boids_space.set_grid(space, :land, grid)
+      keys = [grid: :land, field: :home, field: :food]
+      {named, kept} = :boids_space.named(space, keys, :undefined)
+      # A name with no field is absent.
+      assert named == %{grids: %{land: grid}, fields: %{home: field}}
+      assert :boids_space.named(space, keys, kept) == {named, kept}
+      # A row that changes with no new number of changes (not a write of
+      # the library) shows that the read uses what the process kept.
+      other = :boids_field.new(grid, [{2, 1}])
+      :ets.insert(space.facts, {{:field, :home}, other})
+      assert :boids_space.named(space, keys, kept) == {named, kept}
+      # A write of the library: the next read gets the new field.
+      :boids_space.set_field(space, :food, other)
+
+      assert {%{fields: %{home: ^other, food: ^other}, grids: %{land: ^grid}}, kept2} =
+               :boids_space.named(space, keys, kept)
+
+      assert kept2 != kept
+      # A field that goes.
+      :boids_space.remove_field(space, :home)
+      assert {%{fields: fields}, _} = :boids_space.named(space, keys, kept2)
+      assert fields == %{food: other}
+      # The process that calls keeps them too.
+      assert :boids_space.named(space, field: :food) == %{grids: %{}, fields: %{food: other}}
+      assert {4, [field: :food], _} = Process.get({:boids_space, :kept, space.facts})
+      assert :boids_space.forget(space) == :ok
     end
   end
 
