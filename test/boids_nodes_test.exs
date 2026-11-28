@@ -939,6 +939,115 @@ defmodule BoidsClusterTest do
       add.(right, :r4, 110, %{})
       for peer <- [left, right], do: assert(ids.(peer, []) == all ++ [:r4])
     end
+
+    test "an export has the boids of all the nodes, and a world on one node loads it", %{nodes: nodes} do
+      %{world: world, border: border, left: left, right: right} =
+        world(nodes, %{defaults: %{rules: [], tick: :manual, max_speed: 0}})
+
+      add = fn peer, id, x, more ->
+        call(peer, :boids, :add, [world, Map.merge(%{id: id, pos: {border + x, 80}}, more)])
+      end
+
+      {:ok, :l1} = add.(left, :l1, -100, %{})
+      {:ok, :r1} = add.(right, :r1, 90, %{data: :right})
+      {:ok, :l2} = add.(left, :l2, -90, %{})
+      # A boid with a module, and a boid with a reference as its id, on the right node.
+      traveler = %{id: :traveler, pos: {border + 100, 80}, state: %{steps: 0, stop_at: 1.0e9}}
+      {:ok, _} = call(right, :gen_boid, :start, [world, Traveler, traveler])
+      {:ok, ref} = call(right, :boids, :add, [world, %{pos: {border + 110, 80}}])
+      # A boid of the left node knows the id of that boid, and has a reference that is no id.
+      other = make_ref()
+      {:ok, :l3} = add.(left, :l3, -80, %{data: {ref, other}})
+      :ok = call(left, :boids, :relate, [world, :l1, :follows, :r1])
+      :ok = call(right, :boids, :relate, [world, :r1, :follows, :l2])
+      :ok = call(left, :boids, :set_obstacle, [world, :rock, {1, 1}, 1])
+      :ok = call(left, :boids, :step, [world, 1.0])
+
+      order = for %{id: id} <- call(left, :boids, :snapshot, [world]), do: id
+      assert Enum.sort_by(order, &inspect/1) == Enum.sort_by([:l1, :l2, :l3, :r1, :traveler, ref], &inspect/1)
+      save = call(left, :boids, :export, [world])
+      # The export is the same from each node.
+      assert save == call(right, :boids, :export, [world])
+      assert Enum.map(save.boids, & &1.boid.id) == order
+      assert save.not_saved == []
+      assert save.can_fail == [l3: {:live, other}]
+      assert [{{:obstacle, :rock}, {{1, 1}, 1}, _version}] = save.facts
+
+      # The export of one node has the boids of that node, and the facts
+      # of the world. An id of a boid of the other node is an id.
+      local = call(left, :boids, :export, [world, :local])
+      assert Enum.map(local.boids, & &1.boid.id) == [:l1, :l2, :l3]
+      assert local.boids == Enum.filter(save.boids, &(&1.boid.id in [:l1, :l2, :l3]))
+      assert Map.delete(local, :boids) == Map.delete(save, :boids)
+
+      # A world on one node: this node.
+      {:ok, one} = :boids.start_world(defaults: %{rules: [], tick: :manual, max_speed: 0})
+      on_exit(fn -> :boids.stop_world(one) end)
+      assert {:ok, result} = :boids.import(one, :erlang.binary_to_term(:erlang.term_to_binary(save)))
+      assert result == %{started: order, not_started: [], not_related: [], facts: :ok}
+      assert Enum.map(:boids.snapshot(one), & &1.id) == order
+      assert :boids.related(one, :l1, :follows) == [:r1]
+      assert :boids.related(one, :r1, :follows) == [:l2]
+      assert {:ok, %{data: :right}} = :boids.lookup(one, :r1)
+      assert [%{id: :rock, pos: {1, 1}}] = :boids.obstacles(one)
+      # The boid with a module has its state, and continues.
+      assert {:ok, %{state: %{steps: 1}}} = :boids.boid(one, :traveler)
+      :ok = :boids.step(one, 1.0)
+      assert {:ok, %{state: %{steps: 2}}} = :boids.boid(one, :traveler)
+    end
+
+    test "a world on two nodes loads a save: its nodes get the facts, and each boid goes to its node", %{
+      nodes: nodes
+    } do
+      %{world: world, border: border, left: left, right: right, left_node: ln, right_node: rn} =
+        world(nodes, %{defaults: %{rules: [], tick: :manual, max_speed: 0}})
+
+      # A save of a world on one node, with a boid in a tile of each node of the other world.
+      {:ok, one} = :boids.start_world(defaults: %{rules: [], tick: :manual, max_speed: 0})
+      on_exit(fn -> :boids.stop_world(one) end)
+      grid = :boids_grid.new(size: {4, 4}, blocked: [{1, 1}])
+      :ok = :boids.set_grid(one, :land, grid)
+      :ok = :boids.set_obstacle(one, :rock, {1, 1}, 1)
+      :ok = :boids.set_time_scale(one, 0.5)
+      {:ok, :west} = :boids.add(one, id: :west, pos: {border - 30, 80})
+      {:ok, :taken} = :boids.add(one, id: :taken, pos: {border - 40, 80}, data: :saved)
+      {:ok, :east} = :boids.add(one, id: :east, pos: {border + 30, 80})
+      :ok = :boids.relate(one, :east, :follows, :west)
+      save = :boids.export(one)
+      assert length(save.facts) == 3
+
+      # The right node has a boid with an id of the save, far from the left node.
+      {:ok, :taken} = call(right, :boids, :add, [world, %{id: :taken, pos: {border + 100, 80}, data: :here}])
+      assert call(left, :boids, :lookup, [world, :taken]) == :error
+
+      assert {:ok, result} = call(left, :boids, :import, [world, save])
+      assert %{started: [:west, :east], not_related: [], facts: :ok} = result
+      # The world has one boid for each id, on all its nodes: the boid of the world stays.
+      assert result.not_started == [taken: {:exists, :taken}]
+      assert {:ok, %{data: :here}} = call(right, :boids, :lookup, [world, :taken])
+      assert call(left, :boids, :count, [world]) == 3
+      # When the call returns, each node has the facts of the save, with their versions.
+      for peer <- [left, right] do
+        assert call(peer, :boids_world, :facts, [world]) == save.facts
+        assert call(peer, :boids, :grid, [world, :land]) == {:ok, grid}
+        assert [%{id: :rock}] = call(peer, :boids, :obstacles, [world])
+      end
+
+      # The boids start on the node of the import. At its first step, a
+      # boid in a tile of the other node moves there, with its relation.
+      assert kind(left, world, :east) == {:server, ln}
+      :ok = call(left, :boids, :step, [world, 1.0])
+      assert kind(right, world, :east) == {:server, rn}
+      assert kind(left, world, :west) == {:server, ln}
+      assert call(right, :boids, :related, [world, :east, :follows]) == [:west]
+
+      # The boids of the save are in the order of the save.
+      for peer <- [left, right] do
+        ids = Enum.map(call(peer, :boids, :snapshot, [world]), & &1.id)
+        assert ids -- [:taken] == [:west, :east]
+        assert length(ids) == 3
+      end
+    end
   end
 
   describe "the nodes of a world change" do

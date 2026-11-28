@@ -51,6 +51,9 @@ In Elixir, the module is `:boids`:
   flock: it comes from the rules of the boids. `flocks/2` gives the
   flocks of a world, and `graph/2` gives the world as a
   graph of the boids that see each other.
+- `export/1` saves a world as one term: its boids with all their state,
+  their relations, and the facts of the world. `import/2` loads that
+  term into a world.
 
 A function with a world accepts the process of the world,
 its name, or its space: the map of `space/1`. With the map, a read sends
@@ -78,14 +81,35 @@ and a force is in units for each second for each second.
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
 -export([set_grid/3, remove_grid/2, grid/2, set_field/3, remove_field/2, field/2]).
 -export([step/2, step/3, part/2]).
+-export([export/1, export/2, import/2, saved/2]).
 -export([graph/2, graph/3, flocks/2, flocks/3, relate/4, unrelate/4, relations/1, related/3, related_to/3]).
 -export([join/2, sense/2, plan/3, plan/4, commit/2, advance/3, leave/2]).
 
--export_type([world/0, options/0]).
+-export_type([world/0, options/0, export/0, saved/0]).
 
 -type vec() :: boids_vec:vec().
 -type world() :: boids_world:server() | boids_space:space().
 -type options() :: map() | [{atom(), term()}].
+-type export() :: #{
+    format := pos_integer(),
+    boids := [saved()],
+    facts := [{term(), term(), {pos_integer(), node()}}],
+    not_saved := [{Id :: term(), Reason :: term()}],
+    can_fail := [{Id :: term(), {function, function()} | {live, pid() | port() | reference()}}]
+}.
+-type saved() :: #{
+    boid := boids_boid:boid(),
+    mod := module() | undefined,
+    vsn := term(),
+    server := map(),
+    relations := [{Label :: term(), [Id :: term()]}],
+    rand := term(),
+    known := [Id :: term()],
+    steps := non_neg_integer()
+}.
+
+%% The number of the format of an export.
+-define(FORMAT, 1).
 
 %% The random positions that populate/3 tries for one boid, to find a
 %% place where the boid can walk.
@@ -520,7 +544,7 @@ snapshot(World) ->
             %% A boid that moves to another node at this moment can be in
             %% the rows of the two nodes: keep one row for each id.
             Rows = lists:append([boids_space:ordered(Space) | Others]),
-            [Entry || {_, _, _, Entry} <- lists:sort(maps:values(#{Id => Row || Row = {_, _, Id, _} <- Rows}))]
+            [Entry || {_, _, _, _, Entry} <- lists:sort(maps:values(#{Id => Row || Row = {_, _, Id, _, _} <- Rows}))]
     end.
 
 -doc "The boids of a world that are on this node: see `snapshot/1`.".
@@ -803,17 +827,314 @@ part(World, Request) ->
 %% boids. The answers come in each order: the caller takes them as they
 %% come, with no search in its messages.
 request(Pids, Request) ->
-    Sent = lists:foldl(
+    collect(send(Pids, Request)).
+
+%% Each process gets the request before the caller reads an answer.
+send(Pids, Request) ->
+    lists:foldl(
         fun(Pid, Acc) -> gen_server:send_request(Pid, Request, Pid, Acc) end,
         gen_server:reqids_new(),
         Pids
-    ),
-    collect(Sent).
+    ).
 
 collect(Sent) ->
     case gen_server:receive_response(Sent, infinity, true) of
         {_Response, _Pid, Rest} -> collect(Rest);
         no_request -> ok
+    end.
+
+%% --- Save and load ---------------------------------------------------
+
+-doc """
+Save a world: all that a new world needs to continue as this world, as
+one term. `import/2` gives the term to a world.
+
+```erlang
+ok = file:write_file("world.save", term_to_binary(boids:export(World))),
+{ok, Binary} = file:read_file("world.save"),
+{ok, #{not_started := []}} = boids:import(New, binary_to_term(Binary)).
+```
+
+The term is a map:
+
+- `format`: the number of the format of the term: 1.
+- `boids`: the boids, in the order of `snapshot/1`. Each has its module
+  and the version of its module, its boid (the id, the position, the
+  rules, the key `state` and all the other keys), its relations, the
+  options of its process, the state of its random numbers and the
+  neighbors that it knows. This is what a boid takes to another node.
+- `facts`: the facts of the world with their versions, as
+  `boids_world:facts/1` gives them: the obstacles, the grids, the
+  fields and the scale of the time.
+- `not_saved`: the boids that are not in the export, each with the
+  reason: a list of `{Id, Reason}`.
+- `can_fail`: the boids that are in the export and that can fail after a
+  load, each with the reason: a list of `{Id, Reason}`.
+
+The export does not have the options of the world (`start_world/1`):
+start the new world with them. It has only terms: `term_to_binary/1`
+makes a binary of it.
+
+## What is not in the export
+
+| Reason | The boid |
+|---|---|
+| `process` | A process of yours with `join/2`. The library cannot start your process. Start it again: it joins the new world. |
+| `supervised` | A boid below a supervisor of yours (`gen_boid:start_link/3`). Your supervisor starts it, with `init/1`. |
+| another term | The boid stopped during the export: the term is the reason of its end. |
+
+The relations of these boids are not in the export. The name of the
+process of a boid (the option `name` of `gen_boid:start/4`) is not in
+the export.
+
+## What can fail after a load
+
+| Reason | The boid |
+|---|---|
+| `{function, Fun}` | The boid has an anonymous function: a rule, or a term in its state or its data. |
+| `{live, Term}` | The boid has a pid, a port or a reference that is not the id of a boid, and its module has no `handle_load/2`. |
+
+An anonymous function (`fun(...) -> ... end`) is a part of the code of
+its module. After a load, Erlang can call it only when the node has the
+code that made it: the same version of that module. With another
+version of the module, the term is a function, and a call fails with
+`badfun`. Thus `import/2` starts such a boid only on a node that has the
+same code of the module. After one change of a module, a node keeps the
+code before the change as the old code of the module, and Erlang can
+call the function in it. `import/2` does not start the boid then: the
+old code goes at the next change. A function with a name (`fun
+Module:Function/Arity`) always loads: use it for a rule of a boid that
+you save.
+
+A pid, a port, a timer, a monitor and a table of ETS stop with their
+process or their node: after a load, the state of the boid has only an
+old name. `handle_load/2` of the module of the boid makes them again
+(`gen_boid`).
+
+## The moment of an export
+
+All the boids get the request before the first answer. Each boid answers
+between two of its steps: an export never has a boid in the middle of a
+step.
+
+- The export is exact (all the boids at one moment) when no boid makes
+  a step during the export: the boids have `tick => manual`, and no
+  process calls `step/2`.
+- In a world with a clock, each boid answers at its own moment: one boid
+  can be one step after another boid. With the scale of the time 0, no
+  boid moves: the positions and the velocities are of one moment.
+- A step that a boid calculated and did not make (the first part of
+  `step/2`) is not in the export.
+
+For a world on several nodes, the export has the boids of all the nodes
+that have a connection, and the facts of this node. A boid that moves to
+another node during the export can be absent, or in `not_saved`.
+`export(World, local)` has the boids of this node only.
+""".
+-spec export(world()) -> export().
+export(World) ->
+    Space = space(World),
+    pack(Space, lists:append([saved(Space, local) | everywhere(Space, saved, [])]), #{}).
+
+-doc "Save the boids of a world that are on this node, and the facts of the world: see `export/1`.".
+-spec export(world(), local) -> export().
+export(World, local) ->
+    Space = space(World),
+    %% A reference in a boid of this node can be the id of a boid of
+    %% another node.
+    pack(Space, saved(Space, local), #{Id => [] || #{id := Id} <- snapshot(Space)}).
+
+-doc false.
+%% The boids of this node for an export, each with its order: what a new
+%% process needs to continue as the boid, or the reason why an export
+%% cannot have the boid.
+saved(World, local) ->
+    Space = space(World),
+    Rows = boids_space:ordered(Space),
+    Answers = answers(send([Pid || {_, _, _, server, #{pid := Pid}} <- Rows], save), #{}),
+    [{Number, Node, Id, saved(Kind, Pid, Answers)} || {Number, Node, Id, Kind, #{pid := Pid}} <- Rows].
+
+answers(Sent, Answers) ->
+    case gen_server:receive_response(Sent, infinity, true) of
+        {Answer, Pid, Rest} -> answers(Rest, Answers#{Pid => Answer});
+        no_request -> Answers
+    end.
+
+%% The library cannot start a process of the user (join/2).
+saved(process, _Pid, _Answers) -> {error, process};
+saved(server, Pid, Answers) -> answer(map_get(Pid, Answers)).
+
+%% The answer of a gen_boid to the request save. A boid that stopped
+%% before its answer gives {error, {Reason, Pid}}, with the reason of
+%% its end. A boid below a supervisor of the user answers with an error
+%% of the same form.
+answer({reply, Answer}) -> answer(Answer);
+answer({ok, Saved}) -> {ok, Saved};
+answer({error, {Reason, _Pid}}) -> {error, Reason}.
+
+%% The export of the rows of saved/2. `Others` has the ids of the boids
+%% of the world that are not in the rows.
+pack(Space, Rows0, Others) ->
+    %% A boid that moves to another node at this moment can be in the
+    %% rows of the two nodes, and one of the two can be the row of a
+    %% process that stopped. Keep one row for each id: the row that has
+    %% the boid, when there is one.
+    Failed = #{Id => Row || Row = {_, _, Id, {error, _}} <- Rows0},
+    Rows = lists:sort(maps:values(maps:merge(Failed, #{Id => Row || Row = {_, _, Id, {ok, _}} <- Rows0}))),
+    Boids = [Saved || {_, _, _, {ok, Saved}} <- Rows],
+    Ids = maps:merge(Others, #{Id => [] || {_, _, Id, _} <- Rows}),
+    #{
+        format => ?FORMAT,
+        boids => Boids,
+        facts => boids_world:facts(Space),
+        not_saved => [{Id, Reason} || {_, _, Id, {error, Reason}} <- Rows],
+        can_fail => lists:append([doubts(Saved, Ids) || Saved <- Boids])
+    }.
+
+%% What can fail after a load of a saved boid. `Ids` has the ids of the
+%% boids of the world: an id can be a reference or a pid.
+doubts(#{boid := Boid = #{id := Id}, mod := Module}, Ids) ->
+    Special = lists:usort(special(Boid, [])),
+    %% handle_load/2 of the module makes again what the state needs.
+    Remakes =
+        Module =/= undefined andalso code:ensure_loaded(Module) =:= {module, Module} andalso
+            erlang:function_exported(Module, handle_load, 2),
+    [{Id, {function, Fun}} || Fun <- Special, is_function(Fun), erlang:fun_info(Fun, type) =:= {type, local}] ++
+        [{Id, {live, Term}} || not Remakes, Term <- Special, not is_function(Term), not is_map_key(Term, Ids)].
+
+%% The functions, the pids, the ports and the references in a term: what
+%% needs code after a load, and what a save cannot keep alive.
+special(Fun, Acc) when is_function(Fun) ->
+    %% A function also has the terms that it keeps from the code that
+    %% made it.
+    {env, Kept} = erlang:fun_info(Fun, env),
+    special(Kept, [Fun | Acc]);
+special(Term, Acc) when is_pid(Term); is_port(Term); is_reference(Term) ->
+    [Term | Acc];
+special([Head | Tail], Acc) ->
+    special(Tail, special(Head, Acc));
+special(Tuple, Acc) when is_tuple(Tuple) ->
+    special(tuple_to_list(Tuple), Acc);
+special(Map, Acc) when is_map(Map) ->
+    maps:fold(fun(Key, Value, Found) -> special(Value, special(Key, Found)) end, Acc, Map);
+special(_Term, Acc) ->
+    Acc.
+
+-doc """
+Load a save into a world: start again each boid of an export of
+`export/1`, and give the facts of the export to the world.
+
+1. The facts come first, with their versions, as the facts of a node
+   that comes to the world (`boids_world:merge/2`). In a world on
+   several nodes, all the nodes get them. A fact that the world changed
+   after the save stays as the world has it.
+2. Then each boid starts, below the supervisor of the world of this
+   node, with its module, its id and all its state. `init/1` of its
+   module does not run. `handle_load/2` runs when the module has it
+   (`gen_boid`): it can change the state of an older save, and make
+   again what the state needs.
+3. The relations come last.
+
+The boids start one after the other, in the order of the export:
+`snapshot/1` gives them in that order, after the boids that the world
+had. In a world on several nodes, a boid moves to the node of its place
+at its first step, as a boid of `add/2`.
+
+The result is `{ok, Result}`, with a map:
+
+- `started`: the ids of the boids that started.
+- `not_started`: `{Id, Reason}` for each boid that did not start.
+- `not_related`: `{{From, Label, To}, Reason}` for each relation of a
+  boid that started that the world refused (`relate/4`): for example
+  `{not_found, To}` when the boid `To` is not in the world.
+- `facts`: `ok`, or `{error, timeout}` when a node gave no answer in the
+  time limit (`timeout/0`).
+
+| Reason | The boid did not start |
+|---|---|
+| `{exists, Id}` | The world has a boid with this id, on this node or on another node. That boid stays as it is. |
+| `{no_module, Module}` | The node cannot load the module of the boid. |
+| `{function, Fun}` | The node cannot call a function of the boid: an anonymous function of another version of its module, or a function of a module that the node does not have. |
+| `{bad_option, {pos, Pos}}` | The positions of the world have another size: two numbers, or three. |
+| another term | `handle_load/2` gave `{stop, Reason}`. |
+
+An export with another number of format gives `{error, {format,
+Number}}`, and the world does not change.
+
+In a world with a clock, each boid starts its clock when it starts: the
+first boid moves before the last boid starts. For a start of all the
+boids at one moment, set the scale of the time to 0 before the import
+(`set_time_scale/2`), and to its value after it.
+
+Read only a binary that you made: `binary_to_term/1` of a binary of
+another person can make atoms without limit, and a function in it is
+code that the boid calls.
+""".
+-spec import(world(), export()) ->
+    {ok, #{
+        started := [Id :: term()],
+        not_started := [{Id :: term(), Reason :: term()}],
+        not_related := [{{From :: term(), Label :: term(), To :: term()}, Reason :: term()}],
+        facts := ok | {error, badarg | timeout}
+    }}
+    | {error, {format, term()}}.
+import(World, #{format := ?FORMAT, boids := Boids, facts := Facts}) ->
+    Space = space(World),
+    %% The facts come first: a boid that starts finds its grid and its
+    %% field.
+    Learned = boids_world:merge(Space, Facts),
+    %% The ids of the boids of the other nodes of the world: the world of
+    %% this node knows only its own boids.
+    Taken = #{Id => [] || {_, _, Id, _, _} <- lists:append(everywhere(Space, ordered, []))},
+    Results = [
+        {Id, Relations, load(Space, Saved, Taken)}
+     || Saved = #{boid := #{id := Id}, relations := Relations} <- Boids
+    ],
+    %% The relations come after all the boids: a relation needs its two
+    %% boids.
+    NotRelated = [
+        {{From, Label, To}, Reason}
+     || {From, Relations, {ok, _Pid}} <- Results,
+        {Label, Others} <- Relations,
+        To <- Others,
+        {error, Reason} <- [relate(Space, From, Label, To)]
+    ],
+    {ok, #{
+        started => [Id || {Id, _Relations, {ok, _Pid}} <- Results],
+        not_started => [{Id, Reason} || {Id, _Relations, {error, Reason}} <- Results],
+        not_related => NotRelated,
+        facts => Learned
+    }};
+import(_World, #{format := Format}) ->
+    {error, {format, Format}}.
+
+%% Start a saved boid, when no other node has a boid with its id, and
+%% this node can call each function that the boid has.
+load(_Space, #{boid := #{id := Id}}, Taken) when is_map_key(Id, Taken) ->
+    {error, {exists, Id}};
+load(Space, Saved = #{boid := Boid}, _Taken) ->
+    case [Fun || Fun <- special(Boid, []), is_function(Fun), not callable(Fun)] of
+        [] -> gen_boid:load(Space, Saved);
+        [Fun | _] -> {error, {function, Fun}}
+    end.
+
+%% Erlang can call a function from a binary when the node has its code.
+%% A function with a name needs its module and its function. An
+%% anonymous function needs the code that made it: new_uniq is the MD5
+%% of that code. The node can also have that code as the old code of the
+%% module, after a change of the module: that does not last, so it is not
+%% sufficient here.
+callable(Fun) ->
+    {module, Module} = erlang:fun_info(Fun, module),
+    Loaded = code:ensure_loaded(Module) =:= {module, Module},
+    case erlang:fun_info(Fun, type) of
+        {type, external} ->
+            {name, Name} = erlang:fun_info(Fun, name),
+            {arity, Arity} = erlang:fun_info(Fun, arity),
+            Loaded andalso erlang:function_exported(Module, Name, Arity);
+        {type, local} ->
+            {new_uniq, Md5} = erlang:fun_info(Fun, new_uniq),
+            Loaded andalso Module:module_info(md5) =:= Md5
     end.
 
 %% --- The flocks, and the world as a graph ----------------------

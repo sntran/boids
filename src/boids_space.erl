@@ -327,28 +327,28 @@ not change at a step (`ordered/1`).
 """.
 -spec all(space()) -> [entry()].
 all(Space) ->
-    [Entry || {_Number, _Node, _Id, Entry} <- ordered(Space)].
+    [Entry || {_Number, _Node, _Id, _Kind, Entry} <- ordered(Space)].
 
 -doc """
-The rows of `all/1`, each with its order and its id: a sorted list of
-`{Number, Node, Id, Entry}`. The order of a boid is `{Number, Node}`:
-the space gives the next number to a boid that comes, and the node is
-the node where the boid came to the world. A boid keeps its order when
-it moves to another node, so the rows of several nodes are in one order
-after a sort.
+The rows of `all/1`, each with its order, its id and its kind: a sorted
+list of `{Number, Node, Id, Kind, Entry}`. The order of a boid is
+`{Number, Node}`: the space gives the next number to a boid that comes,
+and the node is the node where the boid came to the world. A boid keeps
+its order when it moves to another node, so the rows of several nodes
+are in one order after a sort.
 
 Two boids can have the same order only after a node started its world
 again: thus the id is the third part of the sort.
 """.
--spec ordered(space()) -> [{pos_integer(), node(), term(), entry()}].
+-spec ordered(space()) -> [{pos_integer(), node(), term(), server | process, entry()}].
 ordered(#{rows := Rows}) ->
     %% Only the row of a boid of this node has an order: the row of a
     %% boid of another node, which shows itself near a border, has none.
     %% The table makes the maps, and the sort compares the number first:
     %% that is faster than a sort of the rows.
     Entry = #{id => '$1', pos => '$2', vel => '$3', group => '$4', data => '$5', pid => '$6'},
-    Head = {'$1', '$2', '$3', '$4', '$5', '_', '$6', '_', {'$7', '$8'}, '_'},
-    lists:sort(ets:select(Rows, [{Head, [], [{{'$7', '$8', '$1', Entry}}]}])).
+    Head = {'$1', '$2', '$3', '$4', '$5', '_', '$6', '$7', {'$8', '$9'}, '_'},
+    lists:sort(ets:select(Rows, [{Head, [], [{{'$8', '$9', '$1', '$7', Entry}}]}])).
 
 -doc """
 The order of a boid of this node (`ordered/1`), or `new` for an id that

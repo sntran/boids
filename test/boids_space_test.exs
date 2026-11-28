@@ -247,11 +247,12 @@ defmodule BoidsSpaceTest do
       assert ids(space) == [first | rest] ++ [second]
     end
 
-    test "ordered/1 gives each row with its order and its id", %{space: space} do
-      :boids_space.insert_new(space, entry(:b, {1, 2}, %{pid: self()}))
+    test "ordered/1 gives each row with its order, its id and its kind", %{space: space} do
+      :boids_space.insert_new(space, entry(:b, {1, 2}, %{pid: self(), kind: :server}))
       :boids_space.insert_new(space, entry(:a, {3, 4}))
       node = node()
-      assert [{1, ^node, :b, b}, {2, ^node, :a, %{id: :a, pos: {3, 4}}}] = :boids_space.ordered(space)
+      assert [{1, ^node, :b, :server, b}, {2, ^node, :a, :process, a}] = :boids_space.ordered(space)
+      assert %{id: :a, pos: {3, 4}} = a
       assert {:ok, b} == :boids_space.lookup(space, :b)
       assert :boids_space.order(space, :a) == {2, node}
       assert :boids_space.order(space, :nobody) == :new

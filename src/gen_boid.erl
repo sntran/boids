@@ -76,9 +76,10 @@ follows its rules.
 | `handle_cast(Request, Boid)` | `cast/2` sent a request. | `{noreply, Boid}` |
 | `handle_info(Info, Boid)` | Another message came. | `{noreply, Boid}` |
 | `terminate(Reason, Boid)` | The process stops. | |
+| `handle_load(Vsn, Boid)` | The boid starts again from a save (`boids:import/2`). | `{ok, Boid}` or `{stop, Reason}` |
 
-Each callback can also give `{stop, Reason, Boid}`. `handle_call/3` can
-give `{stop, Reason, Reply, Boid}`.
+Each callback of a step or of a message can also give `{stop, Reason,
+Boid}`. `handle_call/3` can give `{stop, Reason, Reply, Boid}`.
 
 `Seen` is a map with what the boid perceives in this step: `neighbors`
 (the boids that it sees, the nearest first), `obstacles` (the obstacles
@@ -113,6 +114,45 @@ steps, it reads the rows of the neighbors that it found: it sees them
 where they are now, and it does not see a boid that came near after the
 search. A world of such boids makes about 15 % more steps in a
 second.
+
+## A boid that starts again from a save
+
+`boids:export/1` saves a boid with all its state, and `boids:import/2`
+starts it again: a new process with the same module, the same id and the
+same boid. `init/1` does not run. When the module has `handle_load/2`,
+it runs in the new process, before the boid is in the world:
+
+```erlang
+-vsn(2).
+
+%% A save of the version 1 had no energy.
+handle_load(1, Boid = #{state := State}) ->
+    handle_load(2, Boid#{state := State#{energy => 10.0}});
+%% The table of this boid stopped with its first process.
+handle_load(2, Boid = #{state := State}) ->
+    {ok, Boid#{state := State#{seen := ets:new(seen, [])}}}.
+```
+
+The callback has two jobs:
+
+- **Change the state of an older save.** `Vsn` is the version of the
+  module that saved the boid: the value of its attribute `vsn`, as
+  `code_change/3` of OTP gets it. Give your module a `vsn`, and change
+  it when the form of the state changes. Without the attribute, the
+  version is a number that the compiler makes from the code.
+- **Make again what the state needs and what a save cannot keep.** A
+  table of ETS, a process, a timer, a port or a monitor of the first
+  process is not there after a load. The state has only their old
+  names. A setting that `init/1` gave to the process is not there too,
+  for example `process_flag(trap_exit, true)`.
+
+It gives `{ok, Boid}`, with the same id. With `{stop, Reason}`, the boid
+does not start, and `boids:import/2` tells the reason. `terminate/2`
+does not run then.
+
+The callback is not `init/1` with other arguments. `init/1` gives
+options, which the library checks and completes. `handle_load/2` gets
+the boid that was saved, complete, and gives it back.
 
 ## The supervisor of a boid
 
@@ -173,7 +213,7 @@ about 3 KB. Without it, the process holds about 100 KB.
 -export([call/2, call/3, cast/2, reply/2]).
 -export([add_rule/2, delete_rule/2, which_rules/1]).
 -export([options/1, start_child/5]).
--export([adopt/2, start_in_world/4]).
+-export([adopt/2, load/2, start_in_world/4]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -export_type([boid/0, start_options/0, seen/0]).
@@ -200,9 +240,18 @@ about 3 KB. Without it, the process holds about 100 KB.
 -callback handle_info(Info :: term(), Boid :: boids_boid:boid()) ->
     {noreply, boids_boid:boid()} | {stop, Reason :: term(), boids_boid:boid()}.
 -callback terminate(Reason :: term(), Boid :: boids_boid:boid()) -> term().
+-callback handle_load(Vsn :: term(), Boid :: boids_boid:boid()) ->
+    {ok, boids_boid:boid()} | {stop, Reason :: term()}.
 
 -optional_callbacks([
-    handle_sense/2, handle_decide/2, handle_act/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2
+    handle_sense/2,
+    handle_decide/2,
+    handle_act/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    handle_load/2
 ]).
 
 -define(KEYS, [tick, max_dt, search, seed, priority, hibernate]).
@@ -369,6 +418,13 @@ adopt(World, Moving) ->
     Space = boids:space(World),
     start_child(boids_world:boid_sup(Space), Space, '$adopt', Moving, #{}).
 
+-doc false.
+%% Start a boid that comes from a save (boids:import/2), below the
+%% supervisor of the world of this node.
+load(World, Saved) ->
+    Space = boids:space(World),
+    start_child(boids_world:boid_sup(Space), Space, '$load', Saved, #{}).
+
 -doc """
 Divide the options into those of the process and those of the boid.
 A bad option of the process gives the error `{bad_option, {Key, Value}}`.
@@ -414,6 +470,25 @@ init({World, '$adopt', Moving = #{boid := Boid = #{id := Id}, mod := Module, ser
             {ok, State};
         Stop ->
             Stop
+    end;
+%% A boid that comes from a save, with all its state. It is a new boid
+%% of this world: it made no move from node to node, and it gets a new
+%% place in the order of the boids.
+init({World, '$load', Saved = #{boid := Boid0, mod := Module, vsn := Vsn, server := Server}, Roams}) ->
+    Space = boids:space(World),
+    maybe
+        %% Without the code of its module, the boid has no callback.
+        true ?= Module =:= undefined orelse code:ensure_loaded(Module) =:= {module, Module},
+        {ok, Boid} ?= loaded(Module, Vsn, Boid0),
+        {ok, State} ?= join(Space, Server#{mod => Module, moves => 0, roams => Roams}, Boid, new),
+        %% The random numbers of the boid continue, and it knows the
+        %% neighbors of its last search.
+        #{rand := Rand, known := Known, steps := Steps} = Saved,
+        _ = Rand =:= undefined orelse rand:seed(Rand),
+        {ok, State#{known := Known, steps := Steps}}
+    else
+        false -> {stop, {shutdown, {no_module, Module}}};
+        Stop -> Stop
     end;
 init({World, Module, Args, Roams}) ->
     %% A boid with no module (boids:add/2) has its options as arguments.
@@ -488,9 +563,55 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}, 
             {stop, {shutdown, Reason}}
     end.
 
+%% The boid after handle_load/2 of its module, when the module has it.
+loaded(Module, Vsn, Boid = #{id := Id}) ->
+    case exported(Module, handle_load, 2) of
+        true ->
+            case Module:handle_load(Vsn, Boid) of
+                {ok, Loaded = #{id := Id}} -> {ok, Loaded};
+                {stop, Reason} -> {stop, {shutdown, Reason}};
+                Other -> {stop, {shutdown, {bad_return_value, Other}}}
+            end;
+        false ->
+            {ok, Boid}
+    end.
+
+%% The version of a module, as code_change/3 of OTP gets it: the term of
+%% its attribute vsn, or the list of the terms when it has more than one.
+vsn(undefined) ->
+    undefined;
+vsn(Module) ->
+    case [Vsn || {vsn, Vsns} <- Module:module_info(attributes), Vsn <- Vsns] of
+        [Vsn] -> Vsn;
+        Vsns -> Vsns
+    end.
+
 -doc false.
 handle_call(get, _From, State = #{boid := Boid}) ->
     {reply, Boid, State};
+handle_call(save, _From, State = #{roams := false}) ->
+    %% The supervisor of the user starts this boid again, with init/1 of
+    %% its module. The answer has the form of the error of a process
+    %% that stopped: {Reason, Pid}.
+    {reply, {error, {supervised, self()}}, State};
+handle_call(save, _From, State = #{space := Space, boid := Boid = #{id := Id}, mod := Module}) ->
+    %% All that a new process needs to continue as this process
+    %% (boids:export/1): what a move to another node takes, and the
+    %% neighbors that the boid knows. A step that the boid calculated and
+    %% did not make (pending) is not in it.
+    Saved = #{
+        boid => Boid,
+        mod => Module,
+        vsn => vsn(Module),
+        server => maps:without([seed], maps:with(?KEYS, State)),
+        %% In the order of the labels: two saves of one world are equal.
+        relations => lists:sort(boids_space:relations(Space, Id)),
+        rand => rand:export_seed(),
+        known => maps:get(known, State),
+        steps => maps:get(steps, State)
+    },
+    %% After the answer, the copy of the boid is garbage.
+    rest({reply, {ok, Saved}, State});
 handle_call({change, Function, Arg}, _From, State = #{boid := Boid}) ->
     try boids_boid:Function(Boid, Arg) of
         Changed -> {reply, ok, keep(Changed, State)}

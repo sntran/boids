@@ -169,4 +169,58 @@ defmodule Boids.TestBoids do
     @impl true
     def init(options), do: {:ok, options}
   end
+
+  defmodule Keeper do
+    @moduledoc """
+    A boid with a table of ETS in its state: the table has the number of
+    its steps. `handle_load/2` makes the table again after a load. It
+    also changes the state of a save of the version 1, which had no key
+    `loads`. With the key `answer` in the state, it gives that answer.
+    """
+    @behaviour :gen_boid
+    @vsn 2
+
+    @impl true
+    def init(options) do
+      state = %{table: table(0), steps: 0, loads: 0}
+      {:ok, Map.merge(%{pos: {0, 0}, rules: [], tick: :manual, state: state}, Map.new(options))}
+    end
+
+    @impl true
+    def handle_act(%{state: state} = boid),
+      do: {:ok, %{boid | state: %{state | steps: :ets.update_counter(state.table, :steps, 1)}}}
+
+    @impl true
+    def handle_call(:state, _from, boid), do: {:reply, boid.state, boid}
+    def handle_call(:steps, _from, boid), do: {:reply, :ets.lookup_element(boid.state.table, :steps, 2), boid}
+
+    @impl true
+    def handle_load(1, %{state: state} = boid), do: handle_load(2, %{boid | state: Map.put(state, :loads, 0)})
+    def handle_load(2, %{state: %{answer: answer}}), do: answer
+
+    def handle_load(2, %{state: state} = boid),
+      do: {:ok, %{boid | state: %{state | table: table(state.steps), loads: state.loads + 1}}}
+
+    @doc "A table with a number of steps."
+    def table(steps) do
+      table = :ets.new(:keeper, [])
+      :ets.insert(table, {:steps, steps})
+      table
+    end
+  end
+
+  defmodule Loose do
+    @moduledoc "A boid as `Keeper`, with no `handle_load/2`: after a load, it does not have its table."
+    @behaviour :gen_boid
+
+    @impl true
+    def init(options) do
+      state = %{table: Keeper.table(0), steps: 0}
+      {:ok, Map.merge(%{pos: {0, 0}, rules: [], tick: :manual, state: state}, Map.new(options))}
+    end
+
+    @impl true
+    def handle_act(%{state: state} = boid),
+      do: {:ok, %{boid | state: %{state | steps: :ets.update_counter(state.table, :steps, 1)}}}
+  end
 end
