@@ -49,7 +49,7 @@ defmodule BoidsExamples.Games.LastSeenTest do
     # The stalls are drawn by the page, and are not stones.
     assert header.rocks == []
     assert length(:boids.obstacles(scene.space)) == 7
-    assert Enum.map(header.zones, &List.last/1) == ["West gate", "East gate", "North gate", "South gate"]
+    assert Enum.map(header.zones, &List.last/1) == ["Mill gate", "Bridge gate", "Hill gate", "Port gate"]
     assert length(header.kinds) == 7
 
     status = Director.status(scene.director)

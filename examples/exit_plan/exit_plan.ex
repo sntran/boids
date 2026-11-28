@@ -75,7 +75,7 @@ defmodule BoidsExamples.Games.ExitPlan do
         good: 22.0,
         limit: 60.0,
         hint:
-          "The people are near the right door, and the left door is empty. A sign sends people to the doors in its direction."
+          "The people are near one door, and the other door is empty. A sign sends people to the doors in its direction."
       },
       %{
         name: "Three doors",

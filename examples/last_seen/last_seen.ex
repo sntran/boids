@@ -67,10 +67,10 @@ defmodule BoidsExamples.Games.LastSeen do
   @doc "The gates of the square: a thief with the loot of the level leaves through one of them."
   def gates do
     [
-      {"West gate", {0, 37, 5, 53}},
-      {"East gate", {155, 37, 160, 53}},
-      {"North gate", {70, 85, 90, 90}},
-      {"South gate", {70, 0, 90, 5}}
+      {"Mill gate", {0, 37, 5, 53}},
+      {"Bridge gate", {155, 37, 160, 53}},
+      {"Hill gate", {70, 85, 90, 90}},
+      {"Port gate", {70, 0, 90, 5}}
     ]
   end
 

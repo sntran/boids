@@ -33,7 +33,7 @@ defmodule BoidsExamples.Games.NightFold do
       title: "Night Fold",
       tag: "Keys",
       pitch:
-        "You are a sheepdog. Bring the scattered sheep into the fold before the night: they run from you, so come from the right side. At night, wolves take the sheep that are outside.",
+        "You are a sheepdog. Bring the scattered sheep into the fold before the night: they run from you, so come from the correct side. At night, wolves take the sheep that are outside.",
       shows:
         "one boid that a person controls moves a whole flock, because each sheep flees from it, and the flock is something that no sheep is (flocks/2).",
       icon:

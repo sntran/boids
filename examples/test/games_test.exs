@@ -83,6 +83,19 @@ defmodule BoidsExamples.GamesTest do
     end
   end
 
+  # The right side of the world is the top of a phone in portrait.
+  test "a text of a game names a thing, not a direction" do
+    for game <- @games do
+      %{slug: slug, pitch: pitch, shows: shows} = game.info()
+
+      for text <- [game.page(), pitch, shows] do
+        refute text =~
+                 ~r/\b(on|to|from|at) the (right|left)\b|\b(right|left) (side|door)\b|\b(North|South|East|West) gate\b/,
+               "#{slug}: a text names a direction"
+      end
+    end
+  end
+
   test "the server gives the list, the page of each game, and moves the old addresses" do
     assert {200, _, body} = get("/showcases")
     for game <- @games, do: assert(body =~ game.info().title)

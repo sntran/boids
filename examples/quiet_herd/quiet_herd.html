@@ -58,7 +58,7 @@
   </div>
 
   <div class="panel" id="panel" data-state="sneaking" aria-live="polite">
-    <p class="message" id="message">Reach the far side, on the right. Walk slowly, and use the tall grass.</p>
+    <p class="message" id="message">Reach the far side. Walk slowly, and use the tall grass.</p>
     <span class="rating" id="rating" hidden></span>
     <button class="main" id="go" type="button" hidden>Next field</button>
   </div>
@@ -108,7 +108,7 @@
     if (more.state === "sneaking") {
       el("message").textContent = more.alarm
         ? "The alarm rings: the guards come to the place of the fear. Hide in the grass, or go fast."
-        : "Field " + more.field + " of " + fields + ". Reach the far side, on the right. More than " + (more.limit - 1) + " afraid deer at one time ring the alarm.";
+        : "Field " + more.field + " of " + fields + ". Reach the far side. More than " + (more.limit - 1) + " afraid deer at one time ring the alarm.";
       rating.hidden = true;
       go.hidden = true;
     } else if (more.state === "caught") {
