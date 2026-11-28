@@ -5,3 +5,5 @@
 /.wrangler/
 /_build/
 /deps/
+# The pictures of phone.js.
+/phone/

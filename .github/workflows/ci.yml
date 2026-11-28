@@ -82,11 +82,12 @@ jobs:
       - run: rebar3 dialyzer
 
   # The examples (examples/): the games of the showcases, the site that
-  # shows them, and the build of the file that runs on Cloudflare
-  # Workers. The tests start each game with the library of this commit,
-  # so a change of the library that breaks an example fails here.
+  # shows them, the build of the file that runs on Cloudflare Workers,
+  # and the check of each page on a phone. The tests start each game with
+  # the library of this commit, so a change of the library that breaks an
+  # example fails here.
   examples:
-    name: Examples (tests of each game, build of app.com)
+    name: Examples (tests of each game, build of app.com, pages on a phone)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -112,6 +113,22 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run build
+      # Each page on a phone, in Chromium (phone.js, see examples/README.md).
+      # This job runs at each push, so also for each commit of a pull
+      # request, and for a pull request of a fork. The pictures of the pages
+      # stay with the run: look at them before a deploy.
+      - name: Check the pages on a phone
+        run: |
+          npx playwright install --with-deps chromium
+          PORT=4000 mix run --no-halt > server.log 2>&1 &
+          npm run phone -- http://localhost:4000 phone
+      - name: Keep the pictures of the pages on a phone
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: phone-pictures
+          path: examples/phone/
+          if-no-files-found: ignore
 
   # The tests with beam.com as the only tool: Erlang/OTP, Elixir, Mix, Hex
   # and rebar3 in one file (https://github.com/sntran/BEAM.com).
