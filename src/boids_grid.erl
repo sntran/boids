@@ -41,7 +41,7 @@ copy of its cells. A change of a cell (`set_cost/3`) makes a new grid.
 
 -export([new/1, from_rows/2, is_grid/1]).
 -export([size/1, cell_size/1, origin/1, bounds/1]).
--export([cell/2, center/2, cost/2, blocked/2, walkable/2, set_cost/3]).
+-export([cell/2, center/2, cost/2, costs/1, blocked/2, walkable/2, set_cost/3]).
 -export([steps/2, hit/3, hit/4, nearest/2, nearest/3, walls/3, walls/4]).
 
 -export_type([grid/0, cell/0]).
@@ -90,7 +90,7 @@ new(Opts0) ->
     Grid = make(Opts, Cols, Rows, binary:copy(<<1.0:64/float>>, Cols * Rows)),
     Blocked = blocked_option(Grid, maps:get(blocked, Opts, [])),
     [error({bad_option, {blocked, Cell}}) || Cell <- Blocked, not inside(Grid, Cell)],
-    Costs = costs(maps:get(costs, Opts, [])),
+    Costs = cost_list(maps:get(costs, Opts, [])),
     [
         error({bad_option, {costs, Cost}})
      || Cost = {Cell, Value} <- Costs, not (inside(Grid, Cell) andalso is_cost(Value))
@@ -113,11 +113,11 @@ blocked_option(Grid = #boids_grid{cols = Cols, rows = Rows}, Blocked) when is_fu
 blocked_option(_Grid, Blocked) ->
     error({bad_option, {blocked, Blocked}}).
 
-costs(Costs) when is_map(Costs) -> maps:to_list(Costs);
-costs(Costs) when is_list(Costs) ->
+cost_list(Costs) when is_map(Costs) -> maps:to_list(Costs);
+cost_list(Costs) when is_list(Costs) ->
     [error({bad_option, {costs, Cost}}) || Cost <- Costs, not is_tuple(Cost) orelse tuple_size(Cost) =/= 2],
     Costs;
-costs(Costs) ->
+cost_list(Costs) ->
     error({bad_option, {costs, Costs}}).
 
 -doc """
@@ -215,6 +215,14 @@ cost(Grid = #boids_grid{cols = Cols, cells = Cells}, Cell = {I, J}) ->
         false ->
             infinity
     end.
+
+-doc """
+The costs of all the cells, row after row: a binary with a float of 64
+bits for each cell. A blocked cell has the value -1.0. A function that
+reads all the grid (`boids_field:new/2`) uses it.
+""".
+-spec costs(grid()) -> binary().
+costs(#boids_grid{cells = Cells}) -> Cells.
 
 -doc "True for a blocked cell, and for a cell outside the grid.".
 -spec blocked(grid(), cell()) -> boolean().

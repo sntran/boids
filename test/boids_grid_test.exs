@@ -117,6 +117,14 @@ defmodule BoidsGridTest do
     refute :boids_grid.walkable(grid, {-0.1, 0.5})
   end
 
+  test "costs/1 gives the costs of all the cells, row after row" do
+    costs = for <<cost::float-64 <- :boids_grid.costs(river())>>, do: cost
+    assert length(costs) == 8 * 6
+    assert Enum.take(costs, 12) == List.duplicate(1.0, 11) ++ [3.0]
+    # A blocked cell has the value -1.0.
+    assert Enum.slice(costs, 24, 8) == [-1.0, -1.0, -1.0, -1.0, 1.0, -1.0, -1.0, -1.0]
+  end
+
   test "set_cost/3 makes a new grid, and refuses a bad cell or cost" do
     grid = river()
     closed = :boids_grid.set_cost(grid, [{4, 3}, {4, 4}], :blocked)
