@@ -32,22 +32,8 @@ water? = fn i, j -> j in 14..20 and not (i >= bridge and i < bridge + width) end
 {nest, food} = {{20, 4}, {12, 29}}
 
 # The land as a grid: the library asks one time for each cell if it is
-# water. A cell near the water costs more (3 beside it, 2 at two cells):
-# the ways keep away from the water where they can, and the boids do
-# not all go around the same corner at the ends of the bridge.
-near = fn i, j ->
-  Enum.min([3 | for(di <- -2..2, dj <- -2..2, water?.(i + di, j + dj), do: max(abs(di), abs(dj)))])
-end
-
-costs =
-  for i <- 0..(cols - 1),
-      j <- 0..(rows - 1),
-      not water?.(i, j),
-      near.(i, j) < 3,
-      do: {{i, j}, 4 - near.(i, j)}
-
-land =
-  :boids_grid.new(size: {cols, rows}, blocked: fn {x, y} -> water?.(floor(x), floor(y)) end, costs: costs)
+# water.
+land = :boids_grid.new(size: {cols, rows}, blocked: fn {x, y} -> water?.(floor(x), floor(y)) end)
 
 :persistent_term.put(:bridge, %{mode: mode, water?: water?, ends: %{food: food, nest: nest}})
 
@@ -112,9 +98,13 @@ end
 :rand.seed(:exsss, {1, 2, 3})
 {:ok, world} = :boids.start_world(%{bounds: {{0.0, 0.0}, {cols * 1.0, rows * 1.0}}, cell_size: 2.0})
 :ok = :boids.set_grid(world, :land, land)
-# The ways to each end: one field for all the boids that go there.
-:ok = :boids.set_field(world, :food, :boids_field.new(land, [food]))
-:ok = :boids.set_field(world, :nest, :boids_field.new(land, [nest]))
+# The ways to each end: one field for all the boids that go there. The
+# margin makes a cell near the water cost more (3 times beside it, 2
+# times at two cells): the ways keep away from the water where they
+# can, and the boids do not all go around the same corner at the ends
+# of the bridge.
+:ok = :boids.set_field(world, :food, :boids_field.new(land, [food], margin: [3, 2]))
+:ok = :boids.set_field(world, :nest, :boids_field.new(land, [nest], margin: [3, 2]))
 
 for seed <- 1..count do
   {:ok, _} = :gen_boid.start(world, Carrier, {{16 + :rand.uniform() * 8, 2 + :rand.uniform() * 5}, seed})
