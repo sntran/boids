@@ -8,6 +8,7 @@ defmodule BoidsSpecTest do
 
   @members Path.expand("../specs/MCMembers.tla", __DIR__)
   @space Path.expand("../specs/MCSpace.tla", __DIR__)
+  @kept Path.expand("../specs/MCKept.tla", __DIR__)
   @step Path.expand("../specs/MCStep.tla", __DIR__)
   @move Path.expand("../specs/MCMove.tla", __DIR__)
   @three Path.expand("../specs/MCMoveThree.tla", __DIR__)
@@ -86,6 +87,23 @@ defmodule BoidsSpecTest do
     test "a reader that does not check the version does not find an obstacle that moves" do
       assert {:error, %{kind: :invariant, property: "Exact"}, _} =
                Checker.check(@space, config(@space, "NoCheck"))
+    end
+  end
+
+  describe "specs/Kept.tla: a fact of a world that the boids keep" do
+    test "when no write runs, a boid that uses what it kept has the row of the table" do
+      assert {:ok, %{distinct_states: states}} = Checker.check(@kept)
+      assert states > 1000
+    end
+
+    test "a write that changes the number of the changes before the row leaves an old row with a boid" do
+      assert {:error, %{kind: :invariant, property: "Fresh"}, _} =
+               Checker.check(@kept, config(@kept, "Early"))
+    end
+
+    test "a read that gets the number of the changes after the row keeps an old row" do
+      assert {:error, %{kind: :invariant, property: "Fresh"}, _} =
+               Checker.check(@kept, config(@kept, "Late"))
     end
   end
 

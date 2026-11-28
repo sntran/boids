@@ -40,6 +40,16 @@ the read reads the rows of all the obstacles again (specs/Space.tla,
 Check). So a read finds an obstacle that moves one time: not two times,
 and not zero times.
 
+## The grids
+
+A grid of `boids_grid` (the walls of a world) is one row with a name
+(`set_grid/3`), which only the owner writes too. A grid is a large
+binary, so a process does not read it from the table at each step: it
+keeps the grid that it read (`named/3`). The space has the number of
+the changes of its grids, in an `atomics`. A write changes the row, and
+then adds 1 to the number. A read gets the number, and reads the rows
+again only when the number changed (`specs/Kept.tla`).
+
 ## Tiles and nodes
 
 A world can be on several nodes. The tables of a space are of one node.
@@ -56,8 +66,9 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
 -export([relate/4, related/3, related_to/3, relations/2]).
 -export([show/2, nodes/1, set_nodes/2, home/2, place/3]).
 -export([env/1, env/3, obstacles/1, obstacles/3, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
+-export([set_grid/3, remove_grid/2, grid/2, named/2, named/3, forget/1]).
 
--export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0]).
+-export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0, named/0, kept/0]).
 
 -type vec() :: boids_vec:vec().
 -type space() :: #{
@@ -70,12 +81,15 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
     wrap := boolean(),
     links := ets:table(),
     facts := ets:table(),
+    changes := atomics:atomics_ref(),
     obstacle_cells := ets:table(),
     defaults := map(),
     tile := number(),
     name => atom()
 }.
 -type kind() :: server | process | {ghost, server | process}.
+-type named() :: #{grids := #{term() => boids_grid:grid()}}.
+-type kept() :: undefined | {Version :: integer(), Keys :: [term()], named()}.
 -type entry() :: #{
     id := term(),
     pos := vec(),
@@ -145,9 +159,13 @@ new(Opts) ->
     ets:insert(Meta, {nodes, [node()]}),
     %% The facts of the world, which only the owner writes: the scale of
     %% the time, one row for each obstacle ({{obstacle, Id}, Pos,
-    %% Radius}), and the version of the obstacles.
+    %% Radius}), the version of the obstacles, and one row for each
+    %% grid ({{grid, Name}, Grid}).
     Facts = ets:new(boids_facts, [set, protected, {read_concurrency, true}]),
     ets:insert(Facts, [{time_scale, 1.0}, {obstacle_version, 0}]),
+    %% The number of the changes of the facts that a process keeps (the
+    %% grids): a process reads them again only after a change.
+    Changes = atomics:new(1, []),
     %% The index of the obstacles: {Cell, Id} for each cell that an
     %% obstacle touches, {{coarse, Cell}, Id} for each coarse cell, and
     %% {large, Id} for a large obstacle. Only the owner writes it.
@@ -162,6 +180,7 @@ new(Opts) ->
         meta => Meta,
         links => Links,
         facts => Facts,
+        changes => Changes,
         obstacle_cells => Cells,
         owner => self()
     }.
@@ -661,6 +680,94 @@ Only the owner of the space calls this function, as for
 set_time_scale(#{facts := Facts}, Scale) ->
     is_number(Scale) andalso Scale >= 0 andalso Scale =< 1.0e100 orelse error(badarg),
     ets:insert(Facts, {time_scale, Scale}),
+    ok.
+
+%% --- The facts with a name --------------------------------------------
+
+-doc """
+Give the name `Name` to a grid (`boids_grid`), or put another grid in
+its place: a door that opens is a new grid for the same name. A value
+that is not a grid gives the error `badarg`.
+
+Only the owner of the space calls this function, as for
+`set_obstacle/4`. The write changes the row, and then adds 1 to the
+number of the changes of the space: see `named/3`.
+""".
+-spec set_grid(space(), term(), boids_grid:grid()) -> ok.
+set_grid(Space, Name, Grid) ->
+    boids_grid:is_grid(Grid) orelse error(badarg),
+    write_named(Space, fun(Facts) -> ets:insert(Facts, {{grid, Name}, Grid}) end).
+
+-doc "Remove the grid with the name `Name`. Only the owner of the space calls this function.".
+-spec remove_grid(space(), term()) -> ok.
+remove_grid(Space, Name) ->
+    write_named(Space, fun(Facts) -> ets:delete(Facts, {grid, Name}) end).
+
+%% A write of a fact that the processes keep. The row first, then the
+%% number of the changes: a process that reads the number before the
+%% rows cannot keep an old row with the new number (specs/Kept.tla).
+write_named(#{facts := Facts, changes := Changes}, Write) ->
+    Write(Facts),
+    atomics:add(Changes, 1, 1).
+
+-doc "The grid with the name `Name`: `{ok, Grid}`, or `error`.".
+-spec grid(space(), term()) -> {ok, boids_grid:grid()} | error.
+grid(#{facts := Facts}, Name) ->
+    case ets:lookup(Facts, {grid, Name}) of
+        [{_, Grid}] -> {ok, Grid};
+        [] -> error
+    end.
+
+-doc """
+The facts with a name that a boid uses: `Keys` is the list of
+`boids_boid:named/1`, and the result has a map of the grids by their
+names (`grids`), for the key `grids` of `Seen`. A name with no grid is
+not in the map.
+
+A grid is a large binary. A process that reads it from the table at
+each step gets a new reference to it at each step, and its garbage
+collection runs at each step. So a process keeps what it read (`Kept`,
+`undefined` at the start), and gives it to the next call. The read
+uses it when the number of the changes of the space and the keys are
+the same: one read of an `atomics`. After a change, the process reads
+the rows again.
+
+The read gets the number of the changes before the rows, and a write
+changes the number after the rows. Thus a process cannot keep an old
+row for the number of a new row (`specs/Kept.tla`).
+
+`Kept` is not a part of a boid: it is not in the row of the boid, and
+it does not go with a boid to another node.
+""".
+-spec named(space(), [{grid, term()}], kept()) -> {named(), kept()}.
+named(_Space, [], Kept) ->
+    {#{grids => #{}}, Kept};
+named(#{facts := Facts, changes := Changes}, Keys, Kept) ->
+    Version = atomics:get(Changes, 1),
+    case Kept of
+        {Version, Keys, Named} ->
+            {Named, Kept};
+        _ ->
+            Named = #{grids => #{Name => Grid || {grid, Name} <- Keys, {_, Grid} <- ets:lookup(Facts, {grid, Name})}},
+            {Named, {Version, Keys, Named}}
+    end.
+
+-doc """
+As `named/3`, for a process that has no place for `Kept` in its state:
+the process dictionary of the caller keeps it. `boids:plan/3` and
+`boids:advance/3` have no argument for it.
+""".
+-spec named(space(), [{grid, term()}]) -> named().
+named(Space = #{facts := Facts}, Keys) ->
+    Kept0 = erlang:get({?MODULE, kept, Facts}),
+    {Named, Kept} = named(Space, Keys, Kept0),
+    Kept =:= Kept0 orelse erlang:put({?MODULE, kept, Facts}, Kept),
+    Named.
+
+-doc "Remove what `named/2` kept for this space in the process that calls.".
+-spec forget(space()) -> ok.
+forget(#{facts := Facts}) ->
+    erlang:erase({?MODULE, kept, Facts}),
     ok.
 
 %% --- The nodes of a world ---------------------------------------------

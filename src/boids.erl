@@ -76,6 +76,7 @@ and a force is in units for each second for each second.
 -export([add_rule/3, delete_rule/3, which_rules/2]).
 -export([snapshot/1, snapshot/2, lookup/2, near/3, count/1, count/2]).
 -export([set_obstacle/4, remove_obstacle/2, obstacles/1, set_time_scale/2]).
+-export([set_grid/3, remove_grid/2, grid/2]).
 -export([step/2, step/3, part/2]).
 -export([graph/2, graph/3, flocks/2, flocks/3, relate/4, unrelate/4, relations/1, related/3, related_to/3]).
 -export([join/2, sense/2, plan/3, plan/4, commit/2, advance/3, leave/2]).
@@ -543,9 +544,10 @@ The process of the world writes the obstacle: this function sends it
 one message, and waits for its answer. A center or a radius that is not
 good gives the error `badarg`.
 
-The obstacles and the scale of the time are the facts of a world. In a
-world on several nodes, a change of a fact is for all the nodes
-(`set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`):
+The obstacles, the scale of the time and the grids are the facts of a
+world. In a world on several nodes, a change of a fact is for all the
+nodes (`set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`,
+`set_grid/3`, `remove_grid/2`):
 
 - When the result is `ok`, each node that has a connection to this node
   has the change.
@@ -580,6 +582,49 @@ set(World, Key, Value) ->
         {error, badarg} -> error(badarg);
         Result -> Result
     end.
+
+-doc """
+Give the name `Name` to a grid (`boids_grid`): the places of the world
+where a boid can walk, and where it cannot. A boid with the option
+`walkable => {named, Name}` does not go into a blocked cell of this
+grid (`boids_boid`). A world can have many grids, each with its name:
+walls for people, water for cars.
+
+Call the function again to change the grid: a door that opens or closes
+is a new grid for the same name (`boids_grid:set_cost/3`). All the
+boids with that name use the new grid at their next step. A boid that
+is then in a blocked cell goes to the nearest walkable place at its
+next step.
+
+The process of the world writes the grid, as for `set_obstacle/4`. A
+value that is not a grid gives the error `badarg`.
+
+A grid is a fact of the world: in a world on several nodes, the change
+is for all the nodes, and the result can be `{error, timeout}` (see
+`set_obstacle/4`). A boid that moves to another node finds the same
+walls there. The function sends the grid to each node: a grid of 200 x
+200 cells is 320 KB.
+""".
+-spec set_grid(world(), term(), boids_grid:grid()) -> ok | {error, timeout}.
+set_grid(World, Name, Grid) ->
+    set(World, {grid, Name}, Grid).
+
+-doc """
+Remove the grid with the name `Name` from a world, on all its nodes: see
+`set_grid/3`. The boids with that name have no limit.
+""".
+-spec remove_grid(world(), term()) -> ok | {error, timeout}.
+remove_grid(World, Name) ->
+    set(World, {grid, Name}, none).
+
+-doc """
+The grid with the name `Name` of a world: `{ok, Grid}`, or `error`. The
+function reads the tables of this node with no message: each node of a
+world has all the grids.
+""".
+-spec grid(world(), term()) -> {ok, boids_grid:grid()} | error.
+grid(World, Name) ->
+    boids_space:grid(space(World), Name).
 
 -doc """
 All the obstacles of a world, in the order of their ids: a list of maps

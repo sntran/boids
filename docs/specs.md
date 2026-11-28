@@ -27,6 +27,7 @@ world to the design.
 |---|---|---|
 | `specs/Members.tla` | The members of a world: a process asks for the row of an id, the world watches it, and the row goes when the process stops, leaves, or is removed. | `boids_world`, `boids:add/2`, `boids:remove/2`, `boids:join/2`, `boids:leave/2` |
 | `specs/Space.tla` | A write of a row against a read of the grid, and a write of an obstacle against a read of the obstacles near a boid. | `boids_space:put/2`, `boids_space:near/3`, `boids_world:set/3`, `boids_space:set_obstacle/4`, `boids_space:obstacles/3` |
+| `specs/Kept.tla` | A write of a grid against the boids that keep the grid that they read. | `boids_world:set/3`, `boids_space:set_grid/3`, `boids_space:named/3` |
 | `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 | `specs/Move.tla` | The move of a boid to another node of its world. | `gen_boid` (`settle`, `adopt/2`), `boids_world` (the join of a boid that comes, `moved/3`) |
 | `specs/MoveMany.tla` | The same move in a world on three nodes: a boid with a process on each node, and a decision for two processes at a time. | `boids_world` (`adopt/5`, the messages `census`, `claim` and `yield`) |
@@ -162,6 +163,54 @@ why only one process writes the obstacles. `MCSpaceNoCheck.cfg` has a
 reader that does not check the version: `Exact` violated (the reader
 reads the new cell before the obstacle comes, and the old cell after it
 goes).
+
+### `specs/Kept.tla`
+
+A grid of a world is one row of the table of the facts: a large binary.
+A process that reads such a row from the table at each step gets a new
+reference to the binary at each step, and its garbage collection then
+runs at each step. So a boid keeps what it read. The space has the
+number of the changes of these rows (an `atomics`). At each step, a
+boid reads the number, and it reads the rows again only when the number
+changed.
+
+The owner of the space is the only writer, as for the obstacles: in a
+world, the process of the world of the node. It writes a change of a
+caller of its node, and a change that comes from another node
+(`Facts.tla`), with the same function (`write/3` of `boids_world`), one
+after the other. So the number of the changes also gets 1 more for a
+grid that comes from another node, and the boids of this node read
+that grid at their next step. The model is about one node: each node
+has its own row and its own number.
+
+The constants: the boids (`Boids`), the writes of the owner (`Writes`, a
+bound of the model), and two guards for the fault models.
+
+| Action | When it can occur | In the code |
+|---|---|---|
+| `Change` | No write runs: the row changes. | `ets:insert/2` or `ets:delete/2` in `set_grid/3` and `remove_grid/2`, for a change of this node (`set/3`) and for a fact of another node (`learn/2`) |
+| `Close` | The row changed: the number of the changes gets 1 more. | `atomics:add/3` |
+| `Look(b)` | The number that `b` keeps is not the number of the space: `b` reads the number. | `atomics:get/2` in `named/3` |
+| `Keep(b)` | `b` read the number: it reads the row, and keeps the two. | `ets:lookup/2` |
+
+A boid whose number is the number of the space uses what it kept, and
+reads no row: that is no action of the model.
+
+| Invariant or property | What it says | The fault that it stops |
+|---|---|---|
+| `Fresh` | When no write runs, a boid that uses what it kept has the row of the table. | A boid that goes through a door that closed, for all the time. |
+| `Settles` | After the last write, each boid comes to keep the last row. | |
+
+A step of a boid during a write can use the row before the write or the
+row after it. The model permits the two.
+
+The small model (`specs/MCKept.tla`): three boids, and three writes.
+`MCKeptEarly.cfg` changes the number before the row: `Fresh` violated (a
+boid reads the new number and the old row, and the row then changes).
+`MCKeptLate.cfg` reads the row before the number: `Fresh` violated (the
+row and the number change between the two reads). In the two fault
+models, the boid has the number of the space, so it does not read the
+row again.
 
 ### `specs/Step.tla`
 
@@ -467,9 +516,9 @@ join, the process of the row stopped, or not. The result is `:ok`,
 
 - A model is small: three processes, two boids, two cells, three nodes.
   A fault that needs more is not found.
-- `Space.tla`, `Step.tla`, `Move.tla` and `Facts.tla` have no replay.
-  Their tie to the code is the comments in `boids_space`, `gen_boid`
-  and `boids_world`, and the tests of the behavior
+- `Space.tla`, `Kept.tla`, `Step.tla`, `Move.tla` and `Facts.tla` have
+  no replay. Their tie to the code is the comments in `boids_space`,
+  `gen_boid` and `boids_world`, and the tests of the behavior
   (`test/boids_space_test.exs`, `test/boids_test.exs`,
   `test/boids_nodes_test.exs`, `test/boids_facts_test.exs`).
 - `Move.tla` has two nodes and one call of a node on its way at one
@@ -533,6 +582,13 @@ join, the process of the row stopped, or not. The result is `:ok`,
 - In `Facts.tla`, a mark goes only when each node took it. In the code,
   a mark goes after a time (`boids:mark_time/0`): see the limit of
   `MCFactsEarly.cfg`.
+- In `Kept.tla`, the boids keep one row. In the code, a boid can keep
+  more than one grid: it reads the number of the changes one time, and
+  then one row for each name. `Kept.tla` has one node. In a world on
+  several nodes, each node has a space with its own number of changes,
+  and one writer: the process of the world of that node, which makes
+  the writes of its node and the writes of the facts that it gets from
+  the other nodes (`Facts.tla`), one after the other.
 
 ## How to run the checks
 
@@ -542,8 +598,8 @@ mix test test/boids_spec_test.exs test/boids_members_spec_test.exs
 ```
 
 A change of `boids_world`, of `boids_space:put/2` and `near/3`, of the
-writes and the reads of the obstacles, of the two parts of
-`boids:step/2`, of the facts of a world on several nodes, or of the
-move of a boid to another node
+writes and the reads of the obstacles, of the write and the kept read
+of a grid, of the two parts of `boids:step/2`, of the facts of a world
+on several nodes, or of the move of a boid to another node
 changes its specification in the same commit, and the tests of the
 models and the replay must pass.

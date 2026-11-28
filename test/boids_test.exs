@@ -1078,6 +1078,36 @@ defmodule BoidsTest do
     end
   end
 
+  describe "the grids" do
+    test "set_grid/3, grid/2 and remove_grid/2" do
+      world = world()
+      grid = :boids_grid.from_rows(["..#", "..."], [])
+      assert :boids.grid(world, :land) == :error
+      assert :boids.set_grid(world, :land, grid) == :ok
+      assert :boids.grid(world, :land) == {:ok, grid}
+      door = :boids_grid.set_cost(grid, [{2, 0}], 1)
+      assert :boids.set_grid(:boids.space(world), :land, door) == :ok
+      assert :boids.grid(:boids.space(world), :land) == {:ok, door}
+      assert :boids.remove_grid(world, :land) == :ok
+      assert :boids.grid(world, :land) == :error
+      # A grid that is not there: nothing to remove.
+      assert :boids.remove_grid(world, :land) == :ok
+    end
+
+    test "the process of the world writes the grids, and a bad grid is an error of the caller" do
+      world = world()
+      grid = :boids_grid.new(size: {2, 2})
+      assert :boids_world.set(world, {:grid, :land}, grid) == :ok
+      assert :boids.grid(world, :land) == {:ok, grid}
+      assert :boids_world.set(world, {:grid, :land}, :walls) == {:error, :badarg}
+      assert_raise ArgumentError, fn -> :boids.set_grid(world, :land, [{0, 0}]) end
+      assert Process.alive?(world)
+      assert :boids.grid(world, :land) == {:ok, grid}
+      assert :boids_world.set(world, {:grid, :land}, :none) == :ok
+      assert :boids.grid(world, :land) == :error
+    end
+  end
+
   describe "the obstacles" do
     test "set_obstacle/4, obstacles/1 and remove_obstacle/2" do
       world = world()
