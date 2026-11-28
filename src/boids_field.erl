@@ -46,7 +46,8 @@ when the grid is large, and give the result to `boids:set_field/3`.
 ## What the functions give
 
 - `direction/2`: a vector of length 1 down the costs, or zero at a goal
-  and in a place with no way to a goal.
+  and in a place with no way to a goal. In a blocked cell, it is the
+  direction out of the wall.
 - `distance/2`: the cost of the way to the nearest goal, or `infinity`.
   A way across one cell with the cost 1 costs 1: with costs of 1, the
   cost is the length of the way in cells, so multiply it by
@@ -65,7 +66,7 @@ copy.
 
 -export([new/2, new/3, is_field/1]).
 -export([size/1, cell_size/1, origin/1, goals/1]).
--export([direction/2, distance/2, path/2]).
+-export([direction/2, distance/2, has_way/2, path/2]).
 
 -export_type([field/0]).
 
@@ -81,8 +82,8 @@ copy.
     %% float of 32 bits. A cell with no way has -1.0.
     costs :: binary(),
     %% The direction of each cell: two signed bytes, a vector of the
-    %% length 127. A goal has 0 and 0. A cell with no way has -128 and
-    %% -128.
+    %% length 127. A goal has 0 and 0. A blocked cell has -128 and
+    %% -128, and an open cell with no way has -128 and 0.
     dirs :: binary()
 }).
 
@@ -105,8 +106,12 @@ copy.
 %% The number of buckets that `next/3` examines one after the other.
 -define(NEAR, 64).
 
-%% The direction of a cell with no way, in the binary.
+%% The first byte of the direction of a cell with no way, in the
+%% binary: a blocked cell has it two times.
 -define(NONE, -128).
+%% The largest distance, in cells on each axis, from a blocked cell to
+%% the cell where `direction/2` leads a boid out.
+-define(OUT, 3).
 %% The length of a step of `path/2`, in cells.
 -define(STEP, 0.5).
 
@@ -365,8 +370,10 @@ solve(Ix, Cost, Values, Width) ->
 %% smaller neighbor, when it is smaller than the cell. These are the
 %% neighbors that gave the cell its value (solve/4). A blocked cell has
 %% no value, so a direction does not go into a wall.
-down(_Ix, ?FAR, _Values, _Costs, _Width, _Start, _Top) ->
+down(Ix, ?FAR, _Values, Costs, _Width, _Start, _Top) when element(Ix, Costs) =:= 0 ->
     {?NONE, ?NONE};
+down(_Ix, ?FAR, _Values, _Costs, _Width, _Start, _Top) ->
+    {?NONE, 0};
 down(_Ix, 0, _Values, _Costs, _Width, _Start, _Top) ->
     {0, 0};
 down(Ix, Value, Values, Costs, Width, Start, Top) ->
@@ -432,8 +439,17 @@ goals(#boids_field{goals = Goals}) -> Goals.
 
 -doc """
 The direction of the way to the nearest goal at a position: a vector of
-length 1. It is zero in the cell of a goal, in a blocked cell, in a
-place with no way to a goal, and outside the grid.
+length 1, or zero. What it is in each kind of place:
+
+| The position is in | The direction |
+|---|---|
+| the cell of a goal | Zero: the boid is there. |
+| an open cell with a way to a goal | The direction of the way (see below). |
+| an open cell with no way to a goal | Zero. |
+| a blocked cell | To the center of the nearest open cell with a way to a goal, at 3 cells or less on each axis. Zero when there is no such cell. |
+| a place outside the grid | The same as in a blocked cell. |
+
+In an open cell with a way:
 
 - **In open land,** the direction is smooth from cell to cell: it is the
   mean of the directions of the 4 cells around the position, each with
@@ -444,6 +460,11 @@ place with no way to a goal, and outside the grid.
   from a wall where it can, goes around a corner and not across it, and
   stays in the middle of a narrow way. A move in the direction, to that
   center, does not go into a blocked cell.
+
+A field does not stop a boid at a wall: only the option `walkable` of a
+boid does that. A boid with no such limit that other forces push into a
+blocked cell, or out of the grid, gets the direction out of it, so it
+comes back to the way.
 """.
 -spec direction(field(), vec()) -> {float(), float()}.
 direction(Field = #boids_field{cell_size = Side, origin = {Ox, Oy}}, {X, Y}) ->
@@ -452,6 +473,8 @@ direction(Field = #boids_field{cell_size = Side, origin = {Ox, Oy}}, {X, Y}) ->
     I = floor(Gx),
     J = floor(Gy),
     case vector(Field, I, J) of
+        wall ->
+            out(Field, I, J, Gx, Gy);
         none ->
             {0.0, 0.0};
         {0, 0} ->
@@ -490,10 +513,32 @@ beside(Part) when Part < 0.5 -> {-1, 0.5 - Part};
 beside(Part) -> {1, Part - 0.5}.
 
 %% The cell across the corner has a part only with the two cells beside
-%% it open: a way does not cut the corner of a blocked cell.
-across(none, _Below, _Across) -> none;
-across(_Beside, none, _Across) -> none;
+%% it open: a way does not cut the corner of a blocked cell. A cell with
+%% no way is an atom (none or wall).
+across(Beside, Below, _Across) when is_atom(Beside); is_atom(Below) -> none;
+across(_Beside, _Below, wall) -> none;
 across(_Beside, _Below, Across) -> Across.
+
+%% The direction from a place in a blocked cell, or out of the grid, to
+%% the center of the nearest cell with a way to a goal, at ?OUT cells or
+%% less on each axis. Zero when there is no such cell.
+out(Field, I, J, Gx, Gy) ->
+    Cells = [
+        {Dx * Dx + Dy * Dy, Dx, Dy}
+     || Di <- lists:seq(-?OUT, ?OUT),
+        Dj <- lists:seq(-?OUT, ?OUT),
+        is_tuple(vector(Field, I + Di, J + Dj)),
+        Dx <- [I + Di + 0.5 - Gx],
+        Dy <- [J + Dj + 0.5 - Gy]
+    ],
+    case Cells of
+        [] ->
+            {0.0, 0.0};
+        _ ->
+            {Square, Dx, Dy} = lists:min(Cells),
+            Length = math:sqrt(Square),
+            {Dx / Length, Dy / Length}
+    end.
 
 %% The direction from a place in a cell (Px and Py, from 0 to 1) to the
 %% center of the next cell of the way: the cell beside or across a
@@ -510,16 +555,28 @@ toward(Part) when Part > 48 -> 1;
 toward(Part) when Part < -48 -> -1;
 toward(_Part) -> 0.
 
-%% The direction of a cell as it is in the binary, or none for a cell
-%% with no way and for a cell outside the grid.
+%% The direction of a cell as it is in the binary: a vector of the
+%% length 127 for an open cell with a way (0 and 0 for a goal), none
+%% for an open cell with no way, and wall for a blocked cell and for a
+%% cell outside the grid.
 vector(#boids_field{cols = Cols, rows = Rows, dirs = Dirs}, I, J) when I >= 0, I < Cols, J >= 0, J < Rows ->
     Offset = (J * Cols + I) * 2,
     case Dirs of
+        <<_:Offset/binary, ?NONE:8/signed, ?NONE:8/signed, _/binary>> -> wall;
         <<_:Offset/binary, ?NONE:8/signed, _/binary>> -> none;
         <<_:Offset/binary, Dx:8/signed, Dy:8/signed, _/binary>> -> {Dx, Dy}
     end;
 vector(_Field, _I, _J) ->
-    none.
+    wall.
+
+-doc """
+True when a position is in an open cell with a way to a goal (the cell
+of a goal too): `distance/2` gives a number there. It is false in a
+blocked cell, in an open cell with no way, and outside the grid.
+""".
+-spec has_way(field(), vec()) -> boolean().
+has_way(Field = #boids_field{cell_size = Side, origin = {Ox, Oy}}, {X, Y}) ->
+    is_tuple(vector(Field, floor((X - Ox) / Side), floor((Y - Oy) / Side))).
 
 -doc """
 The cost of the way from a position to the nearest goal, or `infinity`

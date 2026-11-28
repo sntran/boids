@@ -514,24 +514,86 @@ defmodule BoidsFieldTest do
   end
 
   describe "a place with no way" do
-    test "has no direction, a distance of infinity, and an empty way" do
-      # A room with no door, and the land around it.
-      grid = :boids_grid.from_rows([".......", ".#####.", ".#...#.", ".#...#.", ".#####.", "......."], [])
+    # A room with no door, and the land around it.
+    @room [".......", ".#####.", ".#...#.", ".#...#.", ".#####.", "......."]
+
+    test "an open cell with no way has no direction, a distance of infinity, and an empty way" do
+      grid = :boids_grid.from_rows(@room, [])
       field = :boids_field.new(grid, [{0, 0}])
 
-      for place <- [{3.5, 2.5}, {2.1, 3.9}, {1.5, 1.5}, {-0.5, 0.5}, {3.0, 6.5}, {7.0, 0.0}] do
+      for place <- [{3.5, 2.5}, {2.1, 3.9}, {4.9, 2.1}] do
+        assert :boids_grid.walkable(grid, place)
+        refute :boids_field.has_way(field, place)
         assert :boids_field.direction(field, place) == {0.0, 0.0}
         assert :boids_field.distance(field, place) == :infinity
         assert :boids_field.path(field, place) == []
       end
 
       # The land around the room has ways.
+      assert :boids_field.has_way(field, {6.5, 5.5})
+      assert :boids_field.has_way(field, {0.5, 0.5})
       assert :boids_field.distance(field, {6.5, 5.5}) < 12
       assert List.last(:boids_field.path(field, {6.5, 5.5})) == {0.5, 0.5}
       # A goal in the room: the land has no way.
       room = :boids_field.new(grid, [{3, 3}])
       assert :boids_field.distance(room, {0.5, 0.5}) == :infinity
+      assert :boids_field.direction(room, {0.5, 0.5}) == {0.0, 0.0}
       assert_in_delta :boids_field.distance(room, {2.5, 2.5}), :math.sqrt(2), 1.0e-4
+    end
+
+    test "a blocked cell has the direction out of it, to the nearest open cell with a way" do
+      grid = :boids_grid.from_rows(@room, [])
+      field = :boids_field.new(grid, [{0, 0}])
+
+      # In the wall of the room: out to the land, not into the room,
+      # which has no way.
+      for {place, to} <- [
+            {{1.5, 1.4}, {1.5, 0.5}},
+            {{1.2, 2.5}, {0.5, 2.5}},
+            {{5.6, 3.5}, {6.5, 3.5}},
+            {{3.5, 4.6}, {3.5, 5.5}}
+          ] do
+        refute :boids_grid.walkable(grid, place)
+        refute :boids_field.has_way(field, place)
+        assert_vec(:boids_field.direction(field, place), :boids_vec.normalize(:boids_vec.sub(to, place)))
+        assert :boids_field.distance(field, place) == :infinity
+        assert :boids_field.path(field, place) == []
+      end
+
+      # At the same distance from two cells: one of them, the same each time.
+      assert :boids_field.direction(field, {1.5, 1.5}) == {-1.0, 0.0}
+      # The cell of a goal is such a cell too.
+      door = :boids_field.new(:boids_grid.from_rows(["..#.."], []), [{3, 0}])
+      assert :boids_field.direction(door, {2.9, 0.5}) == {1.0, 0.0}
+    end
+
+    test "a place outside the grid has the direction to the grid, at 3 cells or less" do
+      grid = :boids_grid.from_rows(@room, [])
+      field = :boids_field.new(grid, [{0, 0}])
+      assert_vec(:boids_field.direction(field, {-0.5, 0.5}), {1.0, 0.0})
+      assert_vec(:boids_field.direction(field, {3.5, 6.2}), {0.0, -1.0})
+      assert_vec(:boids_field.direction(field, {7.5, -0.5}), {-:math.sqrt(0.5), :math.sqrt(0.5)})
+      assert_vec(:boids_field.direction(field, {-2.5, 2.5}), {1.0, 0.0})
+      # At more than 3 cells: no direction.
+      assert :boids_field.direction(field, {-3.5, 2.5}) == {0.0, 0.0}
+      assert :boids_field.direction(field, {3.5, 9.5}) == {0.0, 0.0}
+
+      for place <- [{-0.5, 0.5}, {3.5, 6.2}, {-3.5, 2.5}] do
+        refute :boids_field.has_way(field, place)
+        assert :boids_field.distance(field, place) == :infinity
+        assert :boids_field.path(field, place) == []
+      end
+    end
+
+    test "a blocked cell at more than 3 cells from each open cell with a way has no direction" do
+      # A block of 9 x 9 cells in a land of 11 x 11.
+      grid = :boids_grid.new(size: {11, 11}, blocked: for(i <- 1..9, j <- 1..9, do: {i, j}))
+      field = :boids_field.new(grid, [{0, 0}])
+      assert :boids_field.direction(field, {5.5, 5.5}) == {0.0, 0.0}
+      assert :boids_field.direction(field, {4.5, 6.5}) == {0.0, 0.0}
+      # At 3 cells from the land at its left.
+      assert_vec(:boids_field.direction(field, {3.5, 5.5}), {-1.0, 0.0})
+      assert_vec(:boids_field.direction(field, {2.2, 8.5}), :boids_vec.normalize({0.5 - 2.2, 0.0}))
     end
   end
 
@@ -682,7 +744,7 @@ defmodule BoidsFieldTest do
       assert :boids_field.direction(field, {3.5, 2.5}) == up
       # Ahead is the wall.
       at_wall = walker(pos: {3.5, 2.5}, vel: {2.0, 0.0})
-      assert :boids_field.direction(field, {4.5, 2.5}) == {0.0, 0.0}
+      refute :boids_field.has_way(field, {4.5, 2.5})
       assert flow(at_wall, seen) == :boids_steer.flow(at_wall, up)
       # Ahead is out of the grid.
       out = walker(pos: {3.5, 2.5}, vel: {0.0, 4.0})
@@ -691,10 +753,14 @@ defmodule BoidsFieldTest do
       near = walker(pos: {6.6, 3.5}, vel: {4.0, 0.0})
       assert :boids_field.direction(field, {8.6, 3.5}) == {0.0, 0.0}
       assert flow(near, seen) == :boids_steer.flow(near, {1.0, 0.0})
-      # At the goal, and in a place with no way: no force.
+      # At the goal: no force.
       assert flow(walker(pos: {8.5, 3.5}), seen) == {0.0, 0.0}
       assert flow(walker(pos: {8.5, 3.5}, vel: {0.5, 0.0}), seen) == {0.0, 0.0}
-      assert flow(walker(pos: {4.5, 2.5}), seen) == {0.0, 0.0}
+      # A boid in the wall gets the direction out of it.
+      in_wall = walker(pos: {4.3, 2.5})
+      assert flow(in_wall, seen) == :boids_steer.flow(in_wall, {-1.0, 0.0})
+      # Far out of the grid: no force.
+      assert flow(walker(pos: {4.5, -9.5}), seen) == {0.0, 0.0}
       # A boid that goes through the goal: the place ahead brings it back.
       through = walker(pos: {8.5, 3.5}, vel: {2.0, 0.0})
       assert flow(through, seen) == :boids_steer.flow(through, {-1.0, 0.0})
@@ -814,6 +880,24 @@ defmodule BoidsFieldTest do
         {:ok, %{pos: pos}} = :boids.lookup(world, id)
         assert :boids_vec.dist(pos, {35.5, 5.5}) < 6.0
       end
+    end
+
+    test "a boid with no limit that is in a wall comes out, and goes on to the goal" do
+      # A wall of 3 cells with a door. The boid has no option walkable.
+      grid =
+        :boids_grid.new(size: {30, 20}, blocked: for(i <- 14..16, j <- 0..19, j not in [9, 10], do: {i, j}))
+
+      world = world(bounds: {{0, 0}, {30, 20}})
+      :ok = :boids.set_field(world, :exit, :boids_field.new(grid, [{25, 15}]))
+      {:ok, id} = :boids.add(world, goer(%{pos: {15.2, 3.5}}))
+      place = fn -> elem(:boids.lookup(world, id), 1).pos end
+      refute :boids_grid.walkable(grid, place.())
+      for _ <- 1..20, do: :ok = :boids.step(world, 0.1)
+      # It came out at the side of the wall that was the nearest: the left.
+      assert :boids_grid.walkable(grid, place.())
+      assert elem(place.(), 0) < 14.0
+      for _ <- 1..300, do: :ok = :boids.step(world, 0.1)
+      assert :boids_vec.dist(place.(), {25.5, 15.5}) < 2.5
     end
 
     test "a boid gets its fields in what it perceives, and a boid with no name gets none" do
@@ -974,7 +1058,14 @@ defmodule BoidsFieldTest do
             assert costs == Enum.sort(costs, :desc)
 
           true ->
-            assert :boids_field.direction(field, center) == {0.0, 0.0}
+            # An open cell with no way has no direction. A blocked cell has
+            # the direction to an open cell with a way, or none.
+            refute :boids_field.has_way(field, center)
+            {dx, dy} = :boids_field.direction(field, center)
+
+            assert {dx, dy} == {0.0, 0.0} or
+                     (:boids_grid.blocked(grid, cell) and abs(:boids_vec.norm({dx, dy}) - 1) < 1.0e-9)
+
             assert :boids_field.distance(field, center) == :infinity
             assert way == []
         end

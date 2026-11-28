@@ -696,15 +696,16 @@ apply_rule(Fun, _Opts, B, Ns, Seen, _Memory, _Name) ->
     Fun(B, Ns, Seen).
 
 %% The direction of a field of the world (the key fields of Seen) at
-%% the place ahead of a boid. When that place has no direction (a
-%% blocked cell, a place with no way, a goal), the direction at the
+%% the place ahead of a boid. When that place has no way (a blocked
+%% cell, a place out of the grid) or is a goal, the direction at the
 %% position of the boid: so a boid near a wall or near its goal
-%% continues to it. A name with no field gives no force.
+%% continues on its way. A boid that is in a blocked cell gets the
+%% direction out of it there. A name with no field gives no force.
 down(Name, #{fields := Fields}, Pos, Ahead) when is_map_key(Name, Fields) ->
     Field = map_get(Name, Fields),
-    case boids_field:direction(Field, Ahead) of
-        {X, Y} when X == 0, Y == 0 -> boids_field:direction(Field, Pos);
-        Direction -> Direction
+    case boids_field:has_way(Field, Ahead) andalso boids_field:direction(Field, Ahead) of
+        {X, Y} when X /= 0; Y /= 0 -> {X, Y};
+        _ -> boids_field:direction(Field, Pos)
     end;
 down(_Name, _Seen, _Pos, _Ahead) ->
     {0.0, 0.0}.
