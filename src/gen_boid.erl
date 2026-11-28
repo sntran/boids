@@ -404,7 +404,9 @@ init({World, '$adopt', Moving = #{boid := Boid = #{id := Id}, mod := Module, ser
     %% The callbacks of a module run only when the node has the module
     %% in memory. On the first node, init/1 of the module did that.
     _ = Module =:= undefined orelse code:ensure_loaded(Module),
-    case join(Space, Server#{mod => Module, moves => Moves, roams => Roams}, Boid) of
+    %% The boid keeps its place in the order of the boids of the world.
+    Order = maps:get(order, Moving, new),
+    case join(Space, Server#{mod => Module, moves => Moves, roams => Roams}, Boid, Order) of
         {ok, State} ->
             ok = boids_world:adopt(Space, Id, Relations, Moves, maps:get(caller, Moving, undefined)),
             %% The random numbers of the boid continue.
@@ -427,7 +429,7 @@ init({World, Module, Args, Roams}) ->
                 {Server, BoidOpts} = options(maps:merge(Defaults, boids_boid:to_map(Opts))),
                 {Space, Server, boids_boid:new(BoidOpts)}
             of
-                {Space, Server, Boid} -> join(Space, Server#{mod => Module, moves => 0, roams => Roams}, Boid)
+                {Space, Server, Boid} -> join(Space, Server#{mod => Module, moves => 0, roams => Roams}, Boid, new)
             catch
                 error:{bad_option, _} = Reason -> {stop, {shutdown, Reason}}
             end;
@@ -437,7 +439,10 @@ init({World, Module, Args, Roams}) ->
             {stop, Reason}
     end.
 
-join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) ->
+%% Order: the place of the boid in the order of the boids of the world
+%% (boids_space:ordered/1). A boid that comes to the world gets a new
+%% place. A boid that comes from another node keeps its place.
+join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}, Order) ->
     case Server of
         #{seed := Seed} -> rand:seed(exsss, Seed);
         _ -> ok
@@ -447,7 +452,7 @@ join(Space, Server = #{tick := Tick, priority := Priority}, Boid = #{id := Id}) 
     %% The moves of the boid from node to node before this process: the
     %% world of a node keeps the process with the most moves. A boid
     %% that does not move from node to node has none.
-    Entry = (boids_boid:entry(Boid))#{kind => server, moves => moves(Server)},
+    Entry = (boids_boid:entry(Boid))#{kind => server, moves => moves(Server), order => Order},
     case boids_world:join(Space, self(), Entry) of
         ok ->
             %% The first tick comes after a random part of the period, so
@@ -621,6 +626,8 @@ settle({away, Home}, State = #{roams := true, space := Space = #{name := Name}, 
         server => maps:without([seed], maps:with(?KEYS, State)),
         relations => boids_space:relations(Space, Id),
         moves => maps:get(moves, State) + 1,
+        %% The place of the boid in the order of the boids of the world.
+        order => boids_space:order(Space, Id),
         %% The process that calls: its world does nothing with the
         %% message that the other node sends about the new process.
         caller => self(),

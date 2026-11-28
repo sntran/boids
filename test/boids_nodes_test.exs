@@ -906,6 +906,39 @@ defmodule BoidsClusterTest do
       assert_in_delta x.(:l1), elem(before, 0) + 2, 1.0e-9
       assert_in_delta x.(:far), elem(before, 1) + 1, 1.0e-9
     end
+
+    test "a boid keeps its place in the order of snapshot/1 when it moves to the other node", %{nodes: nodes} do
+      %{world: world, border: border, left: left, right: right, left_node: ln, right_node: rn} =
+        world(nodes, %{defaults: %{rules: [], tick: :manual, max_speed: 0}})
+
+      add = fn peer, id, x, more ->
+        {:ok, ^id} = call(peer, :boids, :add, [world, Map.merge(%{id: id, pos: {border + x, 80}}, more)])
+      end
+
+      # The third boid of the left node goes to the right node.
+      add.(left, :l1, -100, %{})
+      add.(left, :l2, -90, %{})
+      add.(left, :l3, -5, %{vel: {10, 0}, min_speed: 10, max_speed: 10})
+      add.(right, :r1, 90, %{})
+      add.(right, :r2, 100, %{})
+      ids = fn peer, args -> for %{id: id} <- call(peer, :boids, :snapshot, [world | args]), do: id end
+      # The order: the number that a node gave, then the name of that node.
+      order = fn rows -> for {_number, _node, id} <- Enum.sort(rows), do: id end
+      all = order.([{1, ln, :l1}, {2, ln, :l2}, {3, ln, :l3}, {1, rn, :r1}, {2, rn, :r2}])
+      for peer <- [left, right], do: assert(ids.(peer, []) == all)
+      assert ids.(left, [:local]) == [:l1, :l2, :l3]
+      assert ids.(right, [:local]) == [:r1, :r2]
+
+      :ok = call(left, :boids, :step, [world, 1.0])
+      assert kind(right, world, :l3) == {:server, rn}
+      for peer <- [left, right], do: assert(ids.(peer, []) == all)
+      assert ids.(left, [:local]) == [:l1, :l2]
+      assert ids.(right, [:local]) == order.([{3, ln, :l3}, {1, rn, :r1}, {2, rn, :r2}])
+
+      # A boid that comes to the right node now is after the boid that moved there.
+      add.(right, :r4, 110, %{})
+      for peer <- [left, right], do: assert(ids.(peer, []) == all ++ [:r4])
+    end
   end
 
   describe "the nodes of a world change" do

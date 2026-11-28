@@ -89,7 +89,8 @@ list:
 
 The 200 boids now move in real time: each is a process that makes a step
 each 50 ms. `snapshot/1` reads their positions, for example to draw
-them.
+them. It gives the boids in the order in which they came to the world:
+two runs that add the same boids give them in the same order.
 
 The id of a boid is the option `id`, or a new reference. It is not the
 process of the boid, because that process changes when the boid moves
@@ -828,6 +829,10 @@ What changes for your code:
 - A read of all the nodes (`boids:snapshot/1`, `boids:count/1`) is not
   of one moment: a boid that moves at that moment can be absent, or
   counted two times by `count/1`.
+- `boids:snapshot/1` gives the boids of all the nodes in one order: the
+  number that a node gave to the boid when it came to the world, then
+  the name of that node. A boid keeps its place in the order when it
+  moves to another node.
 - The ids of a world are for one boid each, on all the nodes. The world
   cannot tell two boids with one id from two processes of one boid: it
   stops one of them. A boid below a supervisor of yours always stays,

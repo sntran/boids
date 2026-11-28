@@ -999,6 +999,33 @@ defmodule BoidsTest do
       assert first == run.()
       assert length(first) == 40
     end
+
+    test "two runs with the same seeds give snapshot/1 in the same order" do
+      # The ids are references: they are not the same in two runs.
+      run = fn ->
+        :rand.seed(:exsss, 7)
+        {:ok, world} = :boids.start_world(bounds: {{0, 0}, {60, 60}}, wrap: true)
+        rules = [separation: 1.5, alignment: 1.0, cohesion: 1.0, wander: 0.5]
+        {:ok, ids} = :boids.populate(world, 40, rules: rules, tick: :manual, seed: 1)
+        assert Enum.all?(ids, &is_reference/1)
+        assert Enum.map(:boids.snapshot(world), & &1.id) == ids
+        for _ <- 1..30, do: :boids.step(world, 0.05)
+        # A boid goes, and a boid comes: the other boids keep their places.
+        gone = Enum.at(ids, 10)
+        :ok = :boids.remove(world, gone)
+        {:ok, new} = :boids.add(world, pos: {30, 30}, vel: {1, 0}, rules: rules, tick: :manual, seed: 99)
+        for _ <- 1..30, do: :boids.step(world, 0.05)
+        rows = :boids.snapshot(world)
+        assert Enum.map(rows, & &1.id) == List.delete(ids, gone) ++ [new]
+        assert :boids.snapshot(world, :local) == rows
+        :ok = :boids.stop_world(world)
+        Enum.map(rows, &Map.take(&1, [:pos, :vel]))
+      end
+
+      first = run.()
+      assert first == run.()
+      assert length(Enum.uniq(first)) == 40
+    end
   end
 
   describe "populate/3" do

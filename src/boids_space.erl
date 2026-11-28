@@ -64,14 +64,14 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
 
 -export([new/1, options/1, delete/1]).
 -export([insert_new/2, put/2, remove/2]).
--export([lookup/2, owner/2, servers/1, near/3, seen/4, all/1, count/1, dim/1, fit/2, offset/3]).
+-export([lookup/2, owner/2, servers/1, near/3, seen/4, all/1, ordered/1, order/2, count/1, dim/1, fit/2, offset/3]).
 -export([relate/4, related/3, related_to/3, relations/2]).
 -export([show/2, nodes/1, set_nodes/2, home/2, place/3]).
 -export([env/1, env/3, obstacles/1, obstacles/3, set_obstacle/4, remove_obstacle/2, set_time_scale/2]).
 -export([set_grid/3, remove_grid/2, grid/2, set_field/3, remove_field/2, field/2]).
 -export([named/2, named/3, forget/1]).
 
--export_type([space/0, entry/0, neighbor/0, obstacle/0, env/0, kind/0, named/0, kept/0]).
+-export_type([space/0, entry/0, order/0, neighbor/0, obstacle/0, env/0, kind/0, named/0, kept/0]).
 
 -type vec() :: boids_vec:vec().
 -type space() :: #{
@@ -103,8 +103,13 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
     kind => kind(),
     %% The moves of the boid from node to node before this process, or
     %% none for a boid that does not move from node to node.
-    moves => non_neg_integer() | none
+    moves => non_neg_integer() | none,
+    %% The place of the boid in the order of `all/1`: new for a boid that
+    %% comes to the world, the order of its last row for a boid that
+    %% comes from another node, none for a row of `show/2`.
+    order => order() | new | none
 }.
+-type order() :: {pos_integer(), node()}.
 -type neighbor() :: #{
     id := term(),
     pos := vec(),
@@ -122,9 +127,16 @@ near a border (`show/2`): `near/3` and `lookup/2` give them, and
     time_scale := number()
 }.
 
-%% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Last}. Kind tells
-%% which process has the boid: a gen_boid (server), or another process
-%% (process).
+%% A row: {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Order, Last}. Kind
+%% tells which process has the boid: a gen_boid (server), or another
+%% process (process).
+%%
+%% Order is the place of the row in all/1: {Number, Node}. The space
+%% gives the next number to a boid that comes, on the node where it
+%% comes. A boid keeps its order when it moves to another node. So the
+%% boids of a node are in the order in which they came, and two runs
+%% that add the same boids give them in the same order. The order of a
+%% row of show/2 is none.
 %%
 %% The grid has a copy of the row in the cell of its position:
 %% {Cell, Id, Pos, Vel, Group, Data}. One read of a cell gives all its
@@ -155,11 +167,12 @@ new(Opts) ->
     Space = options(Opts),
     Rows = ets:new(boids_rows, [set, public, {read_concurrency, true}, {write_concurrency, true}]),
     Grid = ets:new(boids_grid, [duplicate_bag, public, {read_concurrency, true}, {write_concurrency, true}]),
-    %% The table has the size of the vectors of the first boid, and the
-    %% nodes that have a part of the world: one node, until the world of
-    %% this node finds the same world on other nodes.
+    %% The table has the size of the vectors of the first boid, the
+    %% nodes that have a part of the world (one node, until the world of
+    %% this node finds the same world on other nodes), and the largest
+    %% number of the order of a boid.
     Meta = ets:new(boids_meta, [set, public, {read_concurrency, true}]),
-    ets:insert(Meta, {nodes, [node()]}),
+    ets:insert(Meta, [{nodes, [node()]}, {order, 0}]),
     %% The facts of the world, which only the owner writes: the scale of
     %% the time, one row for each obstacle ({{obstacle, Id}, Pos,
     %% Radius}), the version of the obstacles, and one row for each
@@ -246,7 +259,7 @@ not in the space. Only the process of the boid calls this function.
 -spec put(space(), entry() | boids_boid:boid()) -> boolean().
 put(Space = #{rows := Rows, grid := Grid}, #{id := Id, pos := Pos, vel := Vel, group := Group, data := Data}) ->
     case ets:lookup(Rows, Id) of
-        [Row = {_, _, _, _, _, _, Pid, Kind, _}] ->
+        [Row = {_, _, _, _, _, _, Pid, Kind, Order, _}] ->
             Old = spot(Row),
             Cell = cell(Space, Pos),
             case {Cell, Id, Pos, Vel, Group, Data} of
@@ -256,7 +269,7 @@ put(Space = #{rows := Rows, grid := Grid}, #{id := Id, pos := Pos, vel := Vel, g
                     %% The new copy comes before the removal of the old
                     %% copy, so a reader always finds the boid in its cell
                     %% (specs/Space.tla, InsertFirst).
-                    ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Old}),
+                    ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Order, Old}),
                     ets:insert(Grid, New),
                     ets:delete_object(Grid, Old)
             end;
@@ -298,26 +311,60 @@ The process that has a boid: `{server, Pid}` for a `gen_boid`, and
 -spec owner(space(), term()) -> {kind(), pid()} | error.
 owner(#{rows := Rows}, Id) ->
     case ets:lookup(Rows, Id) of
-        [{_, _, _, _, _, _, Pid, Kind, _}] -> {Kind, Pid};
+        [{_, _, _, _, _, _, Pid, Kind, _, _}] -> {Kind, Pid};
         [] -> error
     end.
 
 -doc "The processes of the boids whose process is a `gen_boid`.".
 -spec servers(space()) -> [pid()].
 servers(#{rows := Rows}) ->
-    ets:select(Rows, [{{'_', '_', '_', '_', '_', '_', '$1', server, '_'}, [], ['$1']}]).
+    ets:select(Rows, [{{'_', '_', '_', '_', '_', '_', '$1', server, '_', '_'}, [], ['$1']}]).
 
--doc "All the rows. The order is not specified.".
+-doc """
+All the rows of the boids of this node, in the order in which the boids
+came to the world on this node. The place of a boid in the order does
+not change at a step (`ordered/1`).
+""".
 -spec all(space()) -> [entry()].
-all(#{rows := Rows}) ->
-    %% A row with a kind that is a tuple is the row of a boid of another
-    %% node, which shows itself near a border.
-    [entry(Row) || Row <- ets:tab2list(Rows), is_atom(element(8, Row))].
+all(Space) ->
+    [Entry || {_Number, _Node, _Id, Entry} <- ordered(Space)].
+
+-doc """
+The rows of `all/1`, each with its order and its id: a sorted list of
+`{Number, Node, Id, Entry}`. The order of a boid is `{Number, Node}`:
+the space gives the next number to a boid that comes, and the node is
+the node where the boid came to the world. A boid keeps its order when
+it moves to another node, so the rows of several nodes are in one order
+after a sort.
+
+Two boids can have the same order only after a node started its world
+again: thus the id is the third part of the sort.
+""".
+-spec ordered(space()) -> [{pos_integer(), node(), term(), entry()}].
+ordered(#{rows := Rows}) ->
+    %% Only the row of a boid of this node has an order: the row of a
+    %% boid of another node, which shows itself near a border, has none.
+    %% The table makes the maps, and the sort compares the number first:
+    %% that is faster than a sort of the rows.
+    Entry = #{id => '$1', pos => '$2', vel => '$3', group => '$4', data => '$5', pid => '$6'},
+    Head = {'$1', '$2', '$3', '$4', '$5', '_', '$6', '_', {'$7', '$8'}, '_'},
+    lists:sort(ets:select(Rows, [{Head, [], [{{'$7', '$8', '$1', Entry}}]}])).
+
+-doc """
+The order of a boid of this node (`ordered/1`), or `new` for an id that
+has no row of a boid of this node.
+""".
+-spec order(space(), term()) -> order() | new.
+order(#{rows := Rows}, Id) ->
+    case ets:lookup(Rows, Id) of
+        [{_, _, _, _, _, _, _, Kind, Order, _}] when is_atom(Kind) -> Order;
+        _ -> new
+    end.
 
 -doc "The number of rows of the boids of this node.".
 -spec count(space()) -> non_neg_integer().
 count(#{rows := Rows}) ->
-    ets:select_count(Rows, [{{'_', '_', '_', '_', '_', '_', '_', '$1', '_'}, [{is_atom, '$1'}], [true]}]).
+    ets:select_count(Rows, [{{'_', '_', '_', '_', '_', '_', '_', '$1', '_', '_'}, [{is_atom, '$1'}], [true]}]).
 
 -doc """
 The size of the vectors of the space: that of its box, or that of its
@@ -877,14 +924,16 @@ show(Space = #{rows := Rows, grid := Grid}, Entry = #{id := Id, pos := Pos, vel 
     Kind = {ghost, maps:get(kind, Entry, server)},
     case ets:lookup(Rows, Id) of
         [] ->
-            insert_new(Space, Entry#{kind => Kind});
-        [Row = {_, _, _, _, _, _, _, {ghost, _}, _}] ->
+            %% A row of another node has no place in the order of this
+            %% node.
+            insert_new(Space, Entry#{kind => Kind, order => none});
+        [Row = {_, _, _, _, _, _, _, {ghost, _}, _, _}] ->
             Old = spot(Row),
             Cell = cell(Space, Pos),
             Group = maps:get(group, Entry, default),
             Data = maps:get(data, Entry, undefined),
             New = {Cell, Id, Pos, Vel, Group, Data},
-            ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, Old}),
+            ets:insert(Rows, {Id, Pos, Vel, Group, Data, Cell, Pid, Kind, none, Old}),
             %% As a write of a boid: the new copy, then the removal of
             %% the old copy (specs/Space.tla, InsertFirst).
             New =:= Old orelse (ets:insert(Grid, New) andalso ets:delete_object(Grid, Old)),
@@ -930,12 +979,27 @@ row(Space, #{id := Id, pos := Pos, vel := Vel} = Entry) ->
     Group = maps:get(group, Entry, default),
     Data = maps:get(data, Entry, undefined),
     Pid = maps:get(pid, Entry, undefined),
-    {Id, Pos, Vel, Group, Data, cell(Space, Pos), Pid, maps:get(kind, Entry, process), none}.
+    Order = next(Space, maps:get(order, Entry, new)),
+    {Id, Pos, Vel, Group, Data, cell(Space, Pos), Pid, maps:get(kind, Entry, process), Order, none}.
 
-entry({Id, Pos, Vel, Group, Data, _Cell, Pid, _Kind, _Last}) ->
+%% The order of a new row. A boid that comes to the world gets the next
+%% number of the space. A boid that comes from another node has an order
+%% and keeps it. The next number of the space is then larger than its
+%% number: a boid that comes later is after each boid that this node had.
+%% Only the owner of the space adds a row, so the read and the write of
+%% the number are not in a race.
+next(#{meta := Meta}, new) ->
+    {ets:update_counter(Meta, order, 1), node()};
+next(#{meta := Meta}, Order = {Number, _Node}) ->
+    Number > ets:lookup_element(Meta, order, 2) andalso ets:insert(Meta, {order, Number}),
+    Order;
+next(_Space, none) ->
+    none.
+
+entry({Id, Pos, Vel, Group, Data, _Cell, Pid, _Kind, _Order, _Last}) ->
     #{id => Id, pos => Pos, vel => Vel, group => Group, data => Data, pid => Pid}.
 
-spot({Id, Pos, Vel, Group, Data, Cell, _Pid, _Kind, _Last}) ->
+spot({Id, Pos, Vel, Group, Data, Cell, _Pid, _Kind, _Order, _Last}) ->
     {Cell, Id, Pos, Vel, Group, Data}.
 
 %% The cell of a point. With wrap, the cells start at the minimum of the

@@ -69,6 +69,8 @@ defmodule BoidsSpaceTest do
       %{space: :boids_space.new(%{})}
     end
 
+    defp ids(space), do: for(%{id: id} <- :boids_space.all(space), do: id)
+
     test "insert_new/2 adds a row one time", %{space: space} do
       assert :boids_space.insert_new(space, entry(:a, {1, 2}))
       refute :boids_space.insert_new(space, entry(:a, {50, 50}))
@@ -148,7 +150,7 @@ defmodule BoidsSpaceTest do
       cell = fn space, pos ->
         id = make_ref()
         true = :boids_space.insert_new(space, entry(id, pos))
-        [{^id, ^pos, _vel, _group, _data, cell, _pid, _kind, _last}] = :ets.lookup(space.rows, id)
+        [{^id, ^pos, _vel, _group, _data, cell, _pid, _kind, _order, _last}] = :ets.lookup(space.rows, id)
         assert [{^cell, ^id, ^pos, _, _, _}] = :ets.lookup(space.grid, cell)
         cell
       end
@@ -228,6 +230,63 @@ defmodule BoidsSpaceTest do
       assert :boids_space.lookup(space, :a) == :error
       assert :ets.tab2list(space.grid) == [{{0, 0}, :b, {1, 3}, {0.0, 0.0}, :default, :undefined}]
       assert [%{id: :b}] = :boids_space.near(space, {1, 2}, 5)
+    end
+
+    test "all/1 gives the rows in the order in which they came", %{space: space} do
+      # A reference has no order that is the same in two runs.
+      ids = for _ <- 1..50, do: make_ref()
+      for id <- ids, do: :boids_space.insert_new(space, entry(id, {1, 2}))
+      assert ids(space) == ids
+      # A write and a removal keep the order of the other rows.
+      [first, second | rest] = ids
+      assert :boids_space.put(space, %{id: first, pos: {95, -42}, vel: {0, 0}, group: :default, data: nil})
+      :boids_space.remove(space, second)
+      assert ids(space) == [first | rest]
+      # A row that comes again is the last row.
+      :boids_space.insert_new(space, entry(second, {1, 2}))
+      assert ids(space) == [first | rest] ++ [second]
+    end
+
+    test "ordered/1 gives each row with its order and its id", %{space: space} do
+      :boids_space.insert_new(space, entry(:b, {1, 2}, %{pid: self()}))
+      :boids_space.insert_new(space, entry(:a, {3, 4}))
+      node = node()
+      assert [{1, ^node, :b, b}, {2, ^node, :a, %{id: :a, pos: {3, 4}}}] = :boids_space.ordered(space)
+      assert {:ok, b} == :boids_space.lookup(space, :b)
+      assert :boids_space.order(space, :a) == {2, node}
+      assert :boids_space.order(space, :nobody) == :new
+    end
+
+    test "a row that comes with an order keeps it, and a new row is after it", %{space: space} do
+      :boids_space.insert_new(space, entry(:a, {1, 2}, %{order: {7, :other@host}}))
+      :boids_space.insert_new(space, entry(:b, {1, 2}))
+      # A smaller number does not make the number of the space smaller.
+      :boids_space.insert_new(space, entry(:c, {1, 2}, %{order: {3, :other@host}}))
+      :boids_space.insert_new(space, entry(:d, {1, 2}))
+      assert ids(space) == [:c, :a, :b, :d]
+      assert :boids_space.order(space, :a) == {7, :other@host}
+      assert :boids_space.order(space, :d) == {9, node()}
+    end
+
+    test "rows with the same number are in the order of their nodes, then of their ids", %{space: space} do
+      :boids_space.insert_new(space, entry(:d, {1, 2}, %{order: {1, :b@host}}))
+      :boids_space.insert_new(space, entry(:c, {1, 2}, %{order: {1, :a@host}}))
+      :boids_space.insert_new(space, entry(:b, {1, 2}, %{order: {1, :b@host}}))
+      :boids_space.insert_new(space, entry(:a, {1, 2}, %{order: {2, :a@host}}))
+      assert ids(space) == [:c, :b, :d, :a]
+    end
+
+    test "the row of a boid of another node has no order", %{space: space} do
+      assert :boids_space.show(space, entry(:far, {1, 2}, %{pid: self(), kind: :server}))
+      assert :boids_space.all(space) == []
+      assert :boids_space.ordered(space) == []
+      assert :boids_space.order(space, :far) == :new
+      # It does not use a number of the space.
+      :boids_space.insert_new(space, entry(:a, {1, 2}))
+      assert :boids_space.order(space, :a) == {1, node()}
+      # It has none after it shows itself again.
+      assert :boids_space.show(space, entry(:far, {3, 4}, %{pid: self(), kind: :server}))
+      assert ids(space) == [:a]
     end
   end
 

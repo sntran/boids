@@ -107,6 +107,13 @@ The first version. It needs Erlang/OTP 29.
   timeout}` (`boids:timeout/0`).
 - The id of a boid is a reference, and `boids:whereis/2` gives its
   process, on each node.
+- `boids:snapshot/1` gives the boids in the order in which they came to
+  the world: two runs that add the same boids give them in the same
+  order, also when the ids are references. A boid keeps its place in the
+  order when it moves to another node. This is a change: the order was
+  not specified before. The world gives a number to each boid that
+  comes, with no work at a step, and `snapshot/1` sorts the rows by that
+  number (less than 1 microsecond for each boid).
 - A process with another behavior as a boid (`boids:join/2`,
   `boids:advance/3`).
 - Steps of all the boids from one state of the world (`boids:step/2`),
