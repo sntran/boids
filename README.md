@@ -464,6 +464,11 @@ ok = boids:set_grid(World, land, boids_grid:set_cost(Land, [{4, 1}], 1)).
   changes the walls for all the boids, from their next step. A boid
   that is then in a blocked cell goes to the nearest walkable place at
   its next step.
+- **On several nodes, each node has all the grids.** A grid is a fact
+  of the world, as an obstacle: a change is for all the nodes, a node
+  that comes later gets the grids, and after a split of the network the
+  last change of a grid wins on all the nodes (see "A world on several
+  nodes").
 - **The rule `walls`** moves a boid away from a wall before it touches
   it. With it, the movement is smooth, and the limit acts only a
   little. The force does not change with the thickness of a wall.
@@ -593,10 +598,11 @@ world on one node has no border and sends no message.
   `count/1`, `flocks/2`, `graph/2` and `step/2` give the result for
   the boids of all the nodes, from each node. With a last argument
   `local`, they are about the boids of this node only.
-- **The obstacles and the scale of the time are on all the nodes.**
-  `set_obstacle/4`, `remove_obstacle/2` and `set_time_scale/2` change
-  the world on each node: a rock is a rock for each boid, and the scale
-  0 stops all the world. A node that comes later gets them.
+- **The obstacles, the scale of the time and the grids are on all the
+  nodes.** `set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`,
+  `set_grid/3` and `remove_grid/2` change the world on each node: a
+  rock is a rock for each boid, a wall is a wall on each node, and the
+  scale 0 stops all the world. A node that comes later gets them.
 
 ```erlang
 %% From each node, for a boid on each node.
@@ -616,15 +622,21 @@ What changes for your code:
   call later. With no connection to the node, the boid is not found.
 - `step/2` does not wait for a node that has no connection: it makes
   the step on the other nodes.
-- `set_obstacle/4`, `remove_obstacle/2` and `set_time_scale/2` change
-  the world on all its nodes. When the result is `ok`, each node that
-  has a connection to this node has the change. With no answer of a
-  node in the time limit, the result is `{error, timeout}`: this node
-  has the change, and that node gets it later. These functions have no
-  form for one node only: all the nodes must have the same obstacles
-  and the same scale of the time.
-- `obstacles/1` reads the tables of this node, with no message. Each
-  node has all the obstacles, so there is no `obstacles(World, local)`.
+- `set_obstacle/4`, `remove_obstacle/2`, `set_time_scale/2`,
+  `set_grid/3` and `remove_grid/2` change the world on all its nodes.
+  When the result is `ok`, each node that has a connection to this node
+  has the change. With no answer of a node in the time limit, the
+  result is `{error, timeout}`: this node has the change, and that node
+  gets it later. These functions have no form for one node only: all
+  the nodes must have the same obstacles, the same scale of the time
+  and the same grids.
+- `obstacles/1` and `grid/2` read the tables of this node, with no
+  message. Each node has all the obstacles and all the grids, so there
+  is no `obstacles(World, local)`.
+- A boid with the option `walkable` that moves to another node finds
+  the same walls there: the option goes with the boid, and the grid is
+  on each node. `set_grid/3` sends the grid to each node (320 KB for
+  200 x 200 cells), and a node that comes later gets all the grids.
 - The id of a boid is not its process. In a callback, the function
   `lookup` of `Seen` gives the row of a neighbor, with its process:
   `{ok, #{pid := Pid}} = (maps:get(lookup, Seen))(Id)`.
@@ -675,8 +687,8 @@ The move is safe when the network has faults:
   that no move, no split and no decision loses a boid, and that a boid
   has one process when all the nodes have a connection again.
 
-The obstacles and the scale of the time (the facts of a world) are safe
-when the network has faults too:
+The obstacles, the scale of the time and the grids (the facts of a
+world) are safe when the network has faults too:
 
 - **The last change wins: by the clocks of the computers when they
   agree, and in each case all the nodes get the same value.** Each
@@ -769,8 +781,8 @@ neighbors that it sees are not all of the same moment, as for a bird.
 The flows where the order of the processes can change the result have a
 specification in TLA+ (`specs/`): the members of a world, a write
 against a read of the world, the step in two parts, the move of a
-boid to another node, and the obstacles and the scale of the time on
-several nodes. The tests
+boid to another node, the obstacles, the scale of the time and the
+grids on several nodes, and the grid that a boid keeps. The tests
 check a small model of each one, and fault models that must fail, with
 the native checker of [Accord](https://github.com/sntran/accord). They
 also replay the messages of the process of a real world as a

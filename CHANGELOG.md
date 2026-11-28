@@ -30,7 +30,9 @@ The first version. It needs Erlang/OTP 29.
   in a cell that became blocked goes to the nearest walkable place at
   its next step. `boids:plan/3` and `boids:advance/3` obey the limit,
   and `boids:populate/3` puts boids only in walkable places. The rule
-  `walls` moves a boid away from a wall before it touches it.
+  `walls` moves a boid away from a wall before it touches it. In a
+  world on several nodes, a grid is on all the nodes, as the other
+  facts of the world.
 - `Seen` has the key `grids`: the grids that the boid uses, by their
   names. A boid keeps the grid that it read, and reads it again only
   after a change of a grid of its world (`specs/Kept.tla`).

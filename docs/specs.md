@@ -31,7 +31,7 @@ world to the design.
 | `specs/Step.tla` | One step of all the boids in two parts. | `boids:step/2`, `gen_boid` |
 | `specs/Move.tla` | The move of a boid to another node of its world. | `gen_boid` (`settle`, `adopt/2`), `boids_world` (the join of a boid that comes, `moved/3`) |
 | `specs/MoveMany.tla` | The same move in a world on three nodes: a boid with a process on each node, and a decision for two processes at a time. | `boids_world` (`adopt/5`, the messages `census`, `claim` and `yield`) |
-| `specs/Facts.tla` | The facts of a world (the obstacles, the scale of the time) on several nodes: a change with a version, a node that comes later, and a split of the network. | `boids_world` (`set/3`, the messages `fact` and `facts`, `drop_marks/2`) |
+| `specs/Facts.tla` | The facts of a world (the obstacles, the scale of the time, the grids) on several nodes: a change with a version, a node that comes later, and a split of the network. | `boids_world` (`set/3`, the messages `fact` and `facts`, `drop_marks/2`) |
 
 ### `specs/Members.tla`
 
@@ -390,8 +390,10 @@ only the node whose process waits for that call does nothing.
 ### `specs/Facts.tla`
 
 The facts of a world are what all its boids perceive, and that is not a
-boid: the obstacles and the scale of the time. Each node of a world has
-a copy of each fact, and all the nodes must have the same facts.
+boid: the obstacles, the scale of the time and the grids. Each node of
+a world has a copy of each fact, and all the nodes must have the same
+facts. The model has no part for one kind of fact, as the code: a grid
+is a fact as an obstacle is.
 
 The constants: the nodes (`Nodes`, numbers in the order of their
 names), the keys of the facts (`Keys`), the changes of the users and

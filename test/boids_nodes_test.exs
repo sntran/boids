@@ -1439,6 +1439,192 @@ defmodule BoidsSplitTest do
       assert rocks(b, world) == %{rock: {1, 1}}
     end
   end
+
+  describe "the grids of a world on two nodes" do
+    # A grid of 32 x 16 cells of 10 around the border: the tile of the
+    # node small on its left, and the tile of the node large on its right.
+    # The blocked cells are columns of the grid, or cells.
+    defp land(border, blocked) do
+      cells =
+        for b <- blocked, cell <- if(is_integer(b), do: for(j <- 0..15, do: {b, j}), else: [b]), do: cell
+
+      :boids_grid.new(size: {32, 16}, cell_size: 10.0, origin: {border - 160.0, 0.0}, blocked: cells)
+    end
+
+    defp grid(peer, world), do: call(peer, :boids, :grid, [world, :land])
+    defp x_of(peer, world, id), do: elem(elem(call(peer, :boids, :lookup, [world, id]), 1).pos, 0)
+
+    test "the other node has the grid when the call returns, and its boids read the new grid", %{nodes: nodes} do
+      %{world: world, small: a, large: b, ns: na, nl: nb, border: border} = world(nodes)
+      open = land(border, [])
+      assert call(a, :boids, :set_grid, [world, :land, open]) == :ok
+      # No wait: the other node has the grid.
+      assert grid(b, world) == {:ok, open}
+      assert [{{:grid, :land}, ^open, {_, ^na}}] = facts(b, world)
+      assert facts(a, world) == facts(b, world)
+
+      # A boid of the node b, in the middle of a cell. It keeps the grid
+      # that it read.
+      walker = %{id: :walker, pos: {border + 85.0, 85.0}, tick: 5, walkable: {:named, :land}}
+      {:ok, :walker} = call(b, :boids, :add, [world, walker])
+      Process.sleep(50)
+      assert {:ok, %{pos: {x, 85.0}}} = call(b, :boids, :lookup, [world, :walker])
+      assert x == border + 85.0
+
+      # The node a closes the cell of the boid. The world of the node b
+      # writes the grid, and its boid reads it again: it goes to the
+      # nearest walkable place.
+      closed = land(border, [{24, 8}])
+      assert call(a, :boids, :set_grid, [world, :land, closed]) == :ok
+      assert grid(b, world) == {:ok, closed}
+
+      assert eventually(fn ->
+               :boids_grid.walkable(closed, elem(call(b, :boids, :lookup, [world, :walker]), 1).pos)
+             end)
+
+      {:ok, %{pos: pos}} = call(b, :boids, :lookup, [world, :walker])
+      assert_in_delta :boids_vec.dist(pos, {border + 85.0, 85.0}), 5.0, 1.0e-3
+
+      # A change of the node b is on the node a too.
+      assert call(b, :boids, :set_grid, [world, :land, open]) == :ok
+      assert grid(a, world) == {:ok, open}
+      assert [{{:grid, :land}, ^open, {_, ^nb}}] = facts(a, world)
+      # A bad grid is an error on its node, and no change on each node.
+      assert catch_error(call(a, :boids, :set_grid, [world, :land, :walls])) == :badarg
+      assert grid(b, world) == {:ok, open}
+    end
+
+    test "a boid with walkable that moves to the other node obeys the same walls there", %{nodes: nodes} do
+      %{world: world, small: small, large: large, nl: nl, border: border} = world(nodes)
+      # A wall in the tile of the node large, 40 after the border.
+      wall = land(border, [20])
+      assert call(small, :boids, :set_grid, [world, :land, wall]) == :ok
+      mover = %{pos: {border - 10.0, 80.0}, vel: {80.0, 0.0}, max_speed: 80.0, tick: 5}
+
+      {:ok, :walker} =
+        call(small, :boids, :add, [world, Map.merge(mover, %{id: :walker, walkable: {:named, :land}})])
+
+      {:ok, :bird} =
+        call(small, :boids, :add, [world, Map.merge(mover, %{id: :bird, pos: {border - 10.0, 100.0}})])
+
+      # The two boids move to the node large. The boid with the option
+      # stops at the wall, and the other goes on.
+      assert eventually(
+               fn -> node_of(large, world, :walker) == nl and node_of(large, world, :bird) == nl end,
+               500
+             )
+
+      assert eventually(fn -> x_of(large, world, :bird) > border + 60 end, 500)
+      assert eventually(fn -> abs(x_of(large, world, :walker) - (border + 40.0)) < 1.0e-3 end, 500)
+      Process.sleep(100)
+      assert_in_delta x_of(large, world, :walker), border + 40.0, 1.0e-3
+      assert {:ok, %{walkable: {:named, :land}}} = call(large, :boids, :boid, [world, :walker])
+    end
+
+    test "a node that comes later gets the grids, and its boids obey them", %{nodes: nodes} do
+      [{small, _ns}, {large, nl}] = Enum.sort_by(nodes, &elem(&1, 1))
+      world = :"world#{System.unique_integer([:positive])}"
+      options = %{name: world, defaults: %{rules: [], tick: 5}}
+      {:ok, _} = call(small, :boids, :start_world, [options])
+      # A long land of 40 tiles, with a wall in each tile: 100 after the
+      # start of the tile. The library asks for each cell if it is a wall.
+      wall = fn {x, _y} -> rem(floor(x / 10), 16) == 10 end
+      long = :boids_grid.new(size: {640, 16}, cell_size: 10.0, blocked: wall)
+      assert call(small, :boids, :set_grid, [world, :land, long]) == :ok
+      assert call(small, :boids, :set_grid, [world, :sea, :boids_grid.new(size: {2, 2})]) == :ok
+      assert call(small, :boids, :remove_grid, [world, :sea]) == :ok
+
+      # The world starts on the other node, with no grid. It gets the
+      # grid, and the mark of the grid that was removed.
+      {:ok, _} = call(large, :boids, :start_world, [options])
+      joined(world, nodes)
+      assert [{{:grid, :land}, ^long, _}, {{:grid, :sea}, :none, _}] = same(world, [small, large])
+      assert grid(large, world) == {:ok, long}
+      assert call(large, :boids, :grid, [world, :sea]) == :error
+
+      # A boid in a tile of the node that came later stops at the wall of
+      # that tile.
+      space = call(large, :boids, :space, [world])
+
+      tile =
+        Enum.find(0..39, fn i -> call(large, :boids_space, :home, [space, {i * 160.0 + 80, 80.0}]) == nl end)
+
+      start = {tile * 160.0 + 55.0, 85.0}
+      walker = %{id: :walker, pos: start, vel: {40.0, 0.0}, max_speed: 40.0, walkable: {:named, :land}}
+      {:ok, :walker} = call(large, :boids, :add, [world, walker])
+      assert eventually(fn -> abs(x_of(large, world, :walker) - (tile * 160.0 + 100.0)) < 1.0e-3 end, 500)
+      assert node_of(large, world, :walker) == nl
+    end
+
+    test "a door that opens on one side of a split is open on all the nodes after the split", %{nodes: nodes} do
+      %{world: world, small: small, large: large, ns: ns, border: border} = world(nodes)
+      wall = land(border, [20])
+      assert call(small, :boids, :set_grid, [world, :land, wall]) == :ok
+      # A boid of the node large, which goes to the wall and stops there.
+      walker = %{id: :walker, pos: {border + 20.0, 85.0}, vel: {80.0, 0.0}, max_speed: 80.0, tick: 5}
+      {:ok, :walker} = call(large, :boids, :add, [world, Map.put(walker, :walkable, {:named, :land})])
+      assert eventually(fn -> abs(x_of(large, world, :walker) - (border + 40.0)) < 1.0e-3 end, 500)
+
+      split(world, nodes)
+      # The node small opens a door in front of the boid. The node large
+      # does not get it: the wall stays.
+      door = :boids_grid.set_cost(wall, [{20, 8}], 1)
+      assert call(small, :boids, :set_grid, [world, :land, door]) == :ok
+      assert grid(small, world) == {:ok, door}
+      assert grid(large, world) == {:ok, wall}
+      :ok = call(large, :boids, :update, [world, :walker, %{vel: {80.0, 0.0}}])
+      Process.sleep(100)
+      assert_in_delta x_of(large, world, :walker), border + 40.0, 1.0e-3
+
+      heal(world, nodes)
+      # The node large gets the facts of the node small: the door is
+      # open on the two nodes, and the boid of the node large reads the
+      # new grid and goes through.
+      assert [{{:grid, :land}, ^door, {_, ^ns}}] = same(world, [small, large])
+      assert grid(large, world) == {:ok, door}
+      :ok = call(large, :boids, :update, [world, :walker, %{vel: {80.0, 0.0}}])
+      assert eventually(fn -> x_of(large, world, :walker) > border + 60 end, 500)
+    end
+
+    test "remove_grid/2 removes a grid on all the nodes, and its boids have no limit", %{nodes: nodes} do
+      %{world: world, small: small, large: large, border: border} = world(nodes)
+      wall = land(border, [20])
+      assert call(small, :boids, :set_grid, [world, :land, wall]) == :ok
+      walker = %{id: :walker, pos: {border + 20.0, 85.0}, vel: {80.0, 0.0}, max_speed: 80.0, tick: 5}
+      {:ok, :walker} = call(large, :boids, :add, [world, Map.put(walker, :walkable, {:named, :land})])
+      assert eventually(fn -> abs(x_of(large, world, :walker) - (border + 40.0)) < 1.0e-3 end, 500)
+
+      # The node small removes the grid: the node large has no grid when
+      # the call returns, and a mark stays for the removed grid.
+      assert call(small, :boids, :remove_grid, [world, :land]) == :ok
+      assert grid(large, world) == :error
+      assert grid(small, world) == :error
+      assert [{{:grid, :land}, :none, _}] = facts(large, world)
+      assert facts(small, world) == facts(large, world)
+      :ok = call(large, :boids, :update, [world, :walker, %{vel: {80.0, 0.0}}])
+      assert eventually(fn -> x_of(large, world, :walker) > border + 60 end, 500)
+    end
+
+    test "set_grid/3 and remove_grid/2 give the result timeout when a node gives no answer", %{nodes: nodes} do
+      %{world: world, small: a, large: b, border: border} = world(nodes)
+      on_exit(fn -> call(a, :application, :unset_env, [:boids, :timeout]) end)
+      :ok = call(a, :application, :set_env, [:boids, :timeout, 200])
+      wall = land(border, [20])
+      space_b = call(b, :boids, :space, [world])
+      :ok = call(b, :sys, :suspend, [world])
+      assert call(a, :boids, :set_grid, [world, :land, wall]) == {:error, :timeout}
+      # The node of the caller has the change. The other node gets it later.
+      assert grid(a, world) == {:ok, wall}
+      assert grid(b, space_b) == :error
+      :ok = call(b, :sys, :resume, [world])
+      assert eventually(fn -> grid(b, space_b) == {:ok, wall} end)
+      :ok = call(b, :sys, :suspend, [world])
+      assert call(a, :boids, :remove_grid, [world, :land]) == {:error, :timeout}
+      :ok = call(b, :sys, :resume, [world])
+      assert eventually(fn -> grid(b, space_b) == :error end)
+      assert facts(a, world) == facts(b, world)
+    end
+  end
 end
 
 defmodule BoidsThreeNodesTest do
