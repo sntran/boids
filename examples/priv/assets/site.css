@@ -90,6 +90,13 @@ button.down { background: var(--ink); color: var(--panel); border-color: var(--i
 .field.phone .hud .reading span { font-size: 0.62rem; }
 .field.phone .hud .reading b { font-size: 0.82rem; }
 .field.phone .source { left: 8px; top: 5px; font-size: 0.62rem; padding: 1px 6px; }
+/* The message of the game, in a band below the readings (scene.js). */
+.band { display: none; }
+.field.phone .band {
+  display: block; position: absolute; z-index: 3; left: 0; right: 0; padding: 7px 12px; font-size: 0.86rem; line-height: 1.4;
+  background: color-mix(in srgb, var(--panel) 90%, transparent); border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.field.phone .band.end { border-bottom: 2px solid var(--ink); font-weight: 500; }
 /* The keys of the game, on the field at the bottom corners, near the thumbs. */
 .field.phone .thumbs {
   display: flex; position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; justify-content: space-between; align-items: flex-end;

@@ -128,7 +128,7 @@
   function save() { try { localStorage.setItem("exit-plan-stars", JSON.stringify(stars)); } catch (e) { /* no storage */ } }
 
   var scene = Boids.scene({
-    name: "exit-plan", above: above,
+    name: "exit-plan", above: above, message: el("status"),
     canvas: el("field"), readings: el("readings"), source: el("source"),
     onStart: function (header) { box = header.box; },
     onMore: show,

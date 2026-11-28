@@ -101,7 +101,10 @@
   var game = { phase: "building", nectar: 0, guards: 0, max_guards: 12 };
 
   var scene = Boids.scene({
-    name: "hive-guard", turn: "down", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "hive-guard", turn: "down",
+    // The message stays on the field of a phone when the hive fell.
+    message: {from: el("status"), stay: function () { return game.phase === "over"; }},
+    canvas: el("field"), readings: el("readings"), source: el("source"),
     onStart: function (header) { box = header.box; },
     onMore: show,
     onError: function (text) { el("error").textContent = text; }

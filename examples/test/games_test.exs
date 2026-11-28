@@ -96,6 +96,19 @@ defmodule BoidsExamples.GamesTest do
     end
   end
 
+  # On a phone the page is below the screen: the scene shows the message
+  # of the game on the field (the option message of Boids.scene).
+  test "a game with a message gives it to the scene" do
+    for game <- @games do
+      %{slug: slug} = game.info()
+      page = game.page()
+
+      if page =~ ~r/id="(message|status|result-text)"/ or page =~ ~s(class="message") do
+        assert page =~ ~r/Boids\.scene\(\{.*?\bmessage: /s, "#{slug}: the scene does not get the message of the game"
+      end
+    end
+  end
+
   test "the server gives the list, the page of each game, and moves the old addresses" do
     assert {200, _, body} = get("/showcases")
     for game <- @games, do: assert(body =~ game.info().title)

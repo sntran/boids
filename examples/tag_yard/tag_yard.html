@@ -198,7 +198,7 @@
   }
 
   var scene = Boids.scene({
-    name: "tag-yard",
+    name: "tag-yard", message: document.querySelector("#panel .message"),
     keys: {into: el("keys"), pad: true, actions: [{key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]}], mirror: [{button: el("go"), when: function () { return over; }}]},
     canvas: el("field"), readings: el("readings"), source: el("source"),
     beneath: beneath,

@@ -125,7 +125,7 @@
   var order = ["speed", "perception", "separation", "cohesion", "alignment", "flee", "food", "chase", "wander"];
 
   var scene = Boids.scene({
-    name: "living-land", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
+    name: "living-land", message: el("status"), canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
     onStart: function (header) {
       box = header.box;
       first = header.first || first;

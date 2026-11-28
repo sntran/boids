@@ -146,7 +146,7 @@
   }
 
   var scene = Boids.scene({
-    name: "ant-trail", canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
+    name: "ant-trail", message: el("status"), canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
     onStart: function (header) {
       box = header.box;
       if (header.grid) { grid = header.grid; }

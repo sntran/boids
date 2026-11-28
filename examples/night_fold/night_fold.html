@@ -127,7 +127,7 @@
   }
 
   var scene = Boids.scene({
-    name: "night-fold",
+    name: "night-fold", message: el("message"),
     keys: {into: el("keys"), pad: true, actions: [{key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]}], mirror: [el("go")]},
     canvas: el("field"), readings: el("readings"), source: el("source"),
     onMore: show,

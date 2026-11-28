@@ -39,6 +39,15 @@
 // - `scene.direction("left")` gives the direction of the world for a
 //   direction of the screen.
 // - The readings are in a bar at the top of the field.
+// - `message`: the element of the page with the message of the game (or
+//   a list of elements: the first one that shows and has a text). On a
+//   phone the page is below the screen, so the scene shows the text in a
+//   band on the field, below the readings: for some seconds when the
+//   message changes, and at the end of a level or of the game until the
+//   person presses the button. The end is the time while a copy of a
+//   button of `mirror` shows (`{button, end: false}` for a button that is
+//   not for the end), or while the function `stay` gives true:
+//       message: {from: element, stay: function () { return over; }}
 //
 // On a phone in landscape (a screen of 500 px high or less), the field
 // fills the height of the screen, with the keys at its two sides.
@@ -325,7 +334,7 @@
         var copy = button("", "key mirror");
         copy.hidden = true;
         copy.addEventListener("click", function () { original.click(); });
-        mirrors.push([original, copy, plain ? null : entry.when]);
+        mirrors.push([original, copy, plain ? null : entry.when, plain || entry.end !== false]);
       });
 
       window.addEventListener("keydown", function (event) {
@@ -361,16 +370,56 @@
       return true;
     }
 
-    // The copies follow the buttons of the page, and the field follows the
-    // size of its bars.
+    // --- The message of the game ---------------------------------------
+
+    var band = document.createElement("div");
+    band.className = "band";
+    band.hidden = true;
+    // The page has the message for a screen reader.
+    band.setAttribute("aria-hidden", "true");
+    field.insertBefore(band, canvas);
+    var said = { shape: null, until: 0, closed: false };
+    // A touch on the band removes it until the next message.
+    band.addEventListener("click", function () { said.closed = true; band.hidden = true; });
+
+    function showMessage() {
+      var spec = options.message;
+      if (!spec) { return; }
+      var plain = spec instanceof Element || Array.isArray(spec);
+      var text = "";
+      [].concat(plain ? spec : spec.from).some(function (element) {
+        // The parts of the element, with a space between them.
+        text = !inPage(element) ? "" : Array.prototype.map.call(element.childNodes, function (node) {
+          return node.textContent.replace(/\s+/g, " ").trim();
+        }).filter(function (part) { return part !== ""; }).join(" ");
+        return text !== "";
+      });
+      // A number that changes (a clock) is not a new message.
+      var shape = text.replace(/\d+([.,]\d+)?/g, "0");
+      var now = performance.now();
+      if (shape !== said.shape) {
+        said.shape = shape;
+        said.closed = false;
+        said.until = now + Math.min(12000, 4000 + 60 * text.length);
+      }
+      var end = !plain && spec.stay ? !!spec.stay() : mirrors.some(function (pair) { return pair[3] && !pair[1].hidden; });
+      band.hidden = text === "" || said.closed || !(end || now < said.until);
+      band.classList.toggle("end", end);
+      if (!band.hidden && band.textContent !== text) { band.textContent = text; }
+      band.style.top = hud.offsetHeight + "px";
+    }
+
+    // The copies follow the buttons of the page, the band follows the
+    // message, and the field follows the size of its bars.
     setInterval(function () {
-      if (!onField) { return; }
+      if (!onField) { band.hidden = true; return; }
       mirrors.forEach(function (pair) {
         pair[1].hidden = !inPage(pair[0]) || (!!pair[2] && !pair[2]());
         pair[1].disabled = pair[0].disabled;
         if (pair[1].textContent !== pair[0].textContent) { pair[1].textContent = pair[0].textContent; }
         pair[1].classList.toggle("main", pair[0].classList.contains("main"));
       });
+      showMessage();
       fit();
     }, 250);
 

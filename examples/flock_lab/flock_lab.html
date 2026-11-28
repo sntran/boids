@@ -524,7 +524,8 @@
   var scene = Boids.scene({
     name: "flock-lab",
     // On a phone, the field has copies of these buttons of the page.
-    keys: {mirror: [el("run"), el("next"), el("again")]},
+    keys: {mirror: [{button: el("run"), end: false}, el("next"), el("again")]},
+    message: el("result-text"),
     canvas: el("field"),
     readings: el("readings"),
     source: el("source"),

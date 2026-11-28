@@ -104,7 +104,10 @@
   var order = [];
 
   var scene = Boids.scene({
-    name: "long-flight", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "long-flight", message: el("status"),
+    // On a phone, the field has a copy of the button "Fly" at the end of a land.
+    keys: {mirror: [el("go")]},
+    canvas: el("field"), readings: el("readings"), source: el("source"),
     onMore: show,
     onError: function (text) { el("error").textContent = text; }
   });

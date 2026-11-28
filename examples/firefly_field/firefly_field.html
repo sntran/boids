@@ -155,7 +155,7 @@
   }
 
   var scene = Boids.scene({
-    name: "firefly-field",
+    name: "firefly-field", message: el("message"),
     keys: {into: el("keys"), pad: true, actions: [{key: "fast", label: "Fast", codes: ["ShiftLeft", "ShiftRight"]}], mirror: [el("go")]},
     canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
     onStart: function (header) { box = header.box; },
