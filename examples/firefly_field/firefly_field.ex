@@ -84,16 +84,36 @@ defmodule BoidsExamples.Games.FireflyField do
   def same_flash?(first, last, time), do: time <= last + window() and time <= first + 4 * window()
 
   @doc """
+  The time of a night, in milliseconds: the fireflies and the director
+  read it in the table of the night. The director writes it at each
+  tick, from the clock of the computer. In a night with `time: :manual`,
+  a test moves it (`Director.advance/2`): the result of such a test does
+  not change with the speed of the computer.
+  """
+  def now(table), do: :ets.lookup_element(table, :now, 2)
+
+  @doc """
   The next value of the clock of a firefly, from 0 to 1, after `dt`
   seconds. `flashes` is the number of neighbors that flashed since the
   last step: each flash multiplies the clock by 1.1. The result is
   `{clock, flashed}`: at 1 the firefly flashes, and its clock starts
-  again at 0.
+  again.
+
+  A clock that comes to its end with the time keeps the part after the
+  end. If it started again at 0, each flash came to the moment of a
+  step, and two parts of a group stayed at one distance for all the
+  night. A clock that a flash of a neighbor brings to its end starts
+  again at 0: the two then flash together.
   """
   def next_clock(clock, dt, period, flashes) do
     clock = clock + dt / period
-    clock = if clock > @rest, do: clock * (1 + @nudge * min(flashes, @most)), else: clock
-    if clock >= 1.0, do: {0.0, true}, else: {clock, false}
+
+    cond do
+      clock >= 1.0 -> {clock - 1.0, true}
+      clock > @rest and clock * (1 + @nudge * min(flashes, @most)) >= 1.0 -> {0.0, true}
+      clock > @rest -> {clock * (1 + @nudge * min(flashes, @most)), false}
+      true -> {clock, false}
+    end
   end
 
   @doc """
@@ -181,7 +201,7 @@ defmodule BoidsExamples.Games.FireflyField do
     @moduledoc """
     A firefly. Its clock grows at each step, and it flashes at the end
     of its clock. Its data has the time of its last flash (`flash`, in
-    milliseconds of the monotonic clock), which its neighbors see. A
+    milliseconds of the time of the night), which its neighbors see. A
     firefly that sees neighbors flash since its last step moves its
     clock forward (`next_clock/4`).
     """
@@ -206,7 +226,7 @@ defmodule BoidsExamples.Games.FireflyField do
         clock: Map.get(options, :clock, :rand.uniform()),
         period: Map.get(options, :period, Field.period() * factor * (0.97 + :rand.uniform() * 0.06)),
         known: %{},
-        time: now(),
+        time: Field.now(table),
         table: table,
         home: pos
       }
@@ -254,7 +274,7 @@ defmodule BoidsExamples.Games.FireflyField do
     # late step on a busy computer then makes a clock late.
     @impl true
     def handle_decide(%{neighbors: neighbors, lantern: lantern}, %{state: state, data: data} = boid) do
-      now = now()
+      now = Field.now(state.table)
       {flashes, known} = Field.new_flashes(neighbors, state.known, now)
       {clock, flashed} = Field.next_clock(state.clock, (now - state.time) / 1000, state.period, flashes)
       data = if flashed, do: %{data | flash: now}, else: data
@@ -264,7 +284,6 @@ defmodule BoidsExamples.Games.FireflyField do
     end
 
     defp wind(table), do: :ets.lookup_element(table, :wind, 2, {0.0, 0.0})
-    defp now, do: System.monotonic_time(:millisecond)
   end
 
   defmodule Director do
@@ -287,6 +306,13 @@ defmodule BoidsExamples.Games.FireflyField do
 
     def start_link(space, options), do: GenServer.start_link(__MODULE__, {space, options})
     def status(director), do: GenServer.call(director, :status)
+    def table(director), do: GenServer.call(director, :table)
+
+    @doc """
+    Move the time of a night with `time: :manual` by some milliseconds:
+    one step of all the fireflies, then one tick of the director.
+    """
+    def advance(director, ms), do: GenServer.call(director, {:advance, ms})
     def input(director, message), do: GenServer.cast(director, {:input, message})
 
     # --- GenServer -------------------------------------------------------
@@ -294,6 +320,7 @@ defmodule BoidsExamples.Games.FireflyField do
     @impl true
     def init({space, options}) do
       table = :ets.new(:firefly_field, [:set, :public, read_concurrency: true])
+      :ets.insert(table, {:now, System.monotonic_time(:millisecond)})
 
       state = %{
         space: space,
@@ -313,19 +340,34 @@ defmodule BoidsExamples.Games.FireflyField do
         flashes: 0,
         groups: 0,
         known: %{},
-        start: now(),
+        start: Field.now(table),
         time: 0,
         dawn: 0
       }
 
       # The director stops with the world.
       Process.monitor(space.owner)
-      send(self(), :tick)
-      send(self(), :second)
+
+      # With the time of a test, there is no tick: the test moves the time.
+      if Map.get(options, :time) != :manual do
+        send(self(), :tick)
+        send(self(), :second)
+      end
+
       {:ok, level(state, Map.get(options, :level, 1))}
     end
 
     @impl true
+    def handle_call(:table, _from, state), do: {:reply, state.table, state}
+
+    def handle_call({:advance, ms}, _from, %{table: table, space: space} = state) do
+      seconds = div(elapsed(state), 1000)
+      :ets.update_counter(table, :now, ms)
+      :ok = :boids.step(space, ms / 1000)
+      state = state |> move(ms / 1000) |> blow() |> flashes()
+      {:reply, :ok, if(div(elapsed(state), 1000) > seconds, do: second(state), else: state)}
+    end
+
     def handle_call(:status, _from, state) do
       {x, y} = state.lantern
       left = max(0, state.dawn - div(elapsed(state), 1000))
@@ -392,19 +434,25 @@ defmodule BoidsExamples.Games.FireflyField do
 
     def handle_info(:tick, state) do
       Process.send_after(self(), :tick, BoidsExamples.Scene.tick())
-      {:noreply, state |> move() |> blow() |> flashes()}
+      :ets.insert(state.table, {:now, System.monotonic_time(:millisecond)})
+      {:noreply, state |> move(BoidsExamples.Scene.tick() / 1000) |> blow() |> flashes()}
     end
 
     def handle_info(:second, state) do
       Process.send_after(self(), :second, 1000)
-      groups = length(:boids.flocks(state.space, 12, :local))
-      state = %{state | groups: groups}
-      {:noreply, if(state.state == :night and elapsed(state) >= state.dawn * 1000, do: stop(state, :dawn), else: state)}
+      {:noreply, second(state)}
     end
 
-    # The lantern moves with the keys, or to the point of a click.
-    defp move(%{keys: keys, target: target, lantern: lantern} = state) do
-      dt = BoidsExamples.Scene.tick() / 1000
+    # At each second: the groups, and the dawn.
+    defp second(state) do
+      groups = length(:boids.flocks(state.space, 12, :local))
+      state = %{state | groups: groups}
+      if state.state == :night and elapsed(state) >= state.dawn * 1000, do: stop(state, :dawn), else: state
+    end
+
+    # The lantern moves with the keys, or to the point of a click, for
+    # `dt` seconds.
+    defp move(%{keys: keys, target: target, lantern: lantern} = state, dt) do
       speed = if keys[:fast], do: @fast, else: @speed
       x = if(keys[:right], do: 1.0, else: 0.0) - if(keys[:left], do: 1.0, else: 0.0)
       y = if(keys[:up], do: 1.0, else: 0.0) - if(keys[:down], do: 1.0, else: 0.0)
@@ -444,7 +492,7 @@ defmodule BoidsExamples.Games.FireflyField do
     # window after the last flash is in the same flash of the field, which
     # is at most four windows long. The burst is {first, last, ids}.
     defp flashes(%{space: space} = state) do
-      now = now()
+      now = Field.now(state.table)
       rows = :boids.snapshot(space, :local)
 
       new =
@@ -518,35 +566,34 @@ defmodule BoidsExamples.Games.FireflyField do
           flashes: 0,
           groups: length(setting.groups),
           known: %{},
-          start: now(),
+          start: Field.now(table),
           time: 0
       }
     end
 
     defp clamp({x, y}), do: {min(max(x, 2.0), 158.0), min(max(y, 2.0), 88.0)}
-    defp elapsed(%{state: :night, start: start}), do: now() - start
+    defp elapsed(%{state: :night, start: start, table: table}), do: Field.now(table) - start
     defp elapsed(%{time: time}), do: time
-    defp now, do: System.monotonic_time(:millisecond)
   end
 
   # --- The scene ---------------------------------------------------------
 
   # The argument is nil for a visitor. A test gives options of the
   # director: the level, the groups, the dawn (seconds), the wind, the
-  # place of the lantern, and a clock or a period for each firefly.
+  # place of the lantern, and a clock or a period for each firefly. With
+  # `time: :manual`, the fireflies and the director have no clock: the
+  # test moves the time of the night (`Director.advance/2`).
   @impl true
   def start(options) do
+    options = options || %{}
+    tick = if Map.get(options, :time) == :manual, do: :manual, else: BoidsExamples.Scene.tick()
+
     {:ok, world} =
-      :boids.start_world(
-        bounds: {{0, 0}, {@width, @height}},
-        wrap: false,
-        cell_size: 12,
-        defaults: %{tick: BoidsExamples.Scene.tick()}
-      )
+      :boids.start_world(bounds: {{0, 0}, {@width, @height}}, wrap: false, cell_size: 12, defaults: %{tick: tick})
 
     space = :boids.space(world)
-    {:ok, director} = Director.start_link(space, options || %{})
-    {:ok, %{space: space, director: director}}
+    {:ok, director} = Director.start_link(space, options)
+    {:ok, %{space: space, director: director, table: Director.table(director)}}
   end
 
   @impl true
@@ -561,8 +608,8 @@ defmodule BoidsExamples.Games.FireflyField do
   def header(_scene), do: %{ground: "night"}
 
   @impl true
-  def look(_scene, %{data: %{slow: slow} = data, vel: vel}) do
-    {if(slow, do: 1, else: 0), BoidsExamples.Scene.angle(vel), light(data, System.monotonic_time(:millisecond))}
+  def look(%{table: table}, %{data: %{slow: slow} = data, vel: vel}) do
+    {if(slow, do: 1, else: 0), BoidsExamples.Scene.angle(vel), light(data, now(table))}
   end
 
   @impl true

@@ -37,6 +37,16 @@ defmodule BoidsExamples.FireflyFieldTest do
     end
   end
 
+  # Move the time of a night with `time: :manual`, tick after tick, until
+  # the function gives a true value, for `seconds` of the night at most.
+  # Such a test does not change with the speed of the computer.
+  defp advance(scene, fun, what, seconds) do
+    Enum.find_value(1..div(seconds * 1000, Scene.tick()), fn _ ->
+      :ok = Director.advance(scene.director, Scene.tick())
+      fun.()
+    end) || flunk("No #{what} in #{seconds} seconds of the night.")
+  end
+
   defp status(scene), do: Director.status(scene.director).x
   defp fireflies(scene), do: :boids.snapshot(scene.space, :local)
 
@@ -47,7 +57,13 @@ defmodule BoidsExamples.FireflyFieldTest do
   describe "the clock of a firefly" do
     test "grows with the time, and flashes at its end" do
       assert {0.25, false} = Field.next_clock(0.0, 0.5, 2.0, 0)
-      assert {+0.0, true} = Field.next_clock(0.9, 0.5, 2.0, 0)
+      # The clock keeps the part after its end: a flash does not come to
+      # the moment of a step.
+      {clock, true} = Field.next_clock(0.9, 0.5, 2.0, 0)
+      assert_in_delta clock, 0.15, 1.0e-9
+      # With flashes of the neighbors too.
+      {clock, true} = Field.next_clock(0.9, 0.5, 2.0, 3)
+      assert_in_delta clock, 0.15, 1.0e-9
     end
 
     test "goes forward when the neighbors flash, but not just after a flash" do
@@ -59,7 +75,8 @@ defmodule BoidsExamples.FireflyFieldTest do
       # Many flashes count as five.
       {many, false} = Field.next_clock(0.3, 0.0, 2.0, 40)
       assert_in_delta many, 0.45, 1.0e-9
-      # A firefly near its flash flashes with its neighbors.
+      # A firefly near its flash flashes with its neighbors, and its clock
+      # starts again at 0, as theirs.
       assert {+0.0, true} = Field.next_clock(0.9, 0.0, 2.0, 2)
     end
 
@@ -124,11 +141,12 @@ defmodule BoidsExamples.FireflyFieldTest do
   end
 
   test "a group of fireflies that see each other comes to flash together, and the level is done" do
-    scene = run(%{groups: [{{80, 45}, 6, 1.0}], dawn: 90})
+    # The lantern is on the group, so all its fireflies see each other.
+    scene = run(%{groups: [{{80, 45}, 6, 1.0}], lantern: {80.0, 45.0}, dawn: 900, time: :manual})
     assert status(scene).total == 6
     assert status(scene).state == :night
     # One group: all the fireflies flash together, three times in a row.
-    assert wait(fn -> status(scene).state == :done end, "three flashes of all the fireflies", 40)
+    assert advance(scene, fn -> status(scene).state == :done end, "three flashes of all the fireflies", 240)
     done = status(scene)
     assert done.streak >= 3 and done.last == 6 and done.best == 6
   end
@@ -205,19 +223,39 @@ defmodule BoidsExamples.FireflyFieldTest do
     assert status(scene).level == 2
   end
 
-  # Two levels of 40 seconds at most: more than the limit of a test.
-  @tag timeout: 120_000
   test "after a level that is done, the next level starts; after the last level, the first" do
     # The lantern is on the group, so the wind of level 5 does not move
     # the fireflies apart.
-    scene = run(%{level: 4, groups: [{{80, 45}, 6, 1.0}], lantern: {80.0, 45.0}, dawn: 90})
-    assert wait(fn -> status(scene).state == :done end, "level 4 done", 40)
+    scene = run(%{level: 4, groups: [{{80, 45}, 6, 1.0}], lantern: {80.0, 45.0}, dawn: 900, time: :manual})
+    assert advance(scene, fn -> status(scene).state == :done end, "level 4 done", 240)
     Director.input(scene.director, %{"go" => true})
-    assert wait(fn -> status(scene).level == 5 end, "level 5")
+    assert status(scene).level == 5
     assert status(scene).title == "Far apart"
-    assert wait(fn -> status(scene).state == :done end, "level 5 done", 40)
+    assert advance(scene, fn -> status(scene).state == :done end, "level 5 done", 240)
     Director.input(scene.director, %{"go" => true})
-    assert wait(fn -> status(scene).level == 1 end, "level 1")
+    assert status(scene).level == 1
+  end
+
+  test "the time of a test moves the night: its fireflies, its lantern, and its dawn" do
+    scene = run(%{groups: [{{20, 20}, 3, 1.0}, {{140, 70}, 3, 1.2}], lantern: {80.0, 45.0}, dawn: 2, time: :manual})
+    before = Field.now(scene.table)
+    rows = fireflies(scene)
+    Director.input(scene.director, %{"keys" => ["right"]})
+    # With no move of the time, nothing moves.
+    Process.sleep(3 * Scene.tick())
+    assert Field.now(scene.table) == before
+    assert fireflies(scene) == rows
+    assert status(scene).lantern == [80.0, 45.0]
+
+    :ok = Director.advance(scene.director, 500)
+    assert Field.now(scene.table) == before + 500
+    assert fireflies(scene) != rows
+    assert [x, 45.0] = status(scene).lantern
+    assert_in_delta x, 82.5, 1.0e-6
+    assert status(scene).state == :night
+    # The dawn comes after 2 seconds of the night.
+    for _ <- 1..3, do: :ok = Director.advance(scene.director, 500)
+    assert status(scene).state == :dawn
   end
 
   test "the wind turns, and the fireflies of a windy level have the rule flow" do
@@ -236,7 +274,7 @@ defmodule BoidsExamples.FireflyFieldTest do
     assert Enum.sort(Enum.uniq(for {kind, _angle, _light} <- looks, do: kind)) == [0, 1]
     assert Enum.all?(looks, fn {_kind, _angle, light} -> light in 0..10 end)
     # A firefly that flashed now is bright.
-    now = System.monotonic_time(:millisecond)
+    now = Field.now(scene.table)
     assert {0, _, 10} = Field.look(scene, %{data: %{slow: false, flash: now}, vel: {1.0, 0.0}})
     assert Field.header(scene) == %{ground: "night"}
     assert [%{shape: "firefly"}, %{shape: "firefly", color: "plum"}] = Field.kinds(scene)
