@@ -69,12 +69,13 @@
   var el = function (id) { return document.getElementById(id); };
   var scene = Boids.scene({
     name: "rock-patrol",
+    // The keys Left and Right turn the ship: they are not directions of the screen.
     keys: {
       into: el("keys"),
       actions: [
-        {key: "left", label: "Left", codes: ["ArrowLeft", "KeyA"]},
+        {key: "left", label: "Left", codes: ["ArrowLeft", "KeyA"], side: "left"},
         {key: "thrust", label: "Thrust", codes: ["ArrowUp", "KeyW"]},
-        {key: "right", label: "Right", codes: ["ArrowRight", "KeyD"]},
+        {key: "right", label: "Right", codes: ["ArrowRight", "KeyD"], side: "left"},
         {key: "fire", label: "Shoot", codes: ["Space"]}
       ]
     },

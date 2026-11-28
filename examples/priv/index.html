@@ -108,7 +108,7 @@ handle_decide(_Seen, Boid) -&gt;
 <script src="/assets/scene.js"></script>
 <script>
   var el = function (id) { return document.getElementById(id); };
-  var scene = Boids.scene({name: "flock", canvas: el("field"), readings: el("readings"), source: el("source")});
+  var scene = Boids.scene({name: "flock", crop: {shape: 4 / 3, follow: ["hawk"]}, canvas: el("field"), readings: el("readings"), source: el("source")});
   Boids.toggle(el("pause"), scene.pause, ["Pause", "Play"]);
 </script>
 </body>

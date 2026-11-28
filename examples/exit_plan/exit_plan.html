@@ -57,10 +57,10 @@
       <p class="hint" id="hint"></p>
       <p class="status" id="status" role="status">Make your plan, then sound the alarm.</p>
 
-      <div id="planning">
+      <div id="planning" data-phone="open">
         <h3>Your plan</h3>
         <p class="hint">Choose a tool, then click in the hall.</p>
-        <div class="tools" role="group" aria-label="Tools">
+        <div class="tools" data-phone="tools" role="group" aria-label="Tools">
           <button type="button" data-tool="pillar" aria-pressed="true">Pillar</button>
           <button type="button" data-tool="left" aria-pressed="false">Sign ←</button>
           <button type="button" data-tool="right" aria-pressed="false">Sign →</button>
@@ -69,13 +69,13 @@
           <button type="button" data-tool="remove" aria-pressed="false">Remove</button>
         </div>
         <p class="counts" id="counts"></p>
-        <div class="row">
+        <div class="row" data-phone="tools">
           <button class="main" id="alarm" type="button">Sound the alarm</button>
           <button id="clear" type="button">Clear the plan</button>
         </div>
       </div>
 
-      <div class="result" id="result" hidden>
+      <div class="result" id="result" data-phone="tools" hidden>
         <div class="big" id="stars" aria-hidden="true"></div>
         <p id="text"></p>
         <div class="row">
@@ -272,7 +272,7 @@
     var x = point[0], y = point[1];
     if (tool === "pillar") { scene.send({pillar: [x, y]}); }
     else if (tool === "remove") { scene.send({remove: [x, y]}); }
-    else { scene.send({sign: [x, y, tool]}); }
+    else { scene.send({sign: [x, y, scene.direction(tool)]}); }
   });
 
   el("alarm").addEventListener("click", function () { scene.send({alarm: true}); });

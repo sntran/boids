@@ -20,6 +20,13 @@
   @media (max-width: 560px) {
     .tools button { min-width: 0; flex: 1 1 40%; }
   }
+  /* On a phone, the tools are one row below the field: the text of each tool is one line. */
+  @media (max-width: 700px) and (orientation: portrait) {
+    .tools { flex-wrap: nowrap; gap: 6px; }
+    .tools button { flex: 1 1 0; min-width: 0; padding: 7px 9px; }
+    .tools button span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.72rem; }
+    .tools .wave { flex: 0 0 auto; margin-left: 0; }
+  }
 </style>
 </head>
 <body>
@@ -49,7 +56,7 @@
   </div>
 
   <p class="status" id="status" role="status">The ants come out of the nest.</p>
-  <div class="tools" role="group" aria-label="What a click on the land places">
+  <div class="tools" data-phone="tools" role="group" aria-label="What a click on the land places">
     <button id="food" type="button" aria-pressed="true"><b>Food</b><span>A pile of 40 pieces. 8 piles at most.</span></button>
     <button id="rock" type="button" aria-pressed="false"><b>Rock</b><span>The ants walk around it. 10 rocks at most.</span></button>
     <button id="rain" type="button"><b>Rain</b><span>Washes all the scent away.</span></button>

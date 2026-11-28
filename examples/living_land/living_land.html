@@ -13,6 +13,10 @@
   .field .source { z-index: 2; }
   .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
   .actions button { padding: 9px 12px; }
+  @media (max-width: 700px) and (orientation: portrait) {
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .actions button { flex: 1 1 auto; padding: 7px 8px; font-size: 0.8rem; }
+  }
   .status { font-size: 1rem; min-height: 1.6em; }
   .facts { color: var(--muted); font-size: 0.9rem; min-height: 1.5em; }
   .chart { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
@@ -54,7 +58,7 @@
     </div>
     <div>
       <p class="status" id="status" role="status">The land lives.</p>
-      <div class="actions">
+      <div class="actions" data-phone="tools">
         <button id="more" type="button">More food</button>
         <button id="less" type="button">Less food</button>
         <button id="drought" type="button">Drought</button>

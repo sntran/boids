@@ -111,7 +111,7 @@
 
   var scene = Boids.scene({
     name: "deep-reef",
-    keys: {into: el("keys"), pad: true, actions: [{key: "burst", label: "Burst", codes: ["ShiftLeft", "ShiftRight"]}]},
+    keys: {into: el("keys"), pad: true, actions: [{key: "burst", label: "Burst", codes: ["ShiftLeft", "ShiftRight"]}], mirror: [el("go")]},
     canvas: el("field"), readings: el("readings"), source: el("source"),
     onMore: show,
     onError: function (text) { el("error").textContent = text; }

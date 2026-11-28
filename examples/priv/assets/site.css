@@ -75,8 +75,37 @@ button.down { background: var(--ink); color: var(--panel); border-color: var(--i
 .keys p { margin: 0; flex: 1 1 260px; min-width: 0; }
 /* Keys with no pad (Rock Patrol): each key has the size of its text. */
 .keys.plain button.key { width: auto; height: auto; min-width: 64px; padding: 10px 12px; }
-/* A phone in portrait (scene.js): the field uses all the width of the screen. */
+/* A phone (scene.js). The field uses all the width of the screen. In
+   portrait the world is turned, so the canvas is tall: its height has a
+   limit, and the field with its bars is on the screen at one time. */
+.hud, .thumbs { display: none; }
 .field.phone { margin-left: -16px; margin-right: -16px; border-radius: 0; border-left: 0; border-right: 0; }
+.field.phone canvas { width: auto; height: auto; max-width: 100%; margin: 0 auto; }
+/* The readings, in a bar at the top of the field. */
+.field.phone .hud {
+  display: flex; flex-wrap: wrap; gap: 0 12px; align-items: baseline; min-height: 30px; padding: 5px 10px 4px 74px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.field.phone .hud .reading { flex-direction: row; gap: 5px; align-items: baseline; }
+.field.phone .hud .reading span { font-size: 0.62rem; }
+.field.phone .hud .reading b { font-size: 0.82rem; }
+.field.phone .source { left: 8px; top: 5px; font-size: 0.62rem; padding: 1px 6px; }
+/* The keys of the game, on the field at the bottom corners, near the thumbs. */
+.field.phone .thumbs {
+  display: flex; position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; justify-content: space-between; align-items: flex-end;
+  gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); pointer-events: none;
+}
+/* On a tall screen, the keys are in a bar below the canvas (scene.js). */
+.field.phone.bar .thumbs { position: static; background: var(--panel); border-top: 1px solid var(--line); padding: 8px 12px; }
+.field.phone.bar .thumb.right { flex-direction: row; flex-wrap: wrap-reverse; justify-content: flex-end; }
+.thumb { display: flex; gap: 6px; align-items: flex-end; pointer-events: auto; }
+.thumb.right { flex-direction: column-reverse; align-items: stretch; }
+.field.phone .thumbs:not(:has(button:not([hidden]))) { display: none; }
+.field.phone .pad { grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(2, 48px); }
+.field.phone .thumbs button { height: 48px; font-size: 0.8rem; touch-action: none; -webkit-tap-highlight-color: transparent; }
+.field.phone .thumbs button.key { width: auto; min-width: 72px; padding: 0 10px; }
+/* A key on the field shows what is below it. */
+.field.phone:not(.bar) .thumbs button:not(.down):not(.main) { background: color-mix(in srgb, var(--panel) 30%, transparent); border-color: color-mix(in srgb, var(--ink) 45%, transparent); }
 .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px 28px; border-top: 1px solid var(--line); padding-top: 18px; }
 .notes p, .notes li { color: var(--muted); font-size: 0.92rem; }
 code, pre { font-family: var(--data); font-size: 0.85em; }
@@ -95,3 +124,13 @@ th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var
 th { font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
 .wide { overflow-x: auto; }
 footer { border-top: 1px solid var(--line); padding-top: 14px; color: var(--muted); font-size: 0.9rem; }
+/* On a phone, a page has one column, with the field first. The tools of
+   a page (data-phone="tools") are just below the field. */
+@media (max-width: 700px) and (orientation: portrait), (max-height: 500px) and (orientation: landscape) {
+  .page > .field ~ *, .two > * > *, [data-phone="open"] > * { order: 1; }
+  .page > .field ~ [data-phone="tools"], .two > * > .field, .two > * > [data-phone="tools"], [data-phone="open"] > [data-phone="tools"] { order: 0; }
+  .two { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+  .two > *, [data-phone="open"] { display: contents; }
+  [data-phone="tools"] { margin-top: -12px; }
+  .two [data-phone="tools"] { margin-top: 0; }
+}

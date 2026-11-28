@@ -128,7 +128,7 @@
 
   var scene = Boids.scene({
     name: "quiet-herd",
-    keys: {into: el("keys"), pad: true, actions: [{key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]}]},
+    keys: {into: el("keys"), pad: true, actions: [{key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]}], mirror: [el("go")]},
     canvas: el("field"), readings: el("readings"), source: el("source"),
     onMore: show,
     onError: function (text) { el("error").textContent = text; }

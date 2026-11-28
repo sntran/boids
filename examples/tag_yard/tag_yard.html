@@ -124,7 +124,8 @@
 
     var headline = "", detail = "", state = more.you || "runner";
     var left = more.left + " seconds to the bell.";
-    if (more.phase === "over") {
+    over = more.phase === "over";
+    if (over) {
       state = more.won ? "won" : "lost";
       // In Freeze, the runners win or lose as a team.
       if (more.mode === "freeze") {
@@ -164,15 +165,16 @@
   // The trees are the rocks of the world: a crown of leaves on each, a
   // line of chalk around the yard, and a ring under you and under each
   // child that is it (the option beneath of Boids.scene).
-  function beneath(ctx, scale, height, c) {
+  var over = false;
+
+  function beneath(ctx, scale, height, c, now, sprites, view) {
     ctx.save();
     ctx.strokeStyle = c.panel; ctx.globalAlpha = 0.55; ctx.lineWidth = 3; ctx.setLineDash([14, 10]);
     ctx.strokeRect(4 * scale, 4 * scale, 152 * scale, (height - 8) * scale);
     ctx.restore();
     trees.forEach(function (tree, n) {
       var x = tree[0] * scale, y = (height - tree[1]) * scale, r = tree[2] * scale;
-      ctx.save();
-      ctx.translate(x, y);
+      view.upright(x, y, function () {
       ctx.fillStyle = c.shade;
       ctx.beginPath(); ctx.ellipse(r * 0.25, r * 0.3, r * 1.25, r * 1.15, 0, 0, 2 * Math.PI); ctx.fill();
       ctx.fillStyle = c.leaf;
@@ -183,7 +185,7 @@
       ctx.beginPath(); ctx.arc(0, 0, r * 0.7, 0, 2 * Math.PI); ctx.fill();
       ctx.fillStyle = "rgba(255,255,255,0.16)";
       ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.3, r * 0.4, 0, 2 * Math.PI); ctx.fill();
-      ctx.restore();
+      });
     });
     marks.forEach(function (mark) {
       ctx.save();
@@ -197,7 +199,7 @@
 
   var scene = Boids.scene({
     name: "tag-yard",
-    keys: {into: el("keys"), pad: true, actions: [{key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]}]},
+    keys: {into: el("keys"), pad: true, actions: [{key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]}], mirror: [{button: el("go"), when: function () { return over; }}]},
     canvas: el("field"), readings: el("readings"), source: el("source"),
     beneath: beneath,
     onStart: function (header) { trees = header.rocks || []; },

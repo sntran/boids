@@ -68,6 +68,21 @@ defmodule BoidsExamples.GamesTest do
     end
   end
 
+  # On a phone in portrait, the scene turns the world (examples/README.md,
+  # "On a phone"). A text that a page draws on the field has a top and a
+  # bottom: the page draws it with view.upright.
+  test "a text that a page draws on the field is upright" do
+    for game <- @games do
+      %{slug: slug} = game.info()
+
+      for [hook] <- Regex.scan(~r/function (?:beneath|above)\(.*?\n  \}\n/s, game.page()) do
+        if hook =~ ~r/\.(fillText|strokeText)\(/ do
+          assert hook =~ "view.upright(", "#{slug}: a text on the field with no view.upright"
+        end
+      end
+    end
+  end
+
   test "the server gives the list, the page of each game, and moves the old addresses" do
     assert {200, _, body} = get("/showcases")
     for game <- @games, do: assert(body =~ game.info().title)

@@ -103,7 +103,7 @@
   var reeds = [];
 
   // The reeds: a bed of green blades with brown heads, under the boids.
-  function beneath(ctx, scale, height, c) {
+  function beneath(ctx, scale, height, c, now, sprites, view) {
     reeds.forEach(function (bed, n) {
       var x = bed[0] * scale, y = (height - bed[1]) * scale, r = bed[2] * scale;
       ctx.fillStyle = c.leaf;
@@ -117,11 +117,13 @@
         var lean = ((k * 5 + n) % 9 - 4) * r * 0.04;
         ctx.strokeStyle = c.leaf;
         ctx.lineWidth = Math.max(1.5, r * 0.05);
-        ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + lean, by - r * 0.32); ctx.stroke();
-        if (k % 4 === 0) {
-          ctx.fillStyle = c.fur;
-          ctx.beginPath(); ctx.ellipse(bx + lean, by - r * 0.36, r * 0.05, r * 0.1, 0, 0, 2 * Math.PI); ctx.fill();
-        }
+        view.upright(bx, by, function () {
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(lean, -r * 0.32); ctx.stroke();
+          if (k % 4 === 0) {
+            ctx.fillStyle = c.fur;
+            ctx.beginPath(); ctx.ellipse(lean, -r * 0.36, r * 0.05, r * 0.1, 0, 0, 2 * Math.PI); ctx.fill();
+          }
+        });
       }
     });
   }
@@ -159,7 +161,7 @@
 
   var scene = Boids.scene({
     name: "duckling-line",
-    keys: {into: el("keys"), pad: true, actions: [{key: "hurry", label: "Hurry", codes: ["ShiftLeft", "ShiftRight"]}]},
+    keys: {into: el("keys"), pad: true, actions: [{key: "hurry", label: "Hurry", codes: ["ShiftLeft", "ShiftRight"]}], mirror: [el("go")]},
     canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
     onStart: function (header) { reeds = header.reeds || []; },
     onMore: show,

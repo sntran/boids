@@ -115,12 +115,11 @@
   var words = {theft: "a theft", running: "a person that runs", coat: "the coat", officer: "an officer saw"};
 
   // The stalls and the sightings, on the ground under the boids.
-  function beneath(ctx, scale, height, c, now) {
+  function beneath(ctx, scale, height, c, now, sprites, view) {
     market.stalls.forEach(function (stall) {
       var name = stall[0], x = stall[1] * scale, y = (height - stall[2]) * scale, r = stall[3] * scale, kind = stall[4];
       var w = r * 2.2, h = r * 1.7, color = c[stallColors[name]] || c.rock;
-      ctx.save();
-      ctx.translate(x, y);
+      view.upright(x, y, function () {
       ctx.fillStyle = c.shade;
       ctx.fillRect(-w / 2 + r * 0.12, -h / 2 + r * 0.16, w, h);
       // The awning: stripes of the color of the stall and of wool.
@@ -150,7 +149,7 @@
         ctx.strokeStyle = c.edge;
         ctx.stroke();
       }
-      ctx.restore();
+      });
     });
 
     market.sightings.forEach(function (s) {
@@ -169,7 +168,7 @@
       ctx.font = "700 " + Math.round(2.6 * scale) + "px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("?", x, y);
+      view.upright(x, y, function () { ctx.fillText("?", 0, 0); });
       ctx.restore();
     });
   }
@@ -246,7 +245,8 @@
         {key: "run", label: "Run", codes: ["ShiftLeft", "ShiftRight"]},
         {label: "Steal", send: {steal: true}, codes: ["Space"]},
         {label: "Coat", send: {coat: true}, codes: ["KeyC"]}
-      ]
+      ],
+      mirror: [el("go")]
     },
     canvas: el("field"), beneath: beneath, readings: el("readings"), source: el("source"),
     onMore: show,

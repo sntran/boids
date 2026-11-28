@@ -161,7 +161,8 @@
   }
 
   var scene = Boids.scene({
-    name: "playground", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "playground", turn: false,
+    canvas: el("field"), readings: el("readings"), source: el("source"),
     onOpen: run,
     onError: function (text) { el("error").textContent = text; }
   });

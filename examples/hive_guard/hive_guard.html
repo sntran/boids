@@ -21,6 +21,13 @@
     .bees button { min-width: 0; flex: 1 1 40%; }
     .bees .wave { margin-left: 0; flex: 1 1 100%; }
   }
+  /* On a phone, the tools are one row below the field: the text of each tool is one line. */
+  @media (max-width: 700px) and (orientation: portrait) {
+    .bees { flex-wrap: nowrap; gap: 6px; }
+    .bees button { flex: 1 1 0; min-width: 0; padding: 7px 9px; }
+    .bees button span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.72rem; }
+    .bees .wave { flex: 0 0 auto; margin-left: 0; }
+  }
 </style>
 </head>
 <body>
@@ -50,7 +57,7 @@
   </div>
 
   <p class="status" id="status" role="status">The hive waits for the first wave.</p>
-  <div class="bees" role="group" aria-label="The bee to place">
+  <div class="bees" data-phone="tools" role="group" aria-label="The bee to place">
     <button id="scout" type="button" aria-pressed="true"><b>Scout</b><span>25 nectar. Fast. Sees near. Stings for 1.</span></button>
     <button id="soldier" type="button" aria-pressed="false"><b>Soldier</b><span>50 nectar. Slow. Sees far. Stings for 3.</span></button>
     <button class="main wave" id="go" type="button">Next wave now</button>
@@ -94,7 +101,7 @@
   var game = { phase: "building", nectar: 0, guards: 0, max_guards: 12 };
 
   var scene = Boids.scene({
-    name: "hive-guard", canvas: el("field"), readings: el("readings"), source: el("source"),
+    name: "hive-guard", turn: "down", canvas: el("field"), readings: el("readings"), source: el("source"),
     onStart: function (header) { box = header.box; },
     onMore: show,
     onError: function (text) { el("error").textContent = text; }

@@ -7,42 +7,260 @@
 // A page that reads a point of the field (a click, a touch) uses
 // `scene.toWorld(event)`: the point of the world under the event. The
 // options `beneath` and `above` draw things of the page under and over
-// the boids, in the pixels of the canvas.
+// the boids, in the pixels of the world (1600 for its width). Their last
+// argument is the view: `view.turn` (see below) and `view.upright(x, y,
+// draw)`, which draws at a point with no turn (for a text, or a thing
+// with a top and a bottom).
 //
-// On a phone in portrait (a screen of 700 px wide or less, taller than
-// it is wide), the field has the class `phone`: it uses all the width of
-// the screen (site.css).
+// On a phone, the world of a game (a box of 16 by 9) does not have the
+// shape of the screen (9 by 16). So on a phone in portrait (a screen of
+// 700 px wide or less, taller than it is wide), the scene turns the
+// world by 90 degrees: the +x of the world is up on the screen. All the
+// world shows, and no game changes.
 //
-// The scene makes the keys of a game from the option `keys`, in the
-// element `into` of the page, before its text:
-//     keys: {into: element, pad: true, actions: [...]}
-// `pad: true` gives four arrows, with the arrow keys and W, A, S and D of
-// a keyboard. An action is `{label, key, codes}` (a key that the person
-// holds) or `{label, send, codes}` (a message at each press). `codes` are
-// the codes of the keys of a keyboard. While a key is down, the server
-// gets the list of the keys that are down: `{keys: ["left", "run"]}`.
+// - `turn: "down"`: the +x of the world is down on the screen.
+//   `turn: false`: no turn (the playground: its definitions have
+//   coordinates).
+// - `crop: {shape: 4 / 3, follow: ["hawk"]}`: no turn. The field shows
+//   all the height of the world and a part of its width, and follows the
+//   boids of these kinds (the home page: its flock is only a picture).
+// - `keys`: the keys of a game. The scene makes them: in the element
+//   `into` of the page on a large screen, and on the field at the bottom
+//   corners on a phone.
+//       keys: {into: element, pad: true, actions: [...], mirror: [...]}
+//   `pad: true` gives four arrows. They are directions of the screen: the
+//   scene changes them to directions of the world before it sends them
+//   (`{keys: ["left", "run"]}`). An action is `{label, key, codes}` (a
+//   key that the person holds) or `{label, send, codes}` (a message at
+//   each press). `codes` are the codes of the keys of a keyboard. `side:
+//   "left"` puts an action at the left corner. `mirror` is a list of
+//   buttons of the page: while a button shows in the page, a copy of it
+//   shows on the field of a phone.
+// - `scene.direction("left")` gives the direction of the world for a
+//   direction of the screen.
+// - The readings are in a bar at the top of the field.
+//
+// On a phone in landscape (a screen of 500 px high or less), the field
+// fills the height of the screen, with the keys at its two sides.
 (function () {
   "use strict";
 
-  // A phone in portrait.
-  var phone = window.matchMedia ? window.matchMedia("(max-width: 700px) and (orientation: portrait)") : { matches: false };
+  function media(query) { return window.matchMedia ? window.matchMedia(query) : { matches: false }; }
+  // A phone in portrait, and a phone in landscape.
+  var portrait = media("(max-width: 700px) and (orientation: portrait)");
+  var landscape = media("(max-height: 500px) and (orientation: landscape)");
+  // On a phone in portrait, the animals and the labels are this many times
+  // larger.
+  var grow = 1.25;
+  // The direction of the world for a direction of the screen, when the +x
+  // of the world is up (1) or down (-1) on the screen.
+  var turns = {
+    "1": { up: "right", right: "down", down: "left", left: "up" },
+    "-1": { up: "left", left: "down", down: "right", right: "up" }
+  };
 
   function scene(options) {
     var canvas = options.canvas;
     var ctx = canvas.getContext("2d");
     var field = canvas.closest(".field") || canvas.parentNode;
+    // The world in pixels: 1600 for its width. All the drawings use these
+    // pixels, and the view puts them on the canvas.
+    var W = 1600, H = 900;
+    // The view: 0 (the world as it is), 1 (its +x is up on the screen) or
+    // -1 (its +x is down).
+    var turn = 0;
+    var crop = null;
+    var cam = { x: 0, cx: null, at: 0 };   // the left side of a crop, in pixels of the world
+    var boost = 1;
+    var shown = [];                        // the boids of the last frame
+    var onField = false;                   // the keys and the readings are on the field
+    var run = null;        // the box, the kinds and the rocks
+    var before = {};       // the boids of the moment before the last moment, by their number
+    var last = null;       // the last moment
+    var links = [];        // the relations, as pairs of numbers
+    var extra = {};        // more of the last moment (the game)
+    var lastAt = 0;
+    var period = 50;
+    var paused = false;
+    var showLinks = true;
+    var socket = null;
+    var tries = 0;
 
-    function layout() { field.classList.toggle("phone", phone.matches); }
-    if (phone.addEventListener) { phone.addEventListener("change", layout); } else if (phone.addListener) { phone.addListener(layout); }
-    layout();
+    function note(text) { if (options.source) { options.source.textContent = text; } }
+
+    function colors() {
+      var style = getComputedStyle(document.documentElement);
+      var read = function (name) { return style.getPropertyValue(name).trim(); };
+      var c = {};
+      ["rock", "warm", "cool", "panel", "field", "wool", "fur", "gold", "leaf", "plum", "edge", "shade", "grass", "water", "sand", "floor", "night"]
+        .forEach(function (name) { c[name] = read("--" + name); });
+      c.ink = read("--boid");
+      return c;
+    }
+
+    function start(header) {
+      run = header;
+      period = header.tick;
+      last = null;
+      links = [];
+      W = 1600;
+      H = Math.round(1600 * run.box[1] / run.box[0]);
+      cam.cx = null;
+      layout();
+      readingsHost().textContent = "";
+      note("Live");
+      if (options.onStart) { options.onStart(header); }
+    }
+
+    function byNumber(moment) {
+      var map = {};
+      for (var i = 0; i < moment.b.length; i += 6) { map[moment.b[i]] = [moment.b[i + 1], moment.b[i + 2], moment.b[i + 3]]; }
+      return map;
+    }
+
+    // A reading of the server: a label and a value below the canvas.
+    function reading(label, value) {
+      var id = "reading-" + label.replace(/\W+/g, "-");
+      var element = document.getElementById(id);
+      if (!element) {
+        element = document.createElement("div");
+        element.className = "reading";
+        element.id = id;
+        element.appendChild(document.createElement("span")).textContent = label;
+        element.appendChild(document.createElement("b"));
+        readingsHost().appendChild(element);
+      }
+      element.lastChild.textContent = value;
+    }
+
+    // --- The view ------------------------------------------------------
+
+    // The bar of the field for the readings, on a phone.
+    var hud = document.createElement("div");
+    hud.className = "hud";
+    field.insertBefore(hud, field.firstChild);
+    var spare = document.createElement("div");
+    function readingsHost() { return onField ? hud : (options.readings || spare); }
+
+    // Draw at a point of the world with no turn: a text, or a thing with a
+    // top and a bottom.
+    function upright(x, y, draw) {
+      ctx.save();
+      ctx.translate(x, y);
+      if (turn) { ctx.rotate(turn * Math.PI / 2); }
+      draw();
+      ctx.restore();
+    }
+
+    // A distance on the screen (to the right, down), in the world.
+    function fromScreen(dx, dy) { return turn === 1 ? [-dy, dx] : (turn === -1 ? [dy, -dx] : [dx, dy]); }
+
+    // The direction of the world for a direction of the screen.
+    function direction(name) { return turn ? turns[turn][name] || name : name; }
+
+    // The size of the canvas for the view.
+    function size() {
+      var w = turn ? H : (crop ? Math.round(H * crop.shape) : W);
+      var h = turn ? W : H;
+      if (canvas.width !== w) { canvas.width = w; }
+      if (canvas.height !== h) { canvas.height = h; }
+      fit();
+    }
+
+    // The canvas and the things of the field that are near it are on the
+    // screen at one time: the bar of the readings, and the tools of the
+    // page that are below the field (`data-phone="tools"`).
+    var below = 0;
+    // The height of the screen with the bars of the browser (100svh), in pixels.
+    var probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;left:0;top:0;width:0;height:100svh;visibility:hidden;pointer-events:none";
+    field.appendChild(probe);
+    function fit() {
+      if (!onField) { canvas.style.maxHeight = ""; field.classList.remove("bar"); return; }
+      var tools = 0;
+      Array.prototype.forEach.call(document.querySelectorAll('[data-phone="tools"]'), function (element) {
+        if (element.offsetHeight > 0) { tools += element.offsetHeight + 10; }
+      });
+      // The tools can hide for a time: the field keeps its size. In
+      // landscape, the tools are lower in the page.
+      below = portrait.matches ? Math.max(below, tools) : 0;
+      // The keys are in a bar below the canvas when the screen has room for
+      // the canvas at its full width and the bar. If not, they are on the
+      // canvas: a bar then makes the field small. A field with only copies
+      // of buttons of the page has no bar: a copy shows only for a time.
+      var room = probe.offsetHeight - hud.offsetHeight - below - 4;
+      var full = field.clientWidth * canvas.height / canvas.width;
+      var inBar = portrait.matches && all.length > 0 && room - thumbs.offsetHeight >= full;
+      field.classList.toggle("bar", inBar);
+      var most = "calc(100svh - " + (hud.offsetHeight + below + (inBar ? thumbs.offsetHeight : 0) + 4) + "px)";
+      if (canvas.style.maxHeight !== most) { canvas.style.maxHeight = most; }
+    }
+
+    function layout() {
+      var tall = portrait.matches, low = landscape.matches;
+      crop = tall && options.crop ? options.crop : null;
+      turn = tall && !crop && options.turn !== false ? (options.turn === "down" ? -1 : 1) : 0;
+      boost = tall ? grow : 1;
+      var before = onField;
+      onField = tall || low;
+      field.classList.toggle("phone", onField);
+      field.classList.toggle("turned", turn !== 0);
+      field.classList.toggle("wide", low);
+      document.documentElement.classList.toggle("boids-phone", onField);
+      if (before !== onField) {
+        // The readings go to their new place.
+        var from = before ? hud : (options.readings || spare);
+        while (from.firstChild) { readingsHost().appendChild(from.firstChild); }
+      }
+      placeKeys();
+      size();
+      if (Object.keys(down).length > 0) { sendKeys(); }
+    }
+
+    // The point of a crop to follow, in pixels of the world, or null.
+    function focus(list) {
+      var sum = 0, count = 0;
+      list.forEach(function (boid) { if ((crop.follow || []).indexOf(boid.kind.name) >= 0) { sum += boid.x; count++; } });
+      return count > 0 ? sum / count : null;
+    }
+
+    // The left side of a crop in this frame.
+    function camera(list, now) {
+      if (!crop) { cam.x = 0; return; }
+      var width = canvas.width;
+      var target = focus(list);
+      if (cam.cx === null) { cam.cx = target === null ? W / 2 : target; }
+      if (target !== null) {
+        // A target that went across a side of the world: the view jumps.
+        if (Math.abs(target - cam.cx) > W / 2) { cam.cx = target; }
+        else { cam.cx += (target - cam.cx) * Math.min(1, Math.max(0, now - cam.at) / 350); }
+      }
+      cam.cx = width >= W ? W / 2 : Math.max(width / 2, Math.min(W - width / 2, cam.cx));
+      cam.x = cam.cx - width / 2;
+      cam.at = now;
+    }
+
+    // The point of the canvas for a point of the world, both in pixels.
+    function toCanvas(x, y) { return turn === 1 ? [y, W - x] : (turn === -1 ? [H - y, x] : [x - cam.x, y]); }
 
     // --- The keys of a game --------------------------------------------
 
     var down = {};      // the keys that are down: "pad-up" for an arrow, or the name of a key
     var buttons = {};
+    var all = [];       // the keys in the order of the page
+    var corners = { left: [], right: [] };
+    var mirrors = [];
+    var thumbs = document.createElement("div");
+    thumbs.className = "thumbs";
+    var corner = {};
+    ["left", "right"].forEach(function (side) {
+      corner[side] = thumbs.appendChild(document.createElement("div"));
+      corner[side].className = "thumb " + side;
+    });
+    field.appendChild(thumbs);
 
     function sendKeys() {
-      send({ keys: Object.keys(down).map(function (id) { return id.indexOf("pad-") === 0 ? id.slice(4) : id; }) });
+      send({ keys: Object.keys(down).map(function (id) { return id.indexOf("pad-") === 0 ? direction(id.slice(4)) : id; }) });
     }
 
     function setKey(id, on) {
@@ -73,7 +291,6 @@
 
     function makeKeys(spec) {
       var codes = {};
-      var all = [];
       if (spec.pad) {
         var pad = document.createElement("div");
         pad.className = "pad";
@@ -86,6 +303,7 @@
           one[2].forEach(function (code) { codes[code] = { hold: "pad-" + one[0] }; });
         });
         all.push(pad);
+        corners.left.push(pad);
       }
       (spec.actions || []).forEach(function (action) {
         var element = button(action.label, "key");
@@ -97,9 +315,18 @@
         }
         (action.codes || []).forEach(function (code) { codes[code] = action.key ? { hold: action.key } : { send: action.send }; });
         all.push(element);
+        corners[action.side === "left" ? "left" : "right"].push(element);
       });
-      // The keys are before the text of the element.
-      all.reverse().forEach(function (element) { spec.into.insertBefore(element, spec.into.firstChild); });
+      // A copy of a button of the page: the button, or `{button, when}`
+      // with a function that tells when the copy shows.
+      (spec.mirror || []).forEach(function (entry) {
+        var plain = entry instanceof Element;
+        var original = plain ? entry : entry.button;
+        var copy = button("", "key mirror");
+        copy.hidden = true;
+        copy.addEventListener("click", function () { original.click(); });
+        mirrors.push([original, copy, plain ? null : entry.when]);
+      });
 
       window.addEventListener("keydown", function (event) {
         var code = codes[event.code];
@@ -114,64 +341,45 @@
       setInterval(function () { if (Object.keys(down).length > 0) { sendKeys(); } }, 1000);
     }
 
-    if (options.keys) { makeKeys(options.keys); }
-    var run = null;        // the box, the kinds and the rocks
-    var before = {};       // the boids of the moment before the last moment, by their number
-    var last = null;       // the last moment
-    var links = [];        // the relations, as pairs of numbers
-    var extra = {};        // more of the last moment (the game)
-    var lastAt = 0;
-    var period = 50;
-    var paused = false;
-    var showLinks = true;
-    var socket = null;
-    var tries = 0;
-
-    function note(text) { if (options.source) { options.source.textContent = text; } }
-
-    function colors() {
-      var style = getComputedStyle(document.documentElement);
-      var read = function (name) { return style.getPropertyValue(name).trim(); };
-      var c = {};
-      ["rock", "warm", "cool", "panel", "field", "wool", "fur", "gold", "leaf", "plum", "edge", "shade", "grass", "water", "sand", "floor", "night"]
-        .forEach(function (name) { c[name] = read("--" + name); });
-      c.ink = read("--boid");
-      return c;
-    }
-
-    function start(header) {
-      run = header;
-      period = header.tick;
-      last = null;
-      links = [];
-      canvas.width = 1600;
-      canvas.height = Math.round(1600 * run.box[1] / run.box[0]);
-      if (options.readings) { options.readings.textContent = ""; }
-      note("Live");
-      if (options.onStart) { options.onStart(header); }
-    }
-
-    function byNumber(moment) {
-      var map = {};
-      for (var i = 0; i < moment.b.length; i += 6) { map[moment.b[i]] = [moment.b[i + 1], moment.b[i + 2], moment.b[i + 3]]; }
-      return map;
-    }
-
-    // A reading of the server: a label and a value below the canvas.
-    function reading(label, value) {
-      if (!options.readings) { return; }
-      var id = "reading-" + label.replace(/\W+/g, "-");
-      var element = document.getElementById(id);
-      if (!element) {
-        element = document.createElement("div");
-        element.className = "reading";
-        element.id = id;
-        element.appendChild(document.createElement("span")).textContent = label;
-        element.appendChild(document.createElement("b"));
-        options.readings.appendChild(element);
+    // The keys are on the field on a phone, and in the element `into` of
+    // the page on a large screen, before its text.
+    function placeKeys() {
+      var into = options.keys && options.keys.into;
+      if (onField) {
+        ["left", "right"].forEach(function (side) { corners[side].forEach(function (element) { corner[side].appendChild(element); }); });
+        mirrors.forEach(function (pair) { corner.right.appendChild(pair[1]); });
+      } else {
+        mirrors.forEach(function (pair) { if (pair[1].parentNode) { pair[1].parentNode.removeChild(pair[1]); } });
+        if (into) { all.slice().reverse().forEach(function (element) { into.insertBefore(element, into.firstChild); }); }
       }
-      element.lastChild.textContent = value;
     }
+
+    // True while the element shows in the page: no part of the page that
+    // holds it is hidden.
+    function inPage(element) {
+      for (var e = element; e && e !== document.body; e = e.parentNode) { if (e.hidden) { return false; } }
+      return true;
+    }
+
+    // The copies follow the buttons of the page, and the field follows the
+    // size of its bars.
+    setInterval(function () {
+      if (!onField) { return; }
+      mirrors.forEach(function (pair) {
+        pair[1].hidden = !inPage(pair[0]) || (!!pair[2] && !pair[2]());
+        pair[1].disabled = pair[0].disabled;
+        if (pair[1].textContent !== pair[0].textContent) { pair[1].textContent = pair[0].textContent; }
+        pair[1].classList.toggle("main", pair[0].classList.contains("main"));
+      });
+      fit();
+    }, 250);
+
+    if (options.keys) { makeKeys(options.keys); }
+    [portrait, landscape].forEach(function (query) {
+      if (query.addEventListener) { query.addEventListener("change", layout); } else if (query.addListener) { query.addListener(layout); }
+    });
+    window.addEventListener("resize", fit);
+    layout();
 
     function take(moment) {
       before = last ? byNumber(last) : {};
@@ -192,7 +400,7 @@
     // the box is at its new position.
     function between(a, b, size, part) { return Math.abs(b - a) > size / 2 ? b : a + (b - a) * part; }
 
-    function turn(a, b, part) {
+    function sweep(a, b, part) {
       var d = b - a;
       if (d > Math.PI) { d -= 2 * Math.PI; } else if (d < -Math.PI) { d += 2 * Math.PI; }
       return a + d * part;
@@ -474,10 +682,12 @@
       return g;
     }
 
-    function ground(c) {
-      var key = run.ground + "|" + c.field + "|" + c.grass + "|" + canvas.width + "x" + canvas.height;
+    // The ground has the frame of the screen: its grass grows up on the
+    // screen, also when the world is turned.
+    function ground(c, width, height) {
+      var key = run.ground + "|" + c.field + "|" + c.grass + "|" + width + "x" + height;
       if (!run.ground) { return; }
-      if (key !== groundKey) { groundCanvas = paintGround(run.ground, c, canvas.width, canvas.height); groundKey = key; }
+      if (key !== groundKey) { groundCanvas = paintGround(run.ground, c, width, height); groundKey = key; }
       ctx.drawImage(groundCanvas, 0, 0);
     }
 
@@ -497,53 +707,50 @@
       }
       ctx.globalAlpha = 1;
       if (z[5]) {
-        ctx.fillStyle = c[z[4]] || c.cool; ctx.font = "600 " + Math.round(canvas.width / 55) + "px sans-serif";
-        ctx.textAlign = "center"; ctx.textBaseline = "top";
-        if (ctx.measureText(String(z[5])).width > w - 12 && h > w) {
+        var text = String(z[5]);
+        ctx.fillStyle = c[z[4]] || c.cool; ctx.font = "600 " + Math.round(W / 55 * boost) + "px sans-serif";
+        ctx.textAlign = "center";
+        // The width and the height of the zone on the screen.
+        var across = turn ? h : w, tall = turn ? w : h;
+        if (ctx.measureText(text).width > across - 12 && tall > across) {
           // A tall, narrow zone: the label goes along its long side.
-          ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.rotate(-Math.PI / 2);
-          ctx.textBaseline = "middle"; ctx.fillText(String(z[5]), 0, 0); ctx.restore();
+          upright(x + w / 2, y + h / 2, function () {
+            ctx.rotate(-Math.PI / 2); ctx.textBaseline = "middle"; ctx.fillText(text, 0, 0);
+          });
         } else {
-          ctx.fillText(String(z[5]), x + w / 2, y + 6);
+          // The middle of the top side of the zone on the screen.
+          var top = turn === 1 ? [x + w - 6, y + h / 2] : (turn === -1 ? [x + 6, y + h / 2] : [x + w / 2, y + 6]);
+          upright(top[0], top[1], function () { ctx.textBaseline = "top"; ctx.fillText(text, 0, 0); });
         }
       }
     }
 
     // A rock of the world: a stone with a light side.
     function stone(x, y, r, c, number) {
-      ctx.save(); ctx.translate(x, y);
-      ctx.fillStyle = c.shade; ellipse(r * 0.12, r * 0.16, r * 1.02, r * 0.96); ctx.fill();
-      ctx.fillStyle = c.rock; rock(number, r, 0);
-      ctx.fillStyle = "rgba(255,255,255,0.18)"; ellipse(-r * 0.25, -r * 0.3, r * 0.45, r * 0.3, -0.5); ctx.fill();
-      ctx.restore();
+      upright(x, y, function () {
+        ctx.fillStyle = c.shade; ellipse(r * 0.12, r * 0.16, r * 1.02, r * 0.96); ctx.fill();
+        ctx.fillStyle = c.rock; rock(number, r, 0);
+        ctx.fillStyle = "rgba(255,255,255,0.18)"; ellipse(-r * 0.25, -r * 0.3, r * 0.45, r * 0.3, -0.5); ctx.fill();
+      });
     }
 
     function draw(now) {
       requestAnimationFrame(draw);
       if (!run || !last) { return; }
       var part = paused ? 1 : Math.min((now - lastAt) / period, 1);
-      var scale = canvas.width / run.box[0];
+      var scale = W / run.box[0];
       var height = run.box[1];
       var c = colors();
       var at = {};
       var list = [];
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ground(c);
-
-      // A zone is a part of the box with a color, behind the boids.
-      (run.zones || []).forEach(function (one) { zone(one, c, scale, height); });
-
-      run.rocks.forEach(function (one, n) { stone(one[0] * scale, (height - one[1]) * scale, one[2] * scale, c, n + 3); });
-
-      // A page can draw things of its own on the ground, under the boids.
-      if (options.beneath) { options.beneath(ctx, scale, height, c, now, sprites); }
+      var view = { turn: turn, upright: upright };
 
       for (var i = 0; i < last.b.length; i += 6) {
         var was = before[last.b[i]] || [last.b[i + 1], last.b[i + 2], last.b[i + 3]];
         var boid = {
           x: between(was[0], last.b[i + 1], run.box[0], part) * scale,
           y: (height - between(was[1], last.b[i + 2], height, part)) * scale,
-          angle: turn(was[2], last.b[i + 3], part),
+          angle: sweep(was[2], last.b[i + 3], part),
           kind: run.kinds[last.b[i + 4]] || run.kinds[0],
           size: last.b[i + 5],
           number: last.b[i]
@@ -551,6 +758,27 @@
         at[boid.number] = boid;
         list.push(boid);
       }
+      shown = list;
+
+      // The view: the world as it is, turned, or a part of it.
+      camera(list, now);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (turn) {
+        ground(c, H, W);
+        if (turn === 1) { ctx.setTransform(0, -1, 1, 0, 0, W); } else { ctx.setTransform(0, 1, -1, 0, H, 0); }
+      } else {
+        ctx.setTransform(1, 0, 0, 1, -cam.x, 0);
+        ground(c, W, H);
+      }
+
+      // A zone is a part of the box with a color, behind the boids.
+      (run.zones || []).forEach(function (one) { zone(one, c, scale, height); });
+
+      run.rocks.forEach(function (one, n) { stone(one[0] * scale, (height - one[1]) * scale, one[2] * scale, c, n + 3); });
+
+      // A page can draw things of its own on the ground, under the boids.
+      if (options.beneath) { options.beneath(ctx, scale, height, c, now, sprites, view); }
 
       if (showLinks) {
         ctx.strokeStyle = c.cool;
@@ -559,7 +787,7 @@
         links.forEach(function (link) {
           var from = at[link[0]], to = at[link[1]];
           if (!from || !to) { return; }
-          if (Math.abs(from.x - to.x) > canvas.width / 2 || Math.abs(from.y - to.y) > canvas.height / 2) { return; }
+          if (Math.abs(from.x - to.x) > W / 2 || Math.abs(from.y - to.y) > H / 2) { return; }
           ctx.beginPath();
           ctx.moveTo(from.x, from.y);
           ctx.lineTo(to.x, to.y);
@@ -571,7 +799,7 @@
       // The rocks first, so that the other boids are on top.
       list.sort(function (a, b) { return (a.kind.shape === "rock" ? 0 : 1) - (b.kind.shape === "rock" ? 0 : 1); });
       list.forEach(function (boid) {
-        var size = boid.kind.size * scale;
+        var size = boid.kind.size * scale * (boid.kind.shape === "rock" || boid.kind.shape === "dot" ? 1 : boost);
         ctx.save();
         ctx.translate(boid.x, boid.y);
         ctx.fillStyle = c[boid.kind.color] || c.ink;
@@ -583,8 +811,9 @@
           var body = size * 1.5;
           // A shadow under the animal, then the animal in its direction.
           var shadow = shadows[boid.kind.shape] || [0.75, 0.42];
+          var lower = fromScreen(body * 0.12, body * 0.18);
           ctx.fillStyle = c.shade;
-          ellipse(body * 0.12, body * 0.18, body * shadow[0], body * shadow[1], -boid.angle);
+          ellipse(lower[0], lower[1], body * shadow[0], body * shadow[1], -boid.angle);
           ctx.fill();
           ctx.save();
           if (!still[boid.kind.shape]) { ctx.rotate(-boid.angle); }
@@ -593,10 +822,12 @@
           // A kind with a badge shows the size of the boid as a number
           // (for example the health of a large beetle).
           if (boid.kind.badge && boid.size > 0) {
-            ctx.font = "700 " + Math.round(body * 0.7) + "px sans-serif";
-            ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            ctx.lineWidth = 3; ctx.strokeStyle = c.panel; ctx.strokeText(String(boid.size), 0, -body * 0.95);
-            ctx.fillStyle = c.ink; ctx.fillText(String(boid.size), 0, -body * 0.95);
+            upright(0, 0, function () {
+              ctx.font = "700 " + Math.round(body * 0.7) + "px sans-serif";
+              ctx.textAlign = "center"; ctx.textBaseline = "middle";
+              ctx.lineWidth = 3; ctx.strokeStyle = c.panel; ctx.strokeText(String(boid.size), 0, -body * 0.95);
+              ctx.fillStyle = c.ink; ctx.fillText(String(boid.size), 0, -body * 0.95);
+            });
           }
         } else if (boid.kind.shape === "rock") {
           rock(boid.number, size * Math.max(boid.size, 1), now);
@@ -611,11 +842,13 @@
           ctx.fill();
           if (boid.size > 1) {
             // The hits that the boid can take.
-            ctx.fillStyle = c.panel;
-            ctx.font = "600 " + Math.round(size * 0.9) + "px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText(String(boid.size), 0, size * 0.07);
+            upright(0, 0, function () {
+              ctx.fillStyle = c.panel;
+              ctx.font = "600 " + Math.round(size * 0.9) + "px sans-serif";
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText(String(boid.size), 0, size * 0.07);
+            });
           }
         } else {
           ctx.rotate(-boid.angle);
@@ -643,16 +876,34 @@
       });
 
       // A page can draw things of its own over the boids.
-      if (options.above) { options.above(ctx, scale, height, c, now); }
+      if (options.above) { options.above(ctx, scale, height, c, now, sprites, view); }
     }
 
     // The point of the world under a pointer event, or null.
     function toWorld(event) {
       if (!run) { return null; }
       var rect = canvas.getBoundingClientRect();
-      var x = (event.clientX - rect.left) / rect.width * run.box[0];
-      var y = run.box[1] - (event.clientY - rect.top) / rect.height * run.box[1];
+      var fx = (event.clientX - rect.left) / rect.width, fy = (event.clientY - rect.top) / rect.height;
+      var x, y;
+      if (turn === 1) { x = (1 - fy) * run.box[0]; y = (1 - fx) * run.box[1]; }
+      else if (turn === -1) { x = fy * run.box[0]; y = fx * run.box[1]; }
+      else { x = (fx * canvas.width + cam.x) / W * run.box[0]; y = (1 - fy) * run.box[1]; }
       return [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
+    }
+
+    // The boids of the last frame (of one kind, or all), for the checks of
+    // the site: the point of each one in the world and on the screen, and
+    // its angle.
+    function where(name) {
+      var rect = canvas.getBoundingClientRect();
+      var scale = W / (run ? run.box[0] : 160);
+      return shown.filter(function (boid) { return !name || boid.kind.name === name; }).map(function (boid) {
+        var point = toCanvas(boid.x, boid.y);
+        return {
+          x: boid.x / scale, y: (run.box[1] * scale - boid.y) / scale, angle: boid.angle,
+          left: rect.left + point[0] * rect.width / canvas.width, top: rect.top + point[1] * rect.height / canvas.height
+        };
+      });
     }
 
     function send(message) {
@@ -689,13 +940,26 @@
     connect();
     requestAnimationFrame(draw);
 
-    return {
+    var self = {
       send: send,
       pause: function () { paused = !paused; lastAt = performance.now(); return paused; },
       links: function () { showLinks = !showLinks; return showLinks; },
-      toWorld: toWorld
+      toWorld: toWorld,
+      direction: direction,
+      where: where,
+      // The view now, for the checks of the site: the turn, and the pixels
+      // of the screen for one unit of the world.
+      view: function () {
+        var rect = canvas.getBoundingClientRect();
+        return { turn: turn, crop: !!crop, phone: onField, boost: boost, unit: rect.width / canvas.width * W / (run ? run.box[0] : 160) };
+      }
     };
+    scenes.push(self);
+    return self;
   }
+
+  // The scenes of the page.
+  var scenes = [];
 
   // A button that changes a state of the scene.
   function toggle(button, change, labels) {
@@ -706,5 +970,5 @@
     });
   }
 
-  window.Boids = { scene: scene, toggle: toggle };
+  window.Boids = { scene: scene, toggle: toggle, scenes: scenes };
 })();
