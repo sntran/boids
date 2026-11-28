@@ -77,6 +77,8 @@ door of one cell, the way is the same.
   the shortest way: on a grid, it is some percent more
   (`docs/fields.md`).
 - `path/2`: the points of the way from a position to a goal.
+- `has_way/2`: true when a position is in an open cell with a way to a
+  goal.
 
 The data of a field are two binaries, one with the costs and one with
 the directions. A binary of more than 64 bytes is not copied from
