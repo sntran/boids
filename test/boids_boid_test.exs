@@ -156,6 +156,9 @@ defmodule BoidsBoidTest do
         {:flow, 1, field: fn pos -> pos end, predict: 1},
         {:walls, 1},
         {:walls, 1, margin: 2.5},
+        {:separation, 1, oncoming: false},
+        {:alignment, 1, oncoming: true, radius: 3},
+        {:cohesion, 1, oncoming: false, groups: :all},
         {{:seek, :home}, 1, target: {1, 2}},
         {{:wander, 2}, 1},
         {{:cohesion, {:of, "friends"}}, 1, groups: [:a]}
@@ -221,6 +224,11 @@ defmodule BoidsBoidTest do
             {:flow, 1, field: :wind},
             {:walls, 1, margin: -1},
             {:walls, 1, distance: 2},
+            {:separation, 1, oncoming: 0.3},
+            {:separation, 1, oncoming: 0},
+            {:cohesion, 1, oncoming: :no},
+            {:dodge, 1, oncoming: false},
+            {:seek, 1, target: {1, 2}, oncoming: false},
             {{:boids_vec, "zero", []}, 1},
             {"separation", 1}
           ] do
@@ -456,6 +464,92 @@ defmodule BoidsBoidTest do
 
     test "the group of the boid changes its neighbors", %{neighbors: ns, body: body} do
       assert_vec(force({:alignment, 1}, %{group: :other}, ns), :boids_steer.alignment(body, [Enum.at(ns, 1)]))
+    end
+  end
+
+  describe "the option oncoming" do
+    # A boid at {0, 0} that goes to +x.
+    @going %{vel: {2.0, 0.0}}
+
+    test "by default, a rule sees a neighbor that comes from the front" do
+      front = neighbor({0, 0}, {1, 0}, {-2, 0})
+      body = body({0, 0}, {2.0, 0.0})
+      assert_vec(force({:separation, 1}, @going, [front]), :boids_steer.separation(body, [front]))
+
+      assert_vec(
+        force({:separation, 1, oncoming: true}, @going, [front]),
+        :boids_steer.separation(body, [front])
+      )
+
+      assert_vec(
+        force({:alignment, 1, oncoming: true}, @going, [front]),
+        :boids_steer.alignment(body, [front])
+      )
+    end
+
+    test "with false, a rule does not see a neighbor whose velocity is against the velocity of the boid" do
+      body = body({0, 0}, {2.0, 0.0})
+      front = neighbor({0, 0}, {1, 0}, {-2, 0})
+      # At an angle of more than 90 degrees: from the front too.
+      angle = neighbor({0, 0}, {1, 1}, {-0.1, 3})
+      # A neighbor behind the boid that goes away is not seen: its
+      # velocity is against the velocity of the boid.
+      behind = neighbor({0, 0}, {-1, 0}, {-2, 0})
+      same = neighbor({0, 0}, {0, 1}, {1, 0})
+
+      for rule <- [:separation, :alignment, :cohesion] do
+        zero = if rule == :separation, do: {0.0, 0.0}, else: apply(:boids_steer, rule, [body, []])
+        assert_vec(force({rule, 1, oncoming: false}, @going, [front]), zero)
+        assert_vec(force({rule, 1, oncoming: false}, @going, [front, angle, behind]), zero)
+
+        assert_vec(
+          force({rule, 1, oncoming: false}, @going, [front, same, angle, behind]),
+          apply(:boids_steer, rule, [body, [same]])
+        )
+      end
+    end
+
+    test "a neighbor that goes across, and a neighbor or a boid that stands, is seen" do
+      body = body({0, 0}, {2.0, 0.0})
+      across = neighbor({0, 0}, {1, 0}, {0, -3})
+      stands = neighbor({0, 0}, {1, 0}, {0, 0})
+      rule = {:separation, 1, oncoming: false}
+      assert_vec(force(rule, @going, [across]), :boids_steer.separation(body, [across]))
+      assert_vec(force(rule, @going, [stands]), :boids_steer.separation(body, [stands]))
+      # A boid that stands sees each neighbor: it keeps its space.
+      front = neighbor({0, 0}, {1, 0}, {-2, 0})
+      assert_vec(force(rule, %{vel: {0, 0}}, [front]), :boids_steer.separation(body({0, 0}, {0, 0}), [front]))
+      assert_vec(force(rule, %{vel: {0.0, -0.0}}, [front]), {-10.0, 0.0})
+    end
+
+    test "the radius and the groups of the rule stay" do
+      body = body({0, 0}, {2.0, 0.0})
+      near = neighbor({0, 0}, {0, 1}, {1, 0}, %{group: :a})
+      far = neighbor({0, 0}, {0, 4}, {1, 0}, %{group: :a})
+      other = neighbor({0, 0}, {0, -1}, {1, 0}, %{group: :b})
+      front = neighbor({0, 0}, {1, 0}, {-2, 0}, %{group: :a})
+      rule = {:separation, 1, radius: 2, groups: [:a], oncoming: false}
+      assert_vec(force(rule, @going, [near, far, other, front]), :boids_steer.separation(body, [near]))
+    end
+
+    test "in three dimensions" do
+      going = %{pos: {0, 0, 0}, vel: {0.0, 0.0, 2.0}}
+      body = body({0, 0, 0}, {0.0, 0.0, 2.0})
+      front = neighbor({0, 0, 0}, {0, 0, 1}, {0, 1, -2})
+      same = neighbor({0, 0, 0}, {0, 1, 0}, {3, 0, 0.5})
+      assert_vec(force({:separation, 1, oncoming: false}, going, [front]), {0.0, 0.0, 0.0})
+
+      assert_vec(
+        force({:separation, 1, oncoming: false}, going, [front, same]),
+        :boids_steer.separation(body, [same])
+      )
+
+      assert_vec(force({:separation, 1}, going, [front, same]), :boids_steer.separation(body, [front, same]))
+    end
+
+    test "dodge sees a neighbor from the front: it has no such option" do
+      front = neighbor({0, 0}, {1, 0.2}, {-2, 0})
+      assert :boids_vec.norm(force({:dodge, 1}, @going, [front])) > 0
     end
   end
 

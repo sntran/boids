@@ -39,9 +39,9 @@ is the three rules of a flock:
 
 | Rule | Options | Description |
 |---|---|---|
-| `separation` | `radius` (half of `perception`), `groups` (`all`) | Move away from the near neighbors. |
-| `alignment` | `radius` (`infinity`), `groups` (`same`) | Move in the direction of the neighbors. |
-| `cohesion` | `radius` (`infinity`), `groups` (`same`) | Move to the center of the neighbors. |
+| `separation` | `radius` (half of `perception`), `groups` (`all`), `oncoming` (`true`) | Move away from the near neighbors. |
+| `alignment` | `radius` (`infinity`), `groups` (`same`), `oncoming` (`true`) | Move in the direction of the neighbors. |
+| `cohesion` | `radius` (`infinity`), `groups` (`same`), `oncoming` (`true`) | Move to the center of the neighbors. |
 | `seek` | `target` | Move to the target. |
 | `flee` | `target`, `radius` (`infinity`) | Move away from a target that is in the radius. |
 | `arrive` | `target`, `slow_radius` (`perception`) | Move to the target, and stop there. |
@@ -58,6 +58,13 @@ is the three rules of a flock:
 | `walls` | `margin` (half of `perception`) | Move away from the walls of the grid of the boid (`walkable`) that are nearer than the margin. |
 
 `groups` is `all`, `same` (the group of the boid) or a list of groups.
+
+With `oncoming => false`, a rule does not see a neighbor that comes from
+the front: a neighbor whose velocity has a negative dot product with
+the velocity of the boid. A neighbor with no velocity, and each
+neighbor of a boid with no velocity, is seen (the product is 0): a boid
+that stands keeps its space, and a neighbor that stands is in the way.
+See "Two streams in a narrow way".
 
 `target` is a point, `{boid, Id}` (a boid of the world), `{group,
 Group}` (the nearest neighbor of that group) or `{related, Label}` (the
@@ -96,6 +103,35 @@ The rules of a boid are a list, and the list has an order.
 
 `forces/3` gives the force of each rule, before the forces become one
 force. Use it to see what each rule does, and to adjust the weights.
+
+## Two streams in a narrow way
+
+When two streams of boids go in opposite directions through a narrow
+way (a bridge, a door, a corridor), `separation` pushes each boid back
+from the boids that come to it, and the two streams stop each other.
+Use these two rules together:
+
+```erlang
+[
+    {separation, 1.5, #{radius => 0.7, oncoming => false}},
+    {dodge, 4.0}
+]
+```
+
+- `separation` with `oncoming => false` keeps the space between the
+  boids that go the same way, and does not push a boid back from a boid
+  that comes from the front.
+- `dodge` moves each boid to a side of a boid that comes to it, before
+  the two touch. When the two will be at the same point, each of them
+  goes to its right (`boids_steer:dodge/4`): with walls, the two
+  streams then make two lanes.
+
+The two rules are necessary. With `oncoming => false` and no `dodge`,
+the two streams go through each other: a boid is then as near to a boid
+from the front as with no `separation` at all. The weight of `dodge` is
+the adjustment: a smaller weight lets more boids through a very narrow
+way, and a larger weight keeps the boids of the two streams farther
+apart.
 
 ## The places where a boid can walk
 
@@ -382,9 +418,9 @@ base({Base, _Id}) -> Base;
 base(Base) -> Base.
 
 %% The necessary options and the other options of each rule of the library.
-keys(separation) -> {[], [radius, groups]};
-keys(alignment) -> {[], [radius, groups]};
-keys(cohesion) -> {[], [radius, groups]};
+keys(separation) -> {[], [radius, groups, oncoming]};
+keys(alignment) -> {[], [radius, groups, oncoming]};
+keys(cohesion) -> {[], [radius, groups, oncoming]};
 keys(seek) -> {[target], []};
 keys(flee) -> {[target], [radius]};
 keys(arrive) -> {[target], [slow_radius]};
@@ -405,6 +441,7 @@ opt(Name, radius, N) when Name =:= wander; Name =:= dodge -> boids_vec:is_size(N
 opt(_, radius, N) -> is_distance(N);
 opt(_, max_time, N) -> is_distance(N);
 opt(_, groups, Groups) -> Groups =:= all orelse Groups =:= same orelse is_list(Groups);
+opt(_, oncoming, Oncoming) -> is_boolean(Oncoming);
 opt(_, target, {boid, _}) -> true;
 opt(_, target, {group, _}) -> true;
 opt(_, target, {related, _}) -> true;
@@ -719,14 +756,33 @@ wander_point(Point, Step) ->
         false -> Moved
     end.
 
-%% The neighbors of a rule: in its radius, and of its groups.
-select(Ns, #{group := Own}, Opts, Radius0, Groups0) ->
-    case {maps:get(radius, Opts, Radius0), maps:get(groups, Opts, Groups0)} of
-        {infinity, all} -> Ns;
-        {infinity, same} -> [N || N = #{group := Group} <- Ns, Group =:= Own];
-        {Radius, all} -> [N || N = #{dist := Dist} <- Ns, Dist =< Radius];
-        {Radius, Groups} -> [N || N = #{dist := Dist, group := Group} <- Ns, Dist =< Radius, in_groups(Group, Groups, Own)]
+%% The neighbors of a rule: in its radius, and of its groups. With
+%% oncoming => false, not the neighbors that come from the front.
+select(Ns, B = #{group := Own}, Opts, Radius0, Groups0) ->
+    Near =
+        case {maps:get(radius, Opts, Radius0), maps:get(groups, Opts, Groups0)} of
+            {infinity, all} ->
+                Ns;
+            {infinity, same} ->
+                [N || N = #{group := Group} <- Ns, Group =:= Own];
+            {Radius, all} ->
+                [N || N = #{dist := Dist} <- Ns, Dist =< Radius];
+            {Radius, Groups} ->
+                [N || N = #{dist := Dist, group := Group} <- Ns, Dist =< Radius, in_groups(Group, Groups, Own)]
+        end,
+    case Opts of
+        #{oncoming := false} -> not_oncoming(Near, maps:get(vel, B));
+        _ -> Near
     end.
+
+%% The neighbors that do not come from the front of a boid with the
+%% velocity Vel. A neighbor comes from the front when the dot product of
+%% its velocity and Vel is less than 0: the two go in opposite
+%% directions, also a neighbor that is behind the boid and goes away. A
+%% product of 0 is not from the front: a boid or a neighbor that stands,
+%% and a neighbor that goes across.
+not_oncoming(Ns, Vel) ->
+    [N || N = #{vel := Other} <- Ns, boids_vec:dot(Vel, Other) >= 0].
 
 in_groups(Group, same, Own) -> Group =:= Own;
 in_groups(Group, Groups, _Own) -> lists:member(Group, Groups).
