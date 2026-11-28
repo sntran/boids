@@ -502,8 +502,9 @@ Land = boids_grid:new(#{
 }),
 {ok, World} = boids:start_world(#{bounds => {{0, 0}, {40, 30}}, defaults => #{walkable => {named, land}}}),
 ok = boids:set_grid(World, land, Land),
-%% The ways to the cell {35, 5}, at the other side of the wall.
-ok = boids:set_field(World, exit, boids_field:new(Land, [{35, 5}])),
+%% The ways to the cell {35, 5}, at the other side of the wall. With the
+%% margin, a way keeps away from the wall where it has room.
+ok = boids:set_field(World, exit, boids_field:new(Land, [{35, 5}], #{margin => [3, 2]})),
 {ok, _People} = boids:populate(World, 30, #{
     area => {{2, 2}, {15, 28}},
     rules => [{flow, 1.0, #{field => {named, exit}}}, {separation, 1.5, #{radius => 0.7}}]
@@ -512,7 +513,7 @@ ok = boids:set_field(World, exit, boids_field:new(Land, [{35, 5}])),
 Closed = boids_grid:set_cost(Land, [{20, 14}, {20, 15}], blocked),
 Land2 = boids_grid:set_cost(Closed, [{20, 3}, {20, 4}], 1),
 ok = boids:set_grid(World, land, Land2),
-ok = boids:set_field(World, exit, boids_field:new(Land2, [{35, 5}])).
+ok = boids:set_field(World, exit, boids_field:new(Land2, [{35, 5}], #{margin => [3, 2]})).
 ```
 
 - **A field comes from a grid and its goals:** `boids_field:new(Grid,
@@ -539,19 +540,30 @@ ok = boids:set_field(World, exit, boids_field:new(Land2, [{35, 5}])).
   A boid keeps half a cell from a wall where it can, it goes around a
   corner and not across it, and it stays in the middle of a narrow way.
 - **A cell has a cost** (`boids_grid`): a way goes around a swamp when
-  that costs less. To keep the ways away from the walls, give a higher
-  cost to the cells near them: `examples/bridge.exs` does this for the
-  cells near its water.
+  that costs less.
+- **The option `margin` keeps the ways away from the walls.** The
+  shortest way goes along the walls and around the corners with no
+  distance from them, and the boids of all the directions come to the
+  same corners. With `#{margin => [3, 2]}`, the cost of an open cell at
+  1 cell from a wall is multiplied by 3, and at 2 cells by 2 (the
+  distance is in 8 directions, and the sides of the grid are walls). A
+  way then keeps away from the walls where it has room, and goes
+  through a door of one cell as before. In a measurement, the ways are
+  4.5 % longer on average. `examples/bridge.exs` has this margin for
+  its water.
 - **`boids_field:distance/2`** gives the cost of the way from a place to
   its goal, or `infinity` for a place with no way. A way across one
   cell with the cost 1 costs 1. It is not exactly the cost of the
-  shortest way: in the measurements it is 0 to 8 % more.
+  shortest way: in the measurements it is 0 to 8 % more. With a
+  margin, the cost has the margin in it.
 - **`boids_field:path/2`** gives the points of the way from a place to
   its goal: for one boid with the rule `follow`, for a picture, or for
   the length of a way.
-- **A field does not limit a boid.** A boid that another force pushes
-  into a wall, or out of the grid, has no direction there. Use the
-  option `walkable` with the same grid, as in the example.
+- **A field does not limit a boid.** Another force can push a boid
+  into a wall, or out of the grid. There, `boids_field:direction/2`
+  goes to the nearest open cell with a way (at 3 cells or less), so the
+  boid comes back. For a hard limit, use the option `walkable` with the
+  same grid, as in the example.
 - A grid of 200 x 200 cells gives a field in about 40 milliseconds, and
   a field is 6 bytes for each cell. A read of a direction takes 0.3
   microsecond.
@@ -951,6 +963,11 @@ obstacle.
 - A field does not know where the boids are. The boids of two
   directions go on the same shortest way, and they are in the way of
   each other in a narrow place.
+- The costs of a field are for regions, not for single cells: the
+  calculation uses the 4 cells beside a cell. Where the cost changes
+  much from each cell to the next (a checkerboard), the values of the
+  field are 2 to 4 times the cost of the best way, and the directions
+  are not the directions of that way (`docs/fields.md`).
 - The world does not move a boid when a grid changes. A boid in a cell
   that became blocked goes to the nearest walkable place at its next
   step: with `tick => manual`, at the next `boids:step/2`.

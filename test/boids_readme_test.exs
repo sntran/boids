@@ -248,7 +248,7 @@ defmodule BoidsReadmeTest do
     {:ok, world} = :boids.start_world(%{bounds: {{0, 0}, {40, 30}}, defaults: %{walkable: {:named, :land}}})
     on_exit(fn -> :boids.stop_world(world) end)
     :ok = :boids.set_grid(world, :land, land)
-    :ok = :boids.set_field(world, :exit, :boids_field.new(land, [{35, 5}]))
+    :ok = :boids.set_field(world, :exit, :boids_field.new(land, [{35, 5}], %{margin: [3, 2]}))
     rules = [{:flow, 1.0, %{field: {:named, :exit}}}, {:separation, 1.5, %{radius: 0.7}}]
     {:ok, people} = :boids.populate(world, 30, %{area: {{2, 2}, {15, 28}}, rules: rules})
     place = fn id -> elem(:boids.lookup(world, id), 1).pos end
@@ -261,10 +261,10 @@ defmodule BoidsReadmeTest do
     closed = :boids_grid.set_cost(land, [{20, 14}, {20, 15}], :blocked)
     land2 = :boids_grid.set_cost(closed, [{20, 3}, {20, 4}], 1)
     :ok = :boids.set_grid(world, :land, land2)
-    :ok = :boids.set_field(world, :exit, :boids_field.new(land2, [{35, 5}]))
+    :ok = :boids.set_field(world, :exit, :boids_field.new(land2, [{35, 5}], %{margin: [3, 2]}))
     assert {:ok, field} = :boids.field(world, :exit)
     # At the left of the old door, the way now goes up, to the new door.
-    assert {_dx, dy} = :boids_field.direction(field, {18.5, 14.5})
+    assert {_dx, dy} = :boids_field.direction(field, {16.5, 14.5})
     assert dy < -0.9
     # A person in the door that closed goes out of it at its next step.
     # Then the people stay in the open cells of the new walls.

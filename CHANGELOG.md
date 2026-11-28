@@ -49,11 +49,17 @@ The first version. It needs Erlang/OTP 29.
   cell: the library solves the eikonal equation on the grid, in a time
   in proportion to the number of the cells (about 40 ms for 200 x 200
   cells). Near a wall, the direction goes to the center of the next
-  cell of the way. `docs/fields.md` has the algorithm, the
-  measurements and the limits.
+  cell of the way. In a blocked cell and outside the grid, the
+  direction goes to the nearest open cell with a way (at 3 cells or
+  less), and `has_way/2` tells if a position has a way.
+  `docs/fields.md` has the algorithm, the measurements and the limits.
+- The option `margin` of `boids_field:new/3`: the cost of the open
+  cells near a wall is multiplied (`[3, 2]`: by 3 at 1 cell from a
+  wall, by 2 at 2 cells), so a way keeps away from the walls where it
+  has room.
 - `boids_grid:costs/1` gives the costs of all the cells of a grid.
-- `examples/bridge.exs` gets its ways from `boids_field`, and its cells
-  near the water cost more.
+- `examples/bridge.exs` gets its ways from `boids_field`, with a margin
+  for its water.
 - `Seen` has the key `fields`: the fields that the boid uses, by their
   names. A boid keeps the field that it read, as it keeps its grid.
 - `Seen` has the key `grids`: the grids that the boid uses, by their

@@ -109,16 +109,70 @@ In the example of the bridge (below), the boids of the mode `through`
 went into the water in 1,667 steps without this rule, and in 0 steps
 with it.
 
+A position is not always in an open cell with a way:
+
+- **In a blocked cell, and outside the grid,** the direction goes to the
+  center of the nearest open cell that has a way to a goal. The
+  function examines the cells at 3 cells or less on each axis (49
+  cells). When none of them has a way, the direction is zero. A field
+  does not stop a boid at a wall (see "The limits"), so a boid can be
+  in a blocked cell: this direction brings it back to the way.
+- **In an open cell with no way to a goal** (a room with no door), the
+  direction is zero.
+- **In the cell of a goal,** the direction is zero.
+
+`boids_field:has_way/2` tells if a position is in an open cell with a
+way.
+
 `boids_field:distance/2` gives the value at a position: the mean of the
-values of the cells around it that have a way.
+values of the cells around it that have a way. It is `infinity` in a
+blocked cell, in an open cell with no way, and outside the grid.
 
 `boids_field:path/2` goes down the field in steps of half a cell, and
 gives the points where the way turns.
 
 The rule `flow` reads the direction at the place where the boid will be
-after the time `predict` (half a second). When that place has no
-direction (a wall, the goal, a place out of the grid), it reads the
-direction at the position of the boid.
+after the time `predict` (half a second). When that place has no way (a
+wall, a place out of the grid) or is the goal, it reads the direction
+at the position of the boid.
+
+## The margin
+
+The shortest way goes along the walls and around the corners with no
+distance from them. That is bad for a crowd: the boids touch the walls,
+and the boids of all the directions come to the same corners. The
+option `margin` of `new/3` makes the cells near a wall cost more:
+
+    boids_field:new(Grid, Goals, #{margin => [3, 2]})
+
+The cost of an open cell at 1 cell from a wall is multiplied by 3, and
+at 2 cells by 2. A way then keeps away from the walls where it has
+room. Where it has no room (a door of one cell), it goes through as
+before: each way through the door pays the same.
+
+The decisions:
+
+- **The distance to a wall is in 8 directions:** a cell that touches a
+  blocked cell at a side or at a corner is at 1 cell. With 4
+  directions, the cell across the corner of a wall is at 2 cells, and
+  the ways go around a corner too near to it. The corners are the
+  places where the streams meet, so they need the margin most.
+- **The sides of the grid are walls.** A place outside the grid is
+  blocked (`boids_grid:walkable/2`), and a boid with the option
+  `walkable` cannot go there. Thus a way keeps the same distance from a
+  side as from a wall.
+- **The number multiplies the cost of the grid.** A cell of a swamp near
+  a wall costs more than a cell of a road near a wall.
+- **A goal cell near a wall keeps its margin.** The value of a goal is 0
+  with each cost. Only the cells around the goal cost more, so a way
+  comes to a goal at a wall from the open land, and not along the wall.
+- **`distance/2` gives the cost with the margin.** It is then more than
+  the length of the way. For the length of a way, use `path/2`.
+
+The margin makes the ways longer. In the land of 100 x 100 cells of
+the table of the time (10 % of the cells blocked, 361 starts), the ways
+with `[3, 2]` are 4.5 % longer on average than with no margin (95 % of
+them less than 11.5 % longer, the largest 27 %).
 
 ## The measurements
 
@@ -176,6 +230,10 @@ For 200 x 200 cells, the calculation is 2.5 million reductions. The
 same equation with a heap (`gb_sets`) took 160 ms in a first version,
 and a search of 8 directions with a heap and a map took 90 ms.
 
+The option `margin` adds work: with `[3, 2]`, the calculation is 2.9
+million reductions for 200 x 200 cells (54 to 57 ms), and 0.38 to 0.43
+s for 500 x 500 cells.
+
 The time is in proportion to the number of the cells, and it does not
 change much with the number of the goals. A test of the library counts
 the reductions, which do not change with the other work of the
@@ -198,32 +256,67 @@ computer.
 
 `examples/bridge.exs` has 30 boids that go across a river on a bridge,
 there and back, for 120 seconds. Before this module, the script had a
-search of 8 directions of its own. The table has the trips, as the mean
-of 3 runs with different random numbers.
+search of 8 directions of its own. The script now makes its two fields
+with `margin => [3, 2]`.
 
-| Mode | Bridge | Search of the script | `boids_field` | `boids_field`, a higher cost near the water |
+The scene is chaotic: a change of 0.000000001 in the start of the boids
+gives other numbers. So the table has the trips as the mean of 10 runs
+with different random numbers. In brackets is the spread of one run
+(the standard deviation). A difference between two means that is
+smaller than the spread of one run tells nothing.
+
+| Mode | Bridge | Search of the script | `boids_field`, no margin | `boids_field`, `margin => [3, 2]` |
 |---|---|---|---|---|
 | `through` | 1 cell | 210 | 210 | 210 |
 | `through` | 2 cells | 210 | 210 | 210 |
-| `spacing` | 1 cell | 60 | 117 | 113 |
-| `spacing` | 2 cells | 152 | 146 | 139 |
-| `blocked` | 1 cell | 22 | 22 | 20 |
-| `blocked` | 2 cells | 138 | 112 | 127 |
-| `ways` | 1 cell | 180 | 178 | 185 |
-| `ways` | 2 cells | 187 | 189 | 188 |
-| `walkable` | 1 cell | 76 | 94 | 119 |
-| `walkable` | 2 cells | 149 | 133 | 144 |
-| `walls` | 1 cell | 66 | 81 | 97 |
-| `walls` | 2 cells | 137 | 131 | 139 |
+| `spacing` | 1 cell | 62 (5) | 70 (5) | 76 (9) |
+| `spacing` | 2 cells | 148 (4) | 140 (4) | 142 (1) |
+| `blocked` | 1 cell | 22 (4) | 29 (7) | 27 (6) |
+| `blocked` | 2 cells | 134 (6) | 112 (7) | 130 (6) |
+| `ways` | 1 cell | 179 (3) | 178 (3) | 185 (1) |
+| `ways` | 2 cells | 187 (2) | 189 (2) | 188 (1) |
+| `walkable` | 1 cell | 79 (12) | 89 (6) | 103 (10) |
+| `walkable` | 2 cells | 146 (2) | 131 (6) | 143 (3) |
+| `walls` | 1 cell | 70 (10) | 87 (8) | 92 (8) |
+| `walls` | 2 cells | 136 (6) | 124 (3) | 137 (3) |
+
+(The mode `through` has 3 runs. Its boids go through each other, so
+each run has the same trips.)
 
 The shortest way between the two ends of the trip is one line, around
-one corner at each end of the bridge. With a field, the boids of the two
-directions go on that same line, and they are in the way of each other:
-on the bridge of 2 cells, some modes have fewer trips. A search of 8
-directions has many ways with the same cost, so its boids use all the
-width of the bridge. A higher cost in the cells near the water (3
-beside the water, 2 at two cells) moves the ways away from the corners,
-and the script now has it. See "The limits".
+one corner at each end of the bridge. With a field and no margin, the
+boids of the two directions go on that same line, and they are in the
+way of each other: on the bridge of 2 cells, the modes `blocked`,
+`walkable` and `walls` have 9 to 16 % fewer trips than with the search
+of the script. A search of 8 directions has many ways with the same
+cost, so its boids use all the width of the bridge.
+
+The margin moves the ways away from the corners of the water. On the
+bridge of 2 cells, the trips are then the same as with the search of
+the script. On the bridge of 1 cell, the modes with a hard limit that
+lets a boid slide (`walkable`, `walls`) have 30 % more trips than with
+the search of the script. See "The limits".
+
+The mode `spacing` has no limit: `separation` pushes boids into the
+water. The steps that a boid ended in the water, of 36,000 (the mean of
+10 runs):
+
+| Bridge | Search of the script | `boids_field`, no margin | `boids_field`, `margin => [3, 2]` |
+|---|---|---|---|
+| 1 cell | 9,253 | 8,412 | 7,611 |
+| 2 cells | 182 | 930 | 401 |
+
+In the water, the direction of the field leads a boid back to the
+nearest land. A first version of the module had no direction in a
+blocked cell. Its boids then kept their velocity in the water: on the
+bridge of 2 cells, 1,757 steps ended in the water (3 runs), and on the
+bridge of 1 cell some boids went across the river with no bridge.
+
+The search of the script led a boid in the water to the open cell
+beside it that was nearest to the goal, and its boids were in the water
+for fewer steps (182 against 401). The field does not do that: such a
+rule pulls a boid through a thin wall to the side of the goal. The
+nearest open cell is the cell that the boid came from in most cases.
 
 ## The limits
 
@@ -240,15 +333,41 @@ and the script now has it. See "The limits".
   4 cells meet goes through one of the 2 cells beside it, and pays its
   cost. A search of 8 directions goes across that point for the cost of
   its two ends.
+- **Costs that change much from cell to cell.** This is the result of
+  the limit before. The equation is for costs that change slowly, as
+  the costs of regions do: a swamp, a road, the margin. With two
+  regions of the costs 1 and 9, the values of the field are 0.92 to
+  1.27 times the costs of a search of 8 directions (1.0 on average).
+  On a checkerboard, where each cell of high cost has cells of low cost
+  at its 4 corners, a search of 8 directions goes from corner to corner
+  and never pays the high cost. The field cannot do that, and its
+  values are much more:
+
+  | Costs of the checkerboard | Value of the field / cost of a search of 8 directions |
+  |---|---|
+  | 1 and 2 | 1.3 (mean), 1.7 (largest) |
+  | 1 and 3 | 1.7 (mean), 2.3 (largest) |
+  | 1 and 5 | 2.4 (mean), 3.4 (largest) |
+  | 1 and 9 | 3.8 (mean), 5.7 (largest) |
+
+  The directions go down these values, so the ways are not the ways of
+  the least cost there. Give costs to regions of some cells, not to
+  single cells.
 - **The boids of two directions go on the same line** (see the example
   of the bridge). A field does not know where the boids are: it has no
-  cost for a place with many boids. Give a higher cost to the cells
-  near the walls, and use the rules for neighbors (`separation`,
-  `dodge`).
-- **A field does not limit a boid.** In a blocked cell and out of the
-  grid, there is no direction. A boid that another force pushes into a
-  wall goes on with its velocity. Use the option `walkable` with the
-  same grid.
+  cost for a place with many boids. The option `margin` moves the line
+  away from the walls, but it is one line for the two directions. Use
+  the rules for neighbors (`separation`, `dodge`).
+- **The margin changes which way costs the least.** With `[3, 2]`, a
+  cell of a way that is 1 or 2 cells wide costs 3 times the cost of a
+  cell in open land. A way around it in open land that is less than 3
+  times as long then costs less, and the field takes that way. Use
+  smaller numbers when the map has long narrow ways.
+- **A field does not limit a boid.** The direction is a force as the
+  other forces are. A boid that another force pushes into a wall is in
+  the wall. From there, the direction leads it out, but only when an
+  open cell with a way is at 3 cells or less. Use the option `walkable`
+  with the same grid: it is the hard limit.
 - **A change of the grid needs a new field.** The library does not
   repair a field after a small change: `new/2` calculates all of it.
 - **Very large maps.** A field of 1,000 x 1,000 cells takes more than
