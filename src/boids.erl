@@ -87,6 +87,10 @@ and a force is in units for each second for each second.
 -type world() :: boids_world:server() | boids_space:space().
 -type options() :: map() | [{atom(), term()}].
 
+%% The random positions that populate/3 tries for one boid, to find a
+%% place where the boid can walk.
+-define(SPOTS, 1000).
+
 %% --- The worlds ------------------------------------------------
 
 -doc #{equiv => start_world(#{})}.
@@ -230,6 +234,11 @@ the positions (default: the `bounds` of the world). Without `vel`,
 each boid gets a random direction, and a random speed between its
 `min_speed` and its `max_speed`. With `seed`, the boid number N gets the
 seed `seed + N`.
+
+With the option `walkable` (`boids_boid`), each position is a place
+where the boid can walk: an open cell of its grid. When 1,000 random
+positions of the area give no such place, the result is `{error,
+{not_walkable, Area}}`.
 """.
 -spec populate(world(), non_neg_integer(), options()) -> {ok, [term()]} | {error, term()}.
 populate(World, Count, Opts0) when is_integer(Count), Count >= 0 ->
@@ -242,7 +251,8 @@ populate(World, Count, Opts0) when is_integer(Count), Count >= 0 ->
         {Area, Template, boids_boid:new(BoidOpts#{pos => Min})}
     of
         {{Min1, Max1}, Template1, Sample} ->
-            Random = fun() -> random(Min1, Max1, Template1, Sample) end,
+            Grid = limit(Space, Sample),
+            Random = fun() -> random(Min1, Max1, Template1, Sample, Grid) end,
             populate(Space, boids_world:boid_sup(Space), 1, Count, Template1, Random, [])
     catch
         error:{bad_option, _} = Reason -> {error, Reason}
@@ -257,9 +267,10 @@ populate(Space, Sup, N, Count, Template, Random, Ids) ->
             #{seed := Seed} -> Template#{seed := Seed + N};
             _ -> Template
         end,
-    case start(Space, Sup, maps:merge(Opts, Random())) of
-        {ok, Id} -> populate(Space, Sup, N + 1, Count, Template, Random, [Id | Ids]);
-        {error, Reason} -> {error, Reason}
+    maybe
+        {ok, Place} ?= Random(),
+        {ok, Id} ?= start(Space, Sup, maps:merge(Opts, Place)),
+        populate(Space, Sup, N + 1, Count, Template, Random, [Id | Ids])
     end.
 
 area({Min, Max}) when tuple_size(Min) =:= tuple_size(Max), tuple_size(Min) =:= 2 orelse tuple_size(Min) =:= 3 ->
@@ -267,14 +278,37 @@ area({Min, Max}) when tuple_size(Min) =:= tuple_size(Max), tuple_size(Min) =:= 2
 area(Area) ->
     error({bad_option, {area, Area}}).
 
-random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}) ->
+%% The grid that limits a boid in a world, or none.
+limit(Space, Boid) ->
+    case boids_boid:named(Boid) of
+        [{grid, Name}] ->
+            case boids_space:grid(Space, Name) of
+                {ok, Grid} -> Grid;
+                error -> none
+            end;
+        [] ->
+            none
+    end.
+
+random(Min, Max, Template, #{min_speed := Slow, max_speed := Fast}, Grid) ->
+    maybe
+        {ok, Pos} ?= spot(Min, Max, Grid, ?SPOTS),
+        case Template of
+            #{vel := _} ->
+                {ok, #{pos => Pos}};
+            _ ->
+                Speed = Slow + rand:uniform() * (Fast - Slow),
+                {ok, #{pos => Pos, vel => boids_vec:scale(boids_vec:random_unit(tuple_size(Min)), Speed)}}
+        end
+    end.
+
+%% A random position where the boid can walk, in Tries tries at most.
+spot(Min, Max, Grid, Tries) ->
     Pos = boids_vec:random_in(Min, Max),
-    case Template of
-        #{vel := _} ->
-            #{pos => Pos};
-        _ ->
-            Speed = Slow + rand:uniform() * (Fast - Slow),
-            #{pos => Pos, vel => boids_vec:scale(boids_vec:random_unit(tuple_size(Min)), Speed)}
+    case Grid =:= none orelse boids_grid:walkable(Grid, Pos) of
+        true -> {ok, Pos};
+        false when Tries > 1 -> spot(Min, Max, Grid, Tries - 1);
+        false -> {error, {not_walkable, {Min, Max}}}
     end.
 
 -doc """
@@ -905,7 +939,8 @@ The options are those of a boid (`boids_boid`), on top of the `defaults`
 of the world. The default id is the pid of the process. The
 world removes the boid when the process stops. The options of the
 process of a `gen_boid` (`tick`, `search` and the others) have no effect
-here: the process has its own clock.
+here: the process has its own clock. The steps of `plan/3` and
+`advance/3` obey the option `walkable`, as the steps of a `gen_boid`.
 
 ```erlang
 init(World) ->
@@ -958,7 +993,11 @@ plan(Space, Boid = #{pos := Pos}, Neighbors, Dt) ->
     Env = #{time_scale := Scale} = boids_space:env(Space, Pos, boids_boid:reach(Boid)),
     Lookup = fun(Id) -> boids_space:lookup(Space, Id) end,
     Related = fun(From, Label) -> boids_space:related(Space, From, Label) end,
-    boids_boid:step(Boid, Neighbors, Env#{lookup => Lookup, related => Related}, Dt * Scale).
+    %% The grids that the boid uses. The process keeps them between two
+    %% steps, in its process dictionary: this function has no argument
+    %% for the state of the caller.
+    #{grids := Grids} = boids_space:named(Space, boids_boid:named(Boid)),
+    boids_boid:step(Boid, Neighbors, Env#{lookup => Lookup, related => Related, grids => Grids}, Dt * Scale).
 
 -doc """
 Write a boid to its world, so that the other boids see its new
@@ -983,4 +1022,5 @@ advance(Space, Boid0, Dt) ->
 -doc "Remove a boid of `join/2` from its world. The process of the boid calls this function.".
 -spec leave(boids_space:space(), boids_boid:boid()) -> ok.
 leave(Space, #{id := Id}) ->
+    boids_space:forget(Space),
     boids_world:leave(Space, Id, self()).

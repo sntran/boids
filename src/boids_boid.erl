@@ -26,6 +26,7 @@ for a process with another behavior.
 | `max_neighbors` | `infinity` | The boid sees only this number of the nearest boids. |
 | `rules` | see below | The list of the rules. |
 | `combine` | `sum` | How the forces of the rules become one force. |
+| `walkable` | `all` | Where the boid can be: `all`, or `{named, Name}` for the open cells of the grid of the world with that name. See "The places where a boid can walk". |
 | `state` | `undefined` | A term of yours. Only the boid sees it: the callbacks of a `gen_boid` keep their state here. |
 
 The options are a map, or a list of `{Key, Value}`.
@@ -65,10 +66,12 @@ A target that does not exist gives no force.
 A rule of your own is a function: `{Fun, Weight}`, where `Fun(Boid,
 Neighbors, Seen)` gives the force. `Neighbors` are the boids that the
 boid sees, the nearest first. `Seen` is what the boid perceives in this
-step: `dt` (the seconds of the step), `obstacles`, `bounds` and `wrap`.
+step: `dt` (the seconds of the step), `obstacles`, `bounds`, `wrap` and
+`grids`.
 `obstacles` has only the obstacles to the distance `reach/1` from the
 boid, in the order of their ids: a rule that needs obstacles farther
-than that does not get them.
+than that does not get them. `grids` is a map with the grids that the
+boid uses, by their names (`named/1`).
 Use `fun Module:Function/3` for a rule that stays when the code of the
 module changes.
 
@@ -92,11 +95,48 @@ The rules of a boid are a list, and the list has an order.
 
 `forces/3` gives the force of each rule, before the forces become one
 force. Use it to see what each rule does, and to adjust the weights.
+
+## The places where a boid can walk
+
+The rules give forces, and the forces add: a force can push a boid into
+a wall. The option `walkable` is a hard limit, which no force can pass.
+
+The world owns the walls: a grid of cells with a name
+(`boids:set_grid/3`, `boids_grid`). A boid with `walkable => {named,
+Name}` can be only in the open cells of that grid. The option is data:
+the option `defaults` of a world can give it to all the boids, and a
+boid of another kind can have another name, or `all`. Thus walls can be
+for people and not for birds. A name with no grid in the world is no
+limit.
+
+- **The slide.** The limit is in the movement of a step
+  (`integrate/4`), after the forces and before `handle_act/1` of a
+  `gen_boid`. If the line from the old position to the new position
+  goes into a blocked cell, the boid slides along the edge: the library
+  removes the part of the movement into the edge, and the same part of
+  the velocity. A boid that goes into a wall at 45 degrees thus slides
+  along it at 0.71 of its speed. A boid stops only in a corner. The
+  contact is exact, for each speed and each length of step.
+- **All the steps.** The steps of a `gen_boid`, of `boids:step/2`, and of
+  `boids:plan/3` and `boids:advance/3` (a process of `boids:join/2`)
+  obey the limit. `boids:populate/3` puts boids only in walkable places.
+  With `step/4` of this module, give the grid in `Seen`: `#{grids =>
+  #{Name => Grid}}`.
+- **A door.** `boids:set_grid/3` with a new grid for the same name
+  changes the walls for all the boids, from their next step. A boid
+  that is then in a blocked cell goes to the nearest walkable place at
+  the start of its next step (`boids_grid:nearest/2`), and makes its
+  step from there. So does a boid that starts in a blocked cell. When
+  the grid has no open cell, the boid has no limit.
+- **Two dimensions.** A grid has two dimensions. A boid with three
+  dimensions and `walkable` other than `all` is a bad option.
+- **With `wrap`,** the cells are at their positions in the box: a boid
+  that crosses a side of the box meets the walls of the opposite side.
 """.
 
 -export([new/1, update/2, options/1, entry/1, to_map/1]).
 -export([add_rule/2, delete_rule/2, which_rules/1]).
--export([perceive/2, reach/1, forces/3, force/3, integrate/4, step/4]).
+-export([perceive/2, reach/1, named/1, forces/3, force/3, integrate/4, step/4]).
 
 -export_type([boid/0, rule/0, name/0, target/0, seen/0]).
 
@@ -116,6 +156,7 @@ force. Use it to see what each rule does, and to adjust the weights.
     max_neighbors := pos_integer() | infinity,
     rules := [{name(), number(), map()}],
     combine := sum | priority,
+    walkable := all | {named, term()},
     memory := map(),
     state := term()
 }.
@@ -148,12 +189,18 @@ force. Use it to see what each rule does, and to adjust the weights.
     bounds => {vec(), vec()} | undefined,
     wrap => boolean(),
     obstacles => [boids_steer:obstacle()],
+    grids => #{term() => boids_grid:grid()},
     lookup => fun((term()) -> {ok, #{pos := vec(), vel := vec(), _ => _}} | error),
     related => fun((term(), term()) -> [term()]),
     _ => _
 }.
 
 -define(FULL_CIRCLE, 6.283185307179586).
+
+%% The most contacts with walls in the movement of one step. A boid that
+%% goes into a corner has two. Three are possible when the line goes
+%% exactly through a corner of cells.
+-define(CONTACTS, 3).
 
 -doc """
 Make a boid from its options. A bad option gives the error
@@ -178,6 +225,7 @@ new(Opts0) ->
         max_neighbors => infinity,
         rules => [{separation, 1.5}, {alignment, 1.0}, {cohesion, 1.0}],
         combine => sum,
+        walkable => all,
         memory => #{},
         state => undefined
     },
@@ -249,6 +297,8 @@ validate(Boid0) ->
     case {Dim =:= tuple_size(Vel), Checked} of
         {false, _} -> error({bad_option, {vel, Vel}});
         {true, #{min_speed := Min, max_speed := Max}} when Min > Max -> error({bad_option, {min_speed, Min}});
+        %% A grid has two dimensions.
+        {true, #{walkable := Walkable}} when Dim =:= 3, Walkable =/= all -> error({bad_option, {walkable, Walkable}});
         {true, _} -> Checked
     end.
 
@@ -282,6 +332,8 @@ ok(perception, N) -> boids_vec:is_size(N);
 ok(fov, N) -> boids_vec:is_size(N);
 ok(max_neighbors, N) -> N =:= infinity orelse (is_integer(N) andalso N > 0);
 ok(combine, Combine) -> Combine =:= sum orelse Combine =:= priority;
+ok(walkable, all) -> true;
+ok(walkable, {named, _Name}) -> true;
 ok(rules, Rules) when is_list(Rules) -> {ok, [rule(Rule) || Rule <- Rules]};
 ok(_, _) -> false.
 
@@ -453,16 +505,77 @@ combine(priority, _Forces, _Left, Acc) ->
     Acc.
 
 -doc """
+The facts with a name that a boid uses: the keys of the facts of its
+world that the boid needs in `Seen`. A boid with `walkable => {named,
+Name}` uses the grid `{grid, Name}`. `boids_space:named/3` reads them,
+and `gen_boid` and `boids:plan/3` put them in the key `grids` of `Seen`.
+""".
+-spec named(boid()) -> [{grid, term()}].
+named(#{walkable := {named, Name}}) -> [{grid, Name}];
+named(_Boid) -> [].
+
+-doc """
 Move a boid for `Dt` seconds with a force. The speed stays in the limits
 of the boid. With `wrap` in `Seen`, the position stays in the box.
+
+A boid with the option `walkable` does not go into a blocked cell of
+its grid (the key `grids` of `Seen`): it slides along the edge. See
+"The places where a boid can walk".
 """.
 -spec integrate(boid(), vec(), seen(), number()) -> boid().
 integrate(Boid, _Force, _Seen, Dt) when Dt =< 0 ->
     Boid;
 integrate(Boid = #{pos := Pos, vel := Vel, mass := Mass}, Force, Seen, Dt) ->
     Vel1 = speed(boids_vec:add(Vel, boids_vec:scale(Force, Dt / Mass)), Boid),
-    Pos1 = boids_vec:add(Pos, boids_vec:scale(Vel1, Dt)),
-    Boid#{pos := place(Seen, Pos1), vel := Vel1}.
+    Move = boids_vec:scale(Vel1, Dt),
+    case grid(Boid, Seen) of
+        none ->
+            Boid#{pos := place(Seen, boids_vec:add(Pos, Move)), vel := Vel1};
+        Grid ->
+            {Pos1, Vel2} = slide(Grid, box(Seen), Pos, Move, Vel1, ?CONTACTS),
+            Boid#{pos := place(Seen, Pos1), vel := Vel2}
+    end.
+
+%% The grid that limits a boid: the grid of Seen with the name of its
+%% option walkable, or none.
+grid(#{walkable := {named, Name}}, #{grids := Grids}) -> maps:get(Name, Grids, none);
+grid(_Boid, _Seen) -> none.
+
+%% With wrap, the cells of a grid are at their positions in the box.
+box(#{wrap := true, bounds := Bounds}) -> Bounds;
+box(_Seen) -> none.
+
+%% Move from From by Move in a grid. At a blocked cell, the boid slides
+%% along the edge: the movement and the velocity lose their part into
+%% the edge, and the rest of the movement continues from the contact.
+%% In a corner, the movement has nothing left. After the last contact
+%% that a step permits, the boid stays at that contact.
+slide(Grid, Box, From, Move, Vel, Contacts) ->
+    To = boids_vec:add(From, Move),
+    case Contacts > 0 andalso boids_grid:hit(Grid, From, To, Box) of
+        none ->
+            {To, Vel};
+        {At, Normal} ->
+            slide(Grid, Box, At, without(boids_vec:sub(To, At), Normal), without(Vel, Normal), Contacts - 1);
+        inside ->
+            out(Grid, Box, From, Move, Vel, Contacts);
+        false ->
+            {From, Vel}
+    end.
+
+%% A boid in a blocked cell: a door closed on it, or it started there.
+%% It goes to the nearest walkable place, and makes its step from there.
+%% In a grid with no open cell, it has no limit.
+out(Grid, Box, From, Move, Vel, Contacts) ->
+    case boids_grid:nearest(Grid, From, Box) of
+        none -> {boids_vec:add(From, Move), Vel};
+        Place -> slide(Grid, Box, Place, Move, Vel, Contacts - 1)
+    end.
+
+%% A vector with no part into an edge (Normal has the length 1). A part
+%% away from the edge stays.
+without(Vec, Normal) ->
+    boids_vec:sub(Vec, boids_vec:scale(Normal, max(0.0, boids_vec:dot(Vec, Normal)))).
 
 speed(Vel, #{min_speed := Min, max_speed := Max}) ->
     case boids_vec:norm(Vel) of

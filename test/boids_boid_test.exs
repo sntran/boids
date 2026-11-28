@@ -32,6 +32,7 @@ defmodule BoidsBoidTest do
                max_neighbors: :infinity,
                rules: [{:separation, 1.5, %{}}, {:alignment, 1.0, %{}}, {:cohesion, 1.0, %{}}],
                combine: :sum,
+               walkable: :all,
                memory: %{},
                state: :undefined
              } = boid
@@ -60,6 +61,7 @@ defmodule BoidsBoidTest do
         fov: 3.0,
         max_neighbors: 7,
         combine: :priority,
+        walkable: :all,
         rules: []
       }
 
